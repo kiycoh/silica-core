@@ -9,6 +9,7 @@ Three ported ideas (spec 2026-07-21): directional expansion (1.1), squash by
 hub (1.3), breadcrumb (2.3). Ranking is NOT touched here: seeds arrive already
 ranked/reranked; neighbours enter as periphery and are never re-ranked.
 """
+
 from __future__ import annotations
 
 import functools
@@ -20,6 +21,7 @@ from typing import Callable
 @dataclass
 class Unit:
     """One assemblable piece of text: a ranked seed or a periphery neighbour."""
+
     path: str
     text: str
     is_seed: bool
@@ -29,12 +31,16 @@ class Unit:
 @dataclass
 class Truncation:
     """What the budget kept vs dropped (IWE Truncation style)."""
+
     kept: int = 0
     dropped: list[str] = field(default_factory=list)
 
 
 def fill_budget(
-    seeds: list[Unit], periphery: list[Unit], *, budget: int,
+    seeds: list[Unit],
+    periphery: list[Unit],
+    *,
+    budget: int,
     cost_of: Callable[[Unit, list[Unit]], int] | None = None,
 ) -> tuple[list[Unit], Truncation]:
     """Seeds first (never trimmed), then periphery by ascending rank until the
@@ -99,6 +105,7 @@ def rendered_cost(unit: Unit, *, hub: str | None, crumb: str) -> int:
 @dataclass
 class AssembledBlock:
     """One rendered block: a squashed hub group, or a lone (breadcrumbed) seed."""
+
     hub: str | None
     breadcrumb: str
     text: str
@@ -147,21 +154,25 @@ def squash(
             parts = [f"# {hub}"]
             for m in members:
                 parts.append(relevel_headers(m.text, 1))
-            blocks.append(AssembledBlock(
-                hub=hub,
-                breadcrumb=crumb,
-                text=(f"{crumb}\n\n" if crumb else "") + "\n\n".join(parts),
-                members=[m.path for m in members],
-            ))
+            blocks.append(
+                AssembledBlock(
+                    hub=hub,
+                    breadcrumb=crumb,
+                    text=(f"{crumb}\n\n" if crumb else "") + "\n\n".join(parts),
+                    members=[m.path for m in members],
+                )
+            )
         else:
             for m in members:
                 crumb = breadcrumb_of.get(m.path, "")
-                blocks.append(AssembledBlock(
-                    hub=None,
-                    breadcrumb=crumb,
-                    text=(f"{crumb}\n\n" if crumb else "") + m.text,
-                    members=[m.path],
-                ))
+                blocks.append(
+                    AssembledBlock(
+                        hub=None,
+                        breadcrumb=crumb,
+                        text=(f"{crumb}\n\n" if crumb else "") + m.text,
+                        members=[m.path],
+                    )
+                )
     # Stable order: by the best member — seeds first, then lowest rank — so
     # ranking intent survives and a periphery-only block never outranks a seed.
     blocks.sort(key=lambda b: min(order_of[p] for p in b.members))
@@ -234,8 +245,10 @@ def assemble(
     neighbors_of = functools.cache(neighbors_of)
 
     seed_set = set(seed_paths)
-    seeds = [Unit(path=p, text=body_of(p), is_seed=True, rank=i)
-             for i, p in enumerate(seed_paths)]
+    seeds = [
+        Unit(path=p, text=body_of(p), is_seed=True, rank=i)
+        for i, p in enumerate(seed_paths)
+    ]
 
     periphery: list[Unit] = []
     seen: set[str] = set(seed_set)
@@ -253,8 +266,9 @@ def assemble(
                 if np in seen:
                     continue
                 seen.add(np)
-                periphery.append(Unit(path=np, text=body_of(np),
-                                      is_seed=False, rank=prank))
+                periphery.append(
+                    Unit(path=np, text=body_of(np), is_seed=False, rank=prank)
+                )
                 prank += 1
 
     # Hubs and breadcrumbs first: the budget cannot charge for what squash()
@@ -273,7 +287,6 @@ def assemble(
             return len(relevel_headers(u.text, 1)) + 2
         return rendered_cost(u, hub=hub, crumb=crumb_of.get(u.path, ""))
 
-    kept, trunc = fill_budget(seeds, periphery, budget=budget,
-                              cost_of=_marginal_cost)
+    kept, trunc = fill_budget(seeds, periphery, budget=budget, cost_of=_marginal_cost)
     blocks = squash(kept, hub_of, crumb_of)
     return AssemblyResult(blocks=blocks, truncation=trunc)

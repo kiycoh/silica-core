@@ -1,6 +1,6 @@
 """perceive(assemble=True) folds neighbours into the seed blocks; default off
 leaves the block list byte-identical."""
-from silica.kernel.recall import perception
+from evals import recall_arms as perception
 from silica.kernel.recall.perception import NoteBlock
 
 
@@ -36,7 +36,7 @@ def test_seed_body_reused_not_refetched(monkeypatch):
     """A memory-lane seed whose body is already on the NoteBlock must survive
     assemble=True — _assemble_blocks reuses by_path[seed].body, never re-reads
     it via _assembly_body (which would read the vault with the wrong origin)."""
-    from silica.kernel.recall import assembly
+    from evals import recall_assembly as assembly
     base = [NoteBlock(path="mem/x", date="d", evidence="e",
                       body="REAL MEMORY BODY", excerpt="REAL MEMORY BODY")]
     # A single seed with no neighbours -> one lone assembled block.

@@ -449,7 +449,7 @@ def _run_puppy_question(**overrides):
 
 def test_improve_bumps_recall_weights_on_correct_oneshot_answer(tmp_path, monkeypatch):
     _bind_small_vault(tmp_path, monkeypatch)
-    from silica.kernel.recall import recall_weights
+    from evals import recall_weights
 
     monkeypatch.setattr(runner, "answer_question", lambda *a, **kw: "Ann.")
     monkeypatch.setattr(runner, "judge", lambda *a, **kw: True)
@@ -462,7 +462,7 @@ def test_improve_bumps_recall_weights_on_correct_oneshot_answer(tmp_path, monkey
 
 def test_improve_does_not_bump_on_incorrect_answer(tmp_path, monkeypatch):
     _bind_small_vault(tmp_path, monkeypatch)
-    from silica.kernel.recall import recall_weights
+    from evals import recall_weights
 
     monkeypatch.setattr(runner, "answer_question", lambda *a, **kw: "wrong")
     monkeypatch.setattr(runner, "judge", lambda *a, **kw: False)
@@ -482,7 +482,7 @@ def test_improve_with_agent_mode_rejected_by_cli():
 def test_improve_does_not_bump_with_stuff(tmp_path, monkeypatch):
     """--stuff bypasses retrieval, so a correct answer must not dead-write a weight."""
     _bind_small_vault(tmp_path, monkeypatch)
-    from silica.kernel.recall import recall_weights
+    from evals import recall_weights
 
     monkeypatch.setattr(runner, "answer_question", lambda *a, **kw: "Ann.")
     monkeypatch.setattr(runner, "judge", lambda *a, **kw: True)

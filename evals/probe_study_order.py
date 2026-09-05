@@ -74,7 +74,8 @@ def build_cases(pm: dict[str, list[str]], k: int, fired_target: int,
     """Scan dependents alphabetically (reproducible, no sampling bias toward
     hubs) until `fired_target` questions fire. One retrieval per case, shared
     by both arms."""
-    from silica.kernel.recall.perception import _study_order, perceive
+    from evals.recall_arms import _study_order
+    from silica.kernel.recall.perception import perceive
 
     cases: list[dict] = []
     for dep in sorted(pm):

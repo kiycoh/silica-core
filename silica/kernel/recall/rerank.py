@@ -45,7 +45,7 @@ def window_weights(query: str) -> dict[str, float]:
     the same, so on long notes the window can centre on function-word-dense
     prose instead of the discriminative passage (offline-signals-map §3,
     graft G3). Reading the index is the only coupling to the lexical lane:
-    no leg is fused, the use_lexical ARM stays an eval flag (ADR-0019).
+    no leg is fused (ADR-0019).
     {} — the unweighted scan — when the vault has no lexical index, it is
     empty, or the store is unreadable: the lever must never make windowing
     worse than it was without an index."""

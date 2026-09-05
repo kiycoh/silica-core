@@ -13,6 +13,7 @@ ponytail: no schema, no db, no quarantine on corrupt JSON (unlike
 EpisodicStore) — this is a small derived cache, not user data; on corruption
 it silently resets to empty rather than sidelining the file.
 """
+
 from __future__ import annotations
 
 import json
@@ -37,7 +38,8 @@ def _load() -> dict[str, float]:
     # edit / partial rewrite) resets to empty, so ranking() can never raise —
     # the docstring's "silently resets to empty" contract, actually enforced.
     if not isinstance(data, dict) or not all(
-            isinstance(v, (int, float)) for v in data.values()):
+        isinstance(v, (int, float)) for v in data.values()
+    ):
         return {}
     return data
 
@@ -60,9 +62,12 @@ def bump(paths: list[str]) -> None:
         for key in keys:
             weights[key] = weights.get(key, 0.0) + 1.0
         atomic_write_bytes(
-            _store_path(), json.dumps(weights, ensure_ascii=False).encode("utf-8"))
+            _store_path(), json.dumps(weights, ensure_ascii=False).encode("utf-8")
+        )
     except Exception as e:
-        logger.warning("recall_weights.bump: write failed (%s); weights not persisted", e)
+        logger.warning(
+            "recall_weights.bump: write failed (%s); weights not persisted", e
+        )
 
 
 def ranking() -> list[tuple[str, float]] | None:

@@ -232,7 +232,8 @@ def test_get_store_is_one_instance_under_concurrent_first_access(tmp_path, monke
 # ---------------------------------------------------------------------------
 
 def test_assembled_block_keeps_contested_of_head_and_periphery(monkeypatch):
-    from silica.kernel.recall import assembly, perception
+    from evals import recall_arms, recall_assembly
+    from silica.kernel.recall import perception
 
     seeds = [
         perception.NoteBlock(path="head", date="d", evidence="e",
@@ -242,24 +243,24 @@ def test_assembled_block_keeps_contested_of_head_and_periphery(monkeypatch):
     # "head" and "peri" share the hub "H", so squash() folds them into ONE
     # block: the periphery member's own text disappears into the head's block.
     neighbors = {
-        "head": assembly.Neighbors("H", ["peri"], [], []),
-        "peri": assembly.Neighbors("H", [], [], []),
-        "H": assembly.Neighbors(None, [], [], []),
+        "head": recall_assembly.Neighbors("H", ["peri"], [], []),
+        "peri": recall_assembly.Neighbors("H", [], [], []),
+        "H": recall_assembly.Neighbors(None, [], [], []),
     }
     monkeypatch.setattr(
-        perception, "_driver_neighbors",
-        lambda p: neighbors.get(p, assembly.Neighbors(None, [], [], [])),
+        recall_arms, "_driver_neighbors",
+        lambda p: neighbors.get(p, recall_assembly.Neighbors(None, [], [], [])),
     )
-    monkeypatch.setattr(perception, "_assembly_body", lambda p: f"# {p}\n{p} body")
+    monkeypatch.setattr(recall_arms, "_assembly_body", lambda p: f"# {p}\n{p} body")
     monkeypatch.setattr(
-        perception, "_read_dated_body",
+        recall_arms.product, "_read_dated_body",
         lambda p, origin="vault": (
             ("", "superseded by Peri v2", f"# {p}\n{p} body") if p == "peri"
             else ("", None, f"# {p}\n{p} body")
         ),
     )
 
-    out = perception._assemble_blocks(list(seeds), "q")
+    out = recall_arms._assemble_blocks(list(seeds), "q")
     folded = next(b for b in out if b.path == "head")
     assert folded.contested is not None
     assert "wrong date" in folded.contested
@@ -268,13 +269,14 @@ def test_assembled_block_keeps_contested_of_head_and_periphery(monkeypatch):
 
 
 def test_assembled_block_stays_uncontested_when_nothing_is_flagged(monkeypatch):
-    from silica.kernel.recall import assembly, perception
+    from evals import recall_arms, recall_assembly
+    from silica.kernel.recall import perception
 
     seeds = [perception.NoteBlock(path="a", date="", evidence="",
                                   body="# A\nx", excerpt="# A\nx")]
-    monkeypatch.setattr(perception, "_driver_neighbors",
-                        lambda p: assembly.Neighbors(None, [], [], []))
-    out = perception._assemble_blocks(list(seeds), "q")
+    monkeypatch.setattr(recall_arms, "_driver_neighbors",
+                        lambda p: recall_assembly.Neighbors(None, [], [], []))
+    out = recall_arms._assemble_blocks(list(seeds), "q")
     assert len(out) == 1
     assert out[0].contested is None
 

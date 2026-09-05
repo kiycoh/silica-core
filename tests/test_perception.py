@@ -305,7 +305,7 @@ def test_use_recall_weights_false_ignores_populated_store(tmp_path, monkeypatch)
     _write("sessions/a.md", "2026-01-01", "short note about cooking pasta")
     _write("sessions/b.md", "2026-02-02", "short note about hiking trails")
     _index()
-    from silica.kernel.recall import recall_weights
+    from evals import recall_weights
     from silica.kernel.recall.perception import perceive
 
     recall_weights.bump(["sessions/b"])  # store populated, flag stays off
@@ -319,12 +319,12 @@ def test_use_recall_weights_true_resurfaces_bumped_note(tmp_path, monkeypatch):
     _write("sessions/a.md", "2026-01-01", "short note about cooking pasta")
     _write("sessions/b.md", "2026-02-02", "short note about hiking trails")
     _index()
-    from silica.kernel.recall import recall_weights
-    from silica.kernel.recall.perception import perceive
+    from evals import recall_weights
+    from evals.recall_arms import perceive
 
     recall_weights.bump(["sessions/b"])
     p = perceive("pasta", now="2026-05-01", k=2, use_embedder=False,
-                 use_recall_weights=True)
+                 improve=True)
     assert any(b.path == "sessions/b" and "recall:" in b.evidence for b in p.blocks)
 
 
@@ -377,10 +377,10 @@ def test_study_order_puts_prerequisite_first_and_annotates(tmp_path, monkeypatch
                  {"sessions/deep": ["sessions/basics"]})
     _write("sessions/deep.md", "2026-01-02", "backprop chains the gradients")
     _write("sessions/basics.md", "2026-01-01", "derivatives measure change")
-    from silica.kernel.recall.perception import perceive
+    from evals.recall_arms import perceive
 
     p = perceive("gradients", now="2026-05-01", use_embedder=False,
-                 paths=["sessions/deep", "sessions/basics"], study_order=True)
+                 paths=["sessions/deep", "sessions/basics"], study=True)
     assert [b.path for b in p.blocks] == ["sessions/basics", "sessions/deep"]
     assert p.blocks[1].builds_on == "basics"
     assert "| builds-on: basics" in p.render()
@@ -391,12 +391,12 @@ def test_study_order_never_changes_membership_and_default_off(tmp_path, monkeypa
                  {"sessions/deep": ["sessions/basics"]})
     _write("sessions/deep.md", "2026-01-02", "backprop chains the gradients")
     _write("sessions/basics.md", "2026-01-01", "derivatives measure change")
-    from silica.kernel.recall.perception import perceive
+    from evals.recall_arms import perceive
 
     off = perceive("gradients", now="2026-05-01", use_embedder=False,
                    paths=["sessions/deep", "sessions/basics"])
     on = perceive("gradients", now="2026-05-01", use_embedder=False,
-                  paths=["sessions/deep", "sessions/basics"], study_order=True)
+                  paths=["sessions/deep", "sessions/basics"], study=True)
     assert [b.path for b in off.blocks] == ["sessions/deep", "sessions/basics"]
     assert {b.path for b in on.blocks} == {b.path for b in off.blocks}
     assert all(not b.builds_on for b in off.blocks)   # annotation is study-only
@@ -414,10 +414,10 @@ def test_study_order_keeps_contested_demoted(tmp_path, monkeypatch):
         '---\ndate: "2026-01-01"\ncontested: true\n'
         'contradictions:\n  - "flagged: superseded (by user, 2026-05-01)"\n'
         "---\n\nderivatives measure change\n")
-    from silica.kernel.recall.perception import perceive
+    from evals.recall_arms import perceive
 
     p = perceive("gradients", now="2026-05-01", use_embedder=False,
-                 paths=["sessions/deep", "sessions/basics"], study_order=True)
+                 paths=["sessions/deep", "sessions/basics"], study=True)
     assert [b.path for b in p.blocks] == ["sessions/deep", "sessions/basics"]
 
 
@@ -430,10 +430,10 @@ def test_study_order_survives_unavailable_prereq_map(tmp_path, monkeypatch):
 
     monkeypatch.setattr(learner, "prerequisites_map", _boom)
     _write("sessions/a.md", "2026-01-01", "alpha body")
-    from silica.kernel.recall.perception import perceive
+    from evals.recall_arms import perceive
 
     p = perceive("alpha", now="2026-05-01", use_embedder=False,
-                 paths=["sessions/a"], study_order=True)
+                 paths=["sessions/a"], study=True)
     assert [b.path for b in p.blocks] == ["sessions/a"]
 
 
@@ -444,7 +444,7 @@ def test_orient_prepends_vault_map_and_default_off(tmp_path, monkeypatch):
     _write("sessions/a.md", "2026-01-01", "alpha body")
     import silica.kernel.recall.vault_map as vm
     monkeypatch.setattr(vm, "build_vault_map", lambda: "## Vault map\n- Notes: 1")
-    from silica.kernel.recall.perception import perceive
+    from evals.recall_arms import perceive
 
     off = perceive("alpha", now="2026-05-01", use_embedder=False,
                    paths=["sessions/a"])
@@ -464,7 +464,7 @@ def test_orient_fails_open_when_map_unavailable(tmp_path, monkeypatch):
         raise RuntimeError("no cooccur index")
 
     monkeypatch.setattr(vm, "build_vault_map", _boom)
-    from silica.kernel.recall.perception import perceive
+    from evals.recall_arms import perceive
 
     p = perceive("alpha", now="2026-05-01", use_embedder=False,
                  paths=["sessions/a"], orient=True)

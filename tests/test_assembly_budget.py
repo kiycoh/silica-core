@@ -13,7 +13,7 @@ This matters beyond the overrun: that ceiling carries a `ponytail:` note saying
 it was never swept. Sweeping a budget that is not actually enforced measures
 nothing, so the accounting has to be right before the sweep is worth running.
 """
-from silica.kernel.recall.assembly import (
+from evals.recall_assembly import (
     Caps, Neighbors, Unit, assemble, fill_budget, rendered_cost,
 )
 

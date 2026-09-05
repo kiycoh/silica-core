@@ -166,149 +166,6 @@ def build_vault_graph_ctx() -> dict[str, dict]:
         return {}
 
 
-def novelty_gate(fsm: "InjectorFSM", raw_payload: dict) -> tuple[dict, int]:
-    """SAGE-style capture-side novelty gate (Tier 2 cost).
-
-    A concept whose TITLE cosine to an existing note's title is >=
-    CONFIG.novelty_tau leaves the payload BEFORE chunking, so chunk count
-    (= distiller calls) falls with
-    them. They are never dropped: each goes to the deferred store and, when a
-    work queue is running, to the concurrent ternary dedup judge (duplicate /
-    distinct / contradicts), which authors the patch when warranted.
-
-    tau unset/0 = off (payload returned untouched). Best-effort: embedder or
-    store trouble keeps concepts in the payload, same contract as COLLISION.
-    Returns (filtered_payload, diverted_count).
-    """
-    tau = float(getattr(orch.CONFIG, "novelty_tau", 0.0) or 0.0)
-    if tau <= 0.0:
-        return raw_payload, 0
-
-    from silica.agent.providers import get_embedder_or_none
-    try:
-        from silica.kernel.recall.embed import get_store
-        store = get_store()
-    except Exception as _e:
-        logger.debug("NOVELTY: embed store unavailable (%s); gate skipped", _e)
-        return raw_payload, 0
-    if len(store) == 0:
-        return raw_payload, 0
-    embedder = get_embedder_or_none(orch.CONFIG, "NOVELTY", level="debug")
-    if embedder is None:
-        return raw_payload, 0
-
-    from silica.kernel.recall.embed import _note_title_text
-    from silica.kernel.recall.paths import is_inbox_path
-    from silica.router.states.collision import _names_agree
-
-    def _name_of(c) -> str:
-        return c.get("name", "") if isinstance(c, dict) else str(c)
-
-    # Order parameter: TITLE-vs-title cosine (like-vs-like). A short concept
-    # name is embedded as a title and scored against stored title vectors,
-    # never against full note bodies — the body signal was measured not to
-    # separate captured from novel concepts (their cosine distributions
-    # overlap; docs/architecture/silica-x-chemistry.md IV.3).
-    names: list[str] = []
-    for batch in raw_payload.get("batches", []):
-        for c in batch.get("concepts", []):
-            n = _name_of(c)
-            if n.strip():
-                names.append(n)
-    uniq = list(dict.fromkeys(names))
-    if not uniq:
-        return raw_payload, 0
-    try:
-        vecs = embedder.embed([_note_title_text(n) for n in uniq])
-        if len(vecs) != len(uniq):
-            return raw_payload, 0
-    except Exception as _e:
-        logger.debug("NOVELTY: batch embed failed (%s); gate skipped", _e)
-        return raw_payload, 0
-    vec_by_name = dict(zip(uniq, vecs))
-
-    kept_batches: list[dict] = []
-    diverted: list[dict] = []
-    for batch in raw_payload.get("batches", []):
-        inbox_file = batch.get("inbox_file", fsm.inbox_file)
-        kept: list = []
-        for c in batch.get("concepts", []):
-            name = _name_of(c)
-            vec = vec_by_name.get(name)
-            if not name or vec is None:
-                kept.append(c)
-                continue
-            try:
-                hits = store.title_cosine_top_k(vec, k=5)
-            except Exception as _se:
-                logger.debug("NOVELTY: title lookup failed for '%s': %s", name, _se)
-                kept.append(c)
-                continue
-            hits = [h for h in hits if not is_inbox_path(h["path"])]
-            best = hits[0] if hits else None
-            # Cosine alone is a soup on dense taxonomic vaults: near-synonym and
-            # negation-differing titles score ~0.97 (probe: nearest-distinct
-            # p99=0.978). Require the same lexical name agreement COLLISION uses,
-            # which rejects negation pairs ("context-free" vs "non context-free")
-            # the embedding cannot tell apart.
-            if (best is None or best["score"] < tau
-                    or not _names_agree(name, best["name"])):
-                kept.append(c)
-                continue
-            logger.info(
-                "NOVELTY: '%s' ~ '%s' (title score=%.3f >= tau=%.2f); diverted",
-                name, best["path"], best["score"], tau,
-            )
-            diverted.append({
-                "concept": c,
-                "inbox_file": inbox_file,
-                "top_match": {"path": best["path"], "name": best["name"],
-                              "score": best["score"]},
-                "score": best["score"],
-            })
-        if kept:
-            kept_batches.append({**batch, "concepts": kept})
-
-    if diverted:
-        from silica.router.states.collision import _deferred_op_dict
-        fsm._defer_ops(
-            [_deferred_op_dict(fsm, d, "novelty_gate") for d in diverted],
-            {
-                (d["concept"].get("name", str(i)) if isinstance(d["concept"], dict) else str(i)):
-                f"novelty_gate score={d['score']:.3f}"
-                for i, d in enumerate(diverted)
-            },
-            phase="NOVELTY",
-        )
-        if fsm.work_queue is not None:
-            from silica.kernel.workqueue import WorkItem
-            for d in diverted:
-                c = d["concept"]
-                match = d["top_match"]
-                if not match.get("path"):
-                    continue
-                try:
-                    fsm.work_queue.enqueue(WorkItem(
-                        kind="dedup",
-                        target_path=match["path"],
-                        context={
-                            "concept": c.get("name", "") if isinstance(c, dict) else str(c),
-                            "excerpt": c.get("inbox_excerpt", "") if isinstance(c, dict) else "",
-                            "candidate": match.get("name", match["path"]),
-                            "score": d["score"],
-                            "inbox_file": d["inbox_file"],
-                            "hub": fsm.hub,
-                            "content_hash": fsm._current_content_hash,
-                            "target_dir": fsm.target_dir,
-                        },
-                        reason=f"novelty_gate score={d['score']:.3f}",
-                    ))
-                except Exception as _qe:
-                    logger.debug("NOVELTY: failed to enqueue dedup item: %s", _qe)
-        logger.info("NOVELTY: %d concept(s) diverted to the dedup lane pre-chunk",
-                    len(diverted))
-
-    return {**raw_payload, "batches": kept_batches}, len(diverted)
 
 
 def _pin_file_profile(fsm: "InjectorFSM", fi: int, inbox_file: str) -> None:
@@ -382,27 +239,11 @@ def _assemble_file_chunks(fsm: "InjectorFSM", recon_cur: dict) -> tuple[dict, li
     elif "payload" in res:
         raw_payload = res["payload"]
 
-    # Tier 2 novelty gate: divert already-captured concepts to the dedup lane
-    # BEFORE chunking so chunk count (= distiller calls) falls with them.
-    diverted_all = False
-    if raw_payload is not None:
-        raw_payload, _n_diverted = novelty_gate(fsm, raw_payload)
-        diverted_all = _n_diverted > 0 and not any(
-            b.get("concepts") for b in raw_payload.get("batches", [])
-        )
-
     new_chunks: list[dict] = []
     if raw_payload and max_concepts > 0:
         # Single-file recon → normally a single group; collect all defensively.
         for fg in partition_by_file(raw_payload, max_concepts) or []:
             new_chunks.extend(fg.get("chunks", []))
-
-    if not new_chunks and diverted_all:
-        # Every concept diverted: one empty chunk carries the file through the
-        # normal pipeline (DELEGATE skips the LLM, VALIDATE short-circuits).
-        # Falling through would resurrect the unfiltered fallback chunks.
-        new_chunks = [{"schema_version": (raw_payload or {}).get("schema_version", 1),
-                       "batches": []}]
 
     if not new_chunks:
         # Fallback: all chunks of this payload belong to the current file.
@@ -587,10 +428,6 @@ def warm_next_file(fsm: "InjectorFSM") -> bool:
     Returns True when chunks were attached.
     """
     try:
-        if float(getattr(orch.CONFIG, "novelty_tau", 0) or 0) > 0:
-            # The gate diverts concepts to the deferred store; warming would
-            # divert ahead of the file's own turn. Stand down.
-            return False
         fi = fsm._next_uncommitted_file_idx(fsm._current_file_idx + 1)
         if fi >= len(fsm.inbox_files) or fsm._file_chunks.get(fi, {}).get("chunks"):
             return False

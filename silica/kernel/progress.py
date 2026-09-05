@@ -511,18 +511,6 @@ class ProgressLedger:
                     f"episodic candidate: {c.key} ({c.run_count} runs since "
                     f"{c.since}) -> /promote {c.key}"
                 )
-            # Burial: the loss burial_stats measures but nothing surfaced —
-            # a fact superseded by an unrelated text under a reused key stops
-            # being recalled with no trace anywhere. Reported only when
-            # non-zero so the routine case adds no line to drown real ones.
-            stats = store.burial_stats()
-            if stats["collisions"]:
-                parts.append(
-                    f"EPISODIC BURIAL: {stats['collisions']}/{stats['supersedes']} "
-                    f"supersedes look like key collisions "
-                    f"({stats['collision_rate']:.0%} of measured) — facts buried "
-                    "under reused keys, not updated"
-                )
         except Exception:
             pass
 

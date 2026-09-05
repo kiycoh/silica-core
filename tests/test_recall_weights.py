@@ -1,10 +1,11 @@
-"""Tests for the recall-outcome weight store (kernel/recall_weights.py)."""
+"""Tests for the recall-outcome weight store (evals/recall_weights.py)."""
 from __future__ import annotations
 
 import pytest
 
 from silica.config import CONFIG
-from silica.kernel.recall import paths, recall_weights
+from evals import recall_weights
+from silica.kernel.recall import paths
 
 
 def _bind(tmp_path, monkeypatch):

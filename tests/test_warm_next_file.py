@@ -59,7 +59,6 @@ def test_warm_next_file_attaches_chunks_and_marks():
     fsm = _warm_stub()
     with patch.object(st.orch, "silica_recon", return_value=_recon_res()) as rec, \
          patch.object(st.orch, "silica_payload", return_value=_payload_res()), \
-         patch.object(st.orch.CONFIG, "novelty_tau", 0.0, create=True), \
          patch("silica.agent.providers.get_embedder_or_none", return_value=None):
         assert st.warm_next_file(fsm) is True
     rec.assert_called_once_with("Inbox/f1.md")
@@ -75,27 +74,17 @@ def test_warm_next_file_attaches_chunks_and_marks():
 
 def test_warm_next_file_bails_on_recon_error():
     fsm = _warm_stub()
-    with patch.object(st.orch, "silica_recon", return_value={"error": "boom"}), \
-         patch.object(st.orch.CONFIG, "novelty_tau", 0.0, create=True):
+    with patch.object(st.orch, "silica_recon", return_value={"error": "boom"}):
         assert st.warm_next_file(fsm) is False
     assert len(fsm._chunks) == 1
     assert 1 not in fsm._file_chunks
 
 
-def test_warm_next_file_bails_when_novelty_gate_on():
-    # The gate diverts concepts to the deferred store; warming would divert
-    # ahead of the file's own turn, so the lever stands down.
-    fsm = _warm_stub()
-    with patch.object(st.orch, "silica_recon") as rec, \
-         patch.object(st.orch.CONFIG, "novelty_tau", 0.93, create=True):
-        assert st.warm_next_file(fsm) is False
-    rec.assert_not_called()
 
 
 def test_warm_next_file_bails_when_no_next_file():
     fsm = _warm_stub(n_files=1)
-    with patch.object(st.orch, "silica_recon") as rec, \
-         patch.object(st.orch.CONFIG, "novelty_tau", 0.0, create=True):
+    with patch.object(st.orch, "silica_recon") as rec:
         assert st.warm_next_file(fsm) is False
     rec.assert_not_called()
 

@@ -33,7 +33,7 @@ def _isolate_recall_weights(monkeypatch, tmp_path):
     ~/.silica/index across runs — measured: a test asserting 1.0 read 2.0 in a
     full-suite run and passed alone.
     """
-    import silica.kernel.recall.recall_weights as rw
+    from evals import recall_weights as rw
 
     monkeypatch.setattr(rw, "_store_path", lambda: tmp_path / "recall_weights.json")
 

@@ -41,7 +41,7 @@ def _perceive_with(monkeypatch, bodies: list[str], query: str, k: int, **kw):
                for i in range(len(bodies))]
     monkeypatch.setattr(perception, "facade_retrieve", lambda *a, **k_: (results, None))
     monkeypatch.setattr(perception, "_read_dated_body",
-                        lambda path, origin="vault": ("", None, bodies[int(path[1:])], []))
+                        lambda path, origin="vault": ("", None, bodies[int(path[1:])], [], "", "active", False))
     monkeypatch.setattr(perception, "_recall_facts", lambda *a, **k_: ([], [], ""))
     return perception.perceive(query, now="2026-09-03", k=k, with_facts=False, **kw)
 

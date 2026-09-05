@@ -1,4 +1,4 @@
-from silica.kernel.recall.assembly import Unit, fill_budget
+from evals.recall_assembly import Unit, fill_budget
 
 
 def test_seeds_never_trimmed_even_over_budget():
@@ -21,7 +21,7 @@ def test_periphery_fills_by_rank_then_reports_drops():
     assert trunc.kept == 3
 
 
-from silica.kernel.recall.assembly import relevel_headers, squash
+from evals.recall_assembly import relevel_headers, squash
 
 
 def test_relevel_shifts_headings_capped_at_six():
@@ -57,7 +57,7 @@ def test_single_seed_is_not_squashed():
     assert blocks[0].text.startswith("Hub > Solo")  # breadcrumb prefix
 
 
-from silica.kernel.recall.assembly import Neighbors, Caps, assemble
+from evals.recall_assembly import Neighbors, Caps, assemble
 
 
 def _fixture():

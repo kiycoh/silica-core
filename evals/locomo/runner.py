@@ -668,20 +668,19 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
         err = agent["error"]
         rels = agent["notes_read"]
     else:
-        from silica.kernel.recall import perception
+        from evals import recall_arms
 
         win_kw = {}
         if windows is not None:
             win_kw["windows"] = windows
         if window_chars is not None:
             win_kw["window_chars"] = window_chars
-        p = perception.perceive(qa["question"], now=now, k=k,
+        p = recall_arms.perceive(qa["question"], now=now, k=k,
                                 use_embedder=use_embedder, use_rerank=use_rerank,
                                 episodic_ttl_days=episodic_ttl, with_facts=distill,
                                 paths=list(index.keys()) if stuff else None,
-                                use_recall_weights=improve,
-                                assemble=assemble, use_lexical=lexical,
-                                study_order=study, orient=orient, **win_kw)
+                                improve=improve, assemble=assemble, lexical=lexical,
+                                study=study, orient=orient, **win_kw)
         rels = [b.path for b in p.blocks]
 
         if distill and gold_sessions:
@@ -733,7 +732,7 @@ def run_question(qa: dict, qid: str, index: dict[str, dict], *, model: str,
     # rejects both combos with --improve; this guard also protects a direct
     # run()/run_question() caller that bypasses main().
     if improve and correct and answer_mode == "oneshot" and not stuff:
-        from silica.kernel.recall.recall_weights import bump
+        from evals.recall_weights import bump
 
         bump(rels)
 
@@ -779,7 +778,7 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
         timeline: bool = False, improve: bool = False, assemble: bool = False,
         lexical: bool = False, study: bool = False, orient: bool = False,
         plain_headers: bool = False, data_path: str | Path | None = None,
-        primary_metric: str = "overall_accuracy", supersede_tau: float = 0.0,
+        primary_metric: str = "overall_accuracy",
         verbose: bool = False, out: Path | None = None) -> dict:
     from silica.config import CONFIG
     from silica.kernel.recall import perception
@@ -855,12 +854,6 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
         # silica_recall reads CONFIG (no per-call TTL): mirror --episodic-ttl,
         # the same seam the slice parameterizes (0 = never expire, LoCoMo span).
         CONFIG.episodic_ttl_days = episodic_ttl
-    # Capture-time gate pinned OFF: every frozen baseline under bench/ predates
-    # it, so inheriting the shipped 0.70 would silently make re-runs
-    # incomparable. Arms that WANT the gate set it around this call (the A/B
-    # driver does); the harness itself never inherits it.
-    old_supersede = CONFIG.episodic_supersede_tau
-    CONFIG.episodic_supersede_tau = float(supersede_tau)
     try:
         _run_conversations(data, rows, doc, run_root=run_root, model=model,
                            judge_model=judge_model, k=k, stuff=stuff,
@@ -878,7 +871,6 @@ def run(data: list[dict], run_root: Path, *, model: str, judge_model: str, k: in
                            study=study, orient=orient, plain_headers=plain_headers)
     finally:
         CONFIG.episodic_ttl_days = old_ttl
-        CONFIG.episodic_supersede_tau = old_supersede
     doc.pop("partial", None)
     doc["metrics"] = _metrics(rows)
     return doc

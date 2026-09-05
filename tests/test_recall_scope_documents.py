@@ -38,7 +38,7 @@ def test_perceive_folder_keeps_only_that_subtree_and_overfetches(monkeypatch):
 
     monkeypatch.setattr(perception, "facade_retrieve", fake_retrieve)
     monkeypatch.setattr(perception, "_read_dated_body",
-                        lambda path, origin="vault": ("", None, f"body of {path}", []))
+                        lambda path, origin="vault": ("", None, f"body of {path}", [], "", "active", False))
     p = perception.perceive("q", now="2026-09-03", k=2, with_facts=False, folder="docs/adr")
     assert [b.path for b in p.blocks] == ["docs/adr/0003-x", "docs/adr/0030-y"]
     assert captured["k"] >= 6  # the cut to k happens after the filter
@@ -88,7 +88,7 @@ def test_read_dated_body_returns_the_documented_files(tmp_path, monkeypatch):
 
     DRIVER.create("docs/gate.md",
                   '---\ndate: "2026-01-01"\ndocuments:\n  - silica/kernel/write/validate.py\n---\n\nbody\n')
-    date, contested, body, documents = _read_dated_body("docs/gate")
+    date, contested, body, documents, _trust, _life, _weak = _read_dated_body("docs/gate")
     assert (date, contested, body.strip()) == ("2026-01-01", None, "body")
     assert documents == ["silica/kernel/write/validate.py"]
 

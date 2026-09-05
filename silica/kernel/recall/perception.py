@@ -45,6 +45,8 @@ DEFAULT_K = 15
 WINDOW_CHARS = 1000
 DEFAULT_WINDOWS = 3
 TOP_WINDOWED_RANKS = 5  # ranks past this render one window; see perceive()
+ALL_NON_ACTIVE_RULE = ("[every recalled note is contested, under review, or superseded: "
+                       "do not state their content as fact; name the dispute, or abstain]")
 FACTS_K = 10
 
 
@@ -62,6 +64,10 @@ class NoteBlock:
     origin: str = "vault"  # "memory" = personal-memory lane (ADR-0019): the path
     #                        resolves in ANOTHER vault, so read_note denies it
     documents: list[str] = field(default_factory=list)  # `documents:` frontmatter, repo-relative
+    grounding: str = ""  # "grounded: 2/3 spans" | "grounding: n/a" | "" when the ledger has no row
+    trust: str = ""  # contested.trust; "" from a stub. Header names it only when not "human"
+    lifecycle: str = "active"  # contested.lifecycle. Header names it only when not active/contested
+    non_active: bool = False  # lifecycle counts against it: demoted, one window, may trigger abstain
 
 
 @dataclass
@@ -73,6 +79,8 @@ class Perception:
     fact_hits: list = field(default_factory=list)    # episodic.FactHit
     fact_chains: list = field(default_factory=list)  # per-hit supersede chain (episodic.Fact)
     blocks: list[NoteBlock] = field(default_factory=list)
+    filtered: int = 0  # blocks an epistemic filter (min_trust / lifecycle) dropped
+    all_non_active: bool = False  # every block is contested/review/superseded (M3): abstain rule leads
 
     def render(self, *, facts_first: bool = True, windowed: bool = True,
                stale: dict[str, str] | None = None,
@@ -108,12 +116,22 @@ class Perception:
                 # in the recall index (955 vectors = 955 notes), and until now
                 # the binding only ever fed `stale`.
                 head += (f" | documents: {', '.join(b.documents)}" if b.documents else "")
+                head += (f" | {b.grounding}" if b.grounding else "")
                 head += (f" | dated {b.date}" if b.date else "")
+                # A person's active note is the silent default: only the
+                # deviation is a fact the model must weigh, and a hand-written
+                # vault keeps the exact prompt the G1 header was measured on.
+                head += (f" | trust: {b.trust}" if b.trust and b.trust != "human" else "")
+                head += (f" | lifecycle: {b.lifecycle}"
+                         if b.lifecycle not in ("active", "contested") else "")
                 head += (f" | contested: {b.contested}" if b.contested else "")
                 head += (f" | stale:{lvl}" if lvl else "") + "]"
                 parts.append(f"{head}\n{b.excerpt}")
             else:
                 marks = ([f"dated {b.date}"] if b.date else []) \
+                    + ([f"trust: {b.trust}"] if b.trust and b.trust != "human" else []) \
+                    + ([f"lifecycle: {b.lifecycle}"]
+                       if b.lifecycle not in ("active", "contested") else []) \
                     + ([f"contested: {b.contested}"] if b.contested else []) \
                     + ([f"stale:{lvl}"] if lvl else [])
                 head = f"[{' | '.join(marks)}]\n" if marks else ""
@@ -128,6 +146,11 @@ class Perception:
         # evidence; before it, it frames what the evidence is a sample OF.
         if self.orientation and out:
             out = f"{self.orientation}\n\n---\n\n{out}"
+        # The rule leads everything (M3): the model reads this string and
+        # nothing else, and a note it never sees cannot be doubted. Same
+        # branch as "not in the vault": the answer is the dispute, or none.
+        if self.all_non_active and out:
+            out = (ALL_NON_ACTIVE_RULE + "\n\n" + out)
         return out
 
 
@@ -147,9 +170,10 @@ def _peek_dir(vault: str | None) -> str | None:
 
 
 def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
-                    use_rerank: bool = True, use_recall_weights: bool = False,
-                    use_lexical: bool = False, rerank_stats: dict | None = None,
-                    use_memory: bool = True, vault: str | None = None):
+                    use_rerank: bool = True, rerank_stats: dict | None = None,
+                    use_memory: bool = True, vault: str | None = None,
+                    recall_rank: list[tuple[str, float]] | None = None,
+                    lexical_rank: list[tuple[str, float]] | None = None):
     """Fused first-stage retrieval + cross-encoder rerank for a fresh text query.
 
     The single retrieval path shared by the chat tools
@@ -162,14 +186,11 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
     no co-occurrence index in either lane). query_vec is surfaced for reuse —
     episodic fact recall scores against the same vector.
 
-    ``use_recall_weights`` (phase 1 of `improve`, LoCoMo eval-only): when True,
-    folds the vault's recall-outcome weights in as an extra fusion leg. False
-    (the default) leaves the retrieval path byte-identical for every other
-    caller.
-
-    ``use_lexical`` (default off, opt-in like ``use_recall_weights``): when
-    True, folds the hand-written BM25/fuzzy leg into fusion as an extra leg.
-    Abstains when the lexical index is absent or empty.
+    ``recall_rank`` and ``lexical_rank`` are extra pre-ranked legs the CALLER
+    computed, fused as additional RRF rankings. The product never builds them:
+    both are eval arms (`evals/recall_arms.py`), and passing the ranking rather
+    than a boolean is what keeps their sources out of this module while the
+    harness still measures this function and not a copy of it.
 
     ``rerank_stats`` is an optional out-dict filled with ``{"reranked": bool}``
     (see ``rerank_related``): the returned ``.score`` is a cross-encoder
@@ -232,24 +253,6 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
     if query_vec is None and cooccur_store is None and mem_cooccur is None:
         return None, None
 
-    recall_rank = None
-    if use_recall_weights:
-        from silica.kernel.recall.recall_weights import ranking
-
-        recall_rank = ranking()
-
-    lexical_rank = None
-    if use_lexical:
-        if peek is None:
-            from silica.kernel.recall.lexical import get_lexical_store
-
-            lex = get_lexical_store()
-        else:
-            from silica.kernel.recall.vault_registry import lexical_for
-
-            lex = lexical_for(Path(peek))
-        lexical_rank = (lex.rank(query, k=k) if lex is not None else None) or None
-
     results = related_notes_for_query(
         query_vec=query_vec,
         query_text=query,
@@ -278,11 +281,17 @@ def facade_retrieve(query: str, *, k: int, use_embedder: bool = True,
     return results, query_vec
 
 
-def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None, str | None, list[str]]:
-    """(frontmatter date, contested reason, body, documents) for one note;
-    ('', None, None, []) when unreadable. `contested` is the note's flag
-    reason (first `contradictions` entry) or None; `documents` the repo files
-    the note documents (`documents:` frontmatter, [] when none). origin='memory'
+def _read_dated_body(path: str, origin: str = "vault") -> tuple[
+        str, str | None, str | None, list[str], str, str, bool]:
+    """(frontmatter date, contested reason, body, documents, trust, lifecycle,
+    weak) for one note; ('', None, None, [], '', 'active', False) when
+    unreadable. `weak` marks a contest raised only by agents' flags
+    (contested.contested_by_agents_only): labelled, never decisive (M3).
+    `contested` is the note's flag reason (first `contradictions` entry) or
+    None; `documents` the repo files the note documents (`documents:`
+    frontmatter, [] when none); `trust` and `lifecycle` the two derived
+    epistemic axes (contested.trust / contested.lifecycle, spec M2), read off
+    the same parse so the header costs no second read. origin='memory'
     resolves in the personal-memory vault (ADR-0019); an absolute-path origin
     resolves in that peeked vault."""
     if origin != "vault":
@@ -290,12 +299,12 @@ def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None,
 
         root = foreign_root(origin)
         if root is None:
-            return "", None, None, []
+            return "", None, None, [], "", "active", False
         p = root / (path if path.endswith(".md") else path + ".md")
         try:
             content = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
-            return "", None, None, []
+            return "", None, None, [], "", "active", False
     else:
         from silica.driver import DRIVER
 
@@ -303,7 +312,7 @@ def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None,
             content = DRIVER.read_note(
                 path if path.endswith(".md") else path + ".md").content or ""
         except Exception:
-            return "", None, None, []
+            return "", None, None, [], "", "active", False
     from silica.kernel.write import frontmatter
 
     data, _raw, body = frontmatter.split(content)
@@ -318,7 +327,18 @@ def _read_dated_body(path: str, origin: str = "vault") -> tuple[str, str | None,
     # `body` is the frontmatter-stripped text; for a body-only note split()
     # already returns the whole content as body. The old `or content` fallback
     # leaked YAML frontmatter into context whenever the body was empty (A7).
-    return date, contested, body, frontmatter.documents_in(content)
+    from silica.kernel.recall.paths import SOURCES_MARKER
+    from silica.kernel.write.contested import lifecycle as note_lifecycle
+    from silica.kernel.write.contested import trust as note_trust
+
+    from silica.kernel.write.contested import contested_by_agents_only
+
+    life = note_lifecycle(data)
+    weak = life == "contested" and contested_by_agents_only(
+        [str(r) for r in (data.get("contradictions") or [])])
+    return (date, contested, body, frontmatter.documents_in(content),
+            note_trust(content, has_source_leaf=SOURCES_MARKER in (body or "")),
+            life, weak)
 
 
 def _recall_facts(perception: Perception, query: str, query_vec, *, now: str,
@@ -351,157 +371,35 @@ def _recall_facts(perception: Perception, query: str, query_vec, *, now: str,
         logger.warning("perceive: episodic recall failed (context continues): %s", e)
 
 
-def _maybe_assemble(blocks: list[NoteBlock], *, assemble: bool, query: str) -> list[NoteBlock]:
-    """Gate: assemble=False returns blocks untouched (bit-identical default)."""
-    if not assemble or not blocks:
-        return blocks
-    return _assemble_blocks(blocks, query)
 
 
-def _driver_neighbors(path: str):
-    """`assembly.Neighbors` for one note, read live from DRIVER + cooccurrence.
-
-    Keyspace note: seeds and `body_of`/`by_path` live in the store keyspace
-    (no ".md"); `NoteRef.path` (children via backlinks, related via links)
-    carries ".md", so it is stripped here to match. `parent` is transcribed
-    as the raw `parent note` prop value (a NAME, not necessarily a store
-    path) and `edges` as raw cooccurrence-store keys — both may not resolve
-    through `body_of`; see the caller's keyspace concerns.
-    """
-    from silica.driver import DRIVER
-    from silica.kernel.recall import assembly
-    from silica.kernel.recall.cooccurrence import cooccur_key, get_cooccur_store
-    from silica.config import CONFIG
-
-    parent = None
-    try:
-        raw = (DRIVER.props_of(path) or {}).get("parent note") or ""
-        parent = str(raw).strip().strip("[]").strip() or None
-    except Exception:
-        parent = None
-    try:
-        related = [r.path.removesuffix(".md") for r in DRIVER.links(path)]
-    except Exception:
-        related = []
-    children: list[str] = []
-    try:
-        for b in DRIVER.backlinks(path):
-            bp = (DRIVER.props_of(b.path) or {}).get("parent note") or ""
-            if str(bp).strip().strip("[]").strip().lower() == _name_of(path).lower():
-                children.append(b.path.removesuffix(".md"))
-    except Exception:
-        children = []
-    edges: list[str] = []
-    try:
-        store = get_cooccur_store(lang=CONFIG.cooccurrence_lang)
-        row = store.note_edges_for(cooccur_key(path))
-        edges = [p for p, _w in sorted(row.items(), key=lambda kv: (-kv[1], kv[0]))]
-    except Exception:
-        edges = []
-    return assembly.Neighbors(parent=parent, children=children,
-                              related=related, edges=edges)
 
 
-def _name_of(path: str) -> str:
-    return path.rsplit("/", 1)[-1].removesuffix(".md")
 
 
-def _assembly_body(path: str) -> str:
-    body = _read_dated_body(path)[2]
-    return body or ""
 
 
-def _assemble_blocks(blocks: list[NoteBlock], query: str) -> list[NoteBlock]:
-    from silica.kernel.recall import assembly
 
-    by_path = {b.path: b for b in blocks}
 
-    def _body(p: str) -> str:
-        # Seeds already carry the correctly-fetched body (right origin, memory
-        # or vault, per _read_dated_body) on NoteBlock.body — assemble() calls
-        # body_of() for every unit including seeds, and a re-read here would
-        # default to origin="vault" and silently drop memory-lane seed bodies.
-        # Only genuine periphery paths (not in by_path) fall back to a fresh read.
-        seed = by_path.get(p)
-        return seed.body if seed is not None else _assembly_body(p)
 
-    res = assembly.assemble(
-        [b.path for b in blocks],
-        neighbors_of=_driver_neighbors,
-        body_of=_body,
-    )
-    out: list[NoteBlock] = []
-    for ab in res.blocks:
-        head = by_path.get(ab.members[0])
-        # `contested` is a trust signal, not decoration: perceive() promises a
-        # flagged note is never dropped, only marked, so the answer step can
-        # distrust it. Folding lost it twice — off the head, and off every
-        # periphery member whose text is squashed into this block with no
-        # NoteBlock of its own. A periphery member is not a seed, so its flag
-        # costs one frontmatter read; seeds carry it already.
-        reasons: list[str] = []
-        for member in ab.members:
-            seed = by_path.get(member)
-            reason = seed.contested if seed is not None else _read_dated_body(member)[1]
-            if reason and reason not in reasons:
-                reasons.append(reason)
-        out.append(NoteBlock(
-            path=ab.members[0],
-            date=head.date if head else "",
-            evidence=head.evidence if head else "",
-            body=ab.text,
-            excerpt=ab.text,   # assembled text is already budgeted
-            contested="; ".join(reasons) or None,
-        ))
+
+def _grounding_labels() -> dict[str, str]:
+    """`{note_key: header token}` from the provenance ledger, read once per
+    perceive (the ledger read is memoized on mtime). A note the gate never
+    scored has no token; a scored note with nothing checkable says `n/a`,
+    because on the paraphrasing profile only math and code are gateable and
+    a 100% over zero spans would be the false confidence the spec forbids.
+    Vault lane only: a peeked or memory vault has its own ledger."""
+    from silica.kernel.write.provenance import grounding_by_note
+
+    out: dict[str, str] = {}
+    for key, g in grounding_by_note().items():
+        total = int(g.get("spans") or 0)
+        if total <= 0:
+            out[key] = "grounding: n/a"
+        else:
+            out[key] = f"grounded: {total - int(g.get('ungrounded') or 0)}/{total} spans"
     return out
-
-
-def _study_order(blocks: list) -> list:
-    """Prerequisite-first order + builds-on annotations over the RENDERED set
-    (graft G6, study surfaces only).
-
-    Membership is untouched: topology orders what the semantic legs already
-    chose, so the crowding-out that killed every structural RRF leg (V1
-    0/417, V3 -25pp) cannot occur here by construction. V2 RefD is the one
-    PASSED directed signal (judge 26/33, p=0.0007) and by the surface rule a
-    PASS may carry an imperative reading. Contested blocks keep their demoted
-    tail position: distrust outranks didactic order.
-    """
-    from silica.kernel.report.learner import prerequisites_map
-
-    try:
-        prereqs = prerequisites_map() or {}
-    except Exception:
-        return blocks  # tolerated: no cooccur depth -> retrieval order stands
-    present = {b.path for b in blocks}
-    if not any(p in present for deps in prereqs.values() for p in deps):
-        return blocks
-
-    def topo(group: list) -> list:
-        # Kahn over the induced sub-DAG, stable: ties keep retrieval order,
-        # and any cycle survivor appends in retrieval order rather than
-        # dropping (ordering may never change membership).
-        paths = [b.path for b in group]
-        need = {b.path: [p for p in prereqs.get(b.path, []) if p in paths]
-                for b in group}
-        out: list = []
-        placed: set[str] = set()
-        while len(out) < len(group):
-            ready = [b for b in group if b.path not in placed
-                     and all(p in placed for p in need[b.path])]
-            if not ready:  # cycle: emit the rest as retrieved
-                out.extend(b for b in group if b.path not in placed)
-                break
-            out.extend(ready)
-            placed.update(b.path for b in ready)
-        for b in out:
-            if need[b.path]:
-                b.builds_on = ", ".join(_name_of(p) for p in need[b.path])
-        return out
-
-    clean = [b for b in blocks if not b.contested]
-    contested = [b for b in blocks if b.contested]
-    return topo(clean) + topo(contested)
 
 
 def _section_chain(body: str, offset: int, depth: int = 3) -> str:
@@ -524,16 +422,22 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
              episodic_ttl_days: int | None = None, with_facts: bool = True,
              use_embedder: bool = True, use_rerank: bool = True,
              paths: list[str] | None = None,
-             use_recall_weights: bool = False,
-             assemble: bool = False,
-             use_lexical: bool = False,
-             study_order: bool = False,
-             orient: bool = False,
              use_memory: bool = True,
              vault: str | None = None,
              rerank_stats: dict | None = None,
-             folder: str | None = None) -> Perception:
+             recall_rank: list[tuple[str, float]] | None = None,
+             lexical_rank: list[tuple[str, float]] | None = None,
+             folder: str | None = None,
+             min_trust: str | None = None,
+             lifecycle: str | None = None) -> Perception:
     """Retrieve + assemble the answer-time context for `query`.
+
+    ``min_trust`` / ``lifecycle`` are the epistemic filters (spec M2): a
+    trust floor (`contested.TRUST_ORDER`) and an exact lifecycle. Both are
+    off by default and never reorder; a filter drops blocks AFTER retrieval,
+    so what it costs is recall (the rank tail carried gold on the rank
+    probe), and ``Perception.filtered`` says how much was dropped so the
+    caller can tell the model it saw less.
 
     ``folder`` keeps only notes under that vault subtree. Retrieval over-fetches
     3k and cuts to k after the filter, so a scoped call still fills its slots;
@@ -546,24 +450,13 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
     was the only hop where that bit got lost (measured 2026-09-03: recall
     answered for a day with :1235 down and nothing in the reply said so).
 
+    ``recall_rank``/``lexical_rank`` are forwarded to `facade_retrieve`
+    untouched: extra ranked legs the caller computed, never built here.
+
     ``paths`` skips retrieval and assembles the given notes in order (the eval
     adapter's --stuff arm, or a caller that already holds a shortlist);
     unreadable paths are skipped and ranks stay dense. ``episodic_ttl_days``:
-    None = CONFIG default, 0 = never expire. ``use_recall_weights`` (phase 1 of
-    `improve`, eval-only, default off) is forwarded to `facade_retrieve`; it
-    has no effect when ``paths`` is set, since that bypasses retrieval.
-    ``assemble`` (default off) folds each seed's 1-hop neighbours into a
-    squashed, breadcrumbed block; no effect when ``paths`` is set (that
-    bypasses retrieval). ``study_order`` (default off, study surfaces /
-    answer-side A/B): prerequisite-first block order + builds-on header
-    tokens via V2 RefD — see `_study_order` for why ordering is the one
-    safe topological surface. ``orient`` (default off, agent-mode A/B —
-    offline-signals-map §4.1) prepends the session vault map so a one-shot
-    caller can carry the orientation a REPL session gets at start; the
-    honest prior from PEEK's content ablation is single digits, so it stays
-    an arm until an agent-mode gate passes.
-    ``use_lexical`` (default off) forwards to `facade_retrieve`'s lexical leg;
-    no effect when ``paths`` is set. ``vault`` (default None) peeks at another
+    None = CONFIG default, 0 = never expire. ``vault`` (default None) peeks at another
     adopted vault — see `facade_retrieve`; blocks then carry that folder as
     ``origin``, and assembly stays off because it walks the ACTIVE vault's
     link graph.
@@ -576,9 +469,9 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
     else:
         results, query_vec = facade_retrieve(
             query, k=k * 3 if folder else k, use_embedder=use_embedder,
-            use_rerank=use_rerank, use_recall_weights=use_recall_weights,
-            use_lexical=use_lexical, use_memory=use_memory, vault=vault,
-            rerank_stats=rerank_stats)
+            use_rerank=use_rerank, use_memory=use_memory, vault=vault,
+            rerank_stats=rerank_stats, recall_rank=recall_rank,
+            lexical_rank=lexical_rank)
         if folder:
             from silica.kernel.recall.paths import in_folder
 
@@ -593,18 +486,23 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
     # One idf map per query, shared by every note's window scan (graft G3);
     # {} — no lexical index — keeps the scan bit-identical to the unweighted one.
     wts = window_weights(query) if query else {}
+    grounding = _grounding_labels()
+    from silica.kernel.write.provenance import note_key
     blocks: list[NoteBlock] = []
     for rank, (path, evidence, origin) in enumerate(hits, 1):
-        date, contested, body, documents = _read_dated_body(path, origin)
+        date, contested, body, documents, trust, life, weak = _read_dated_body(path, origin)
         if body is None:
             continue
+        non_active = life != "active" and not weak
         # Cutting k was refuted (ranks 9-15 carried 9 gold answers on the
         # rank probe), so the token saving comes from the tail's window count
         # instead: k=15 at 3 windows is 42k chars (~10.6k tokens, measured
         # 2026-09-03); one window past rank 5 keeps the tail and bounds the
         # context at ~25k. The head keeps its multi-window span, which is
         # where the multi-window spec measured its gain.
-        n = windows if rank <= TOP_WINDOWED_RANKS else 1
+        # A non-active note is served with one window wherever it ranked
+        # (M3): it is evidence of a dispute, not the answer's main text.
+        n = 1 if non_active else (windows if rank <= TOP_WINDOWED_RANKS else 1)
         spans = (best_window_spans(body, query, window_chars, n, wts, snap=True)
                  if query else [(0, body[:window_chars])])
         excerpt = "\n[…]\n".join(s for _p, s in spans)
@@ -613,24 +511,26 @@ def perceive(query: str, *, now: str, k: int = DEFAULT_K,
         blocks.append(NoteBlock(path=path, date=date, evidence=evidence,
                                 body=body, excerpt=excerpt, contested=contested,
                                 section=_section_chain(body, spans[0][0]),
-                                origin=origin, documents=documents))
-    # Correction loop: contested notes are demoted behind clean ones (stable),
-    # never dropped — the render marks them so the answer step can distrust them.
-    blocks = [b for b in blocks if not b.contested] + [b for b in blocks if b.contested]
-    if study_order:
-        blocks = _study_order(blocks)
+                                origin=origin, documents=documents,
+                                grounding=(grounding.get(note_key(path), "")
+                                           if origin == "vault" else ""),
+                                trust=trust, lifecycle=life, non_active=non_active))
+    filtered = 0
+    if min_trust or lifecycle:
+        from silica.kernel.write.contested import TRUST_ORDER
 
-    if paths is None:
-        blocks = _maybe_assemble(blocks, assemble=assemble and vault is None, query=query)
-
-    perception = Perception(query=query, blocks=blocks)
-    if orient:
-        try:
-            from silica.kernel.recall.vault_map import build_vault_map
-
-            perception.orientation = build_vault_map() or ""
-        except Exception as e:
-            logger.warning("perceive: orientation skipped (%s)", e)
+        floor = TRUST_ORDER.get(min_trust or "", 0)
+        kept = [b for b in blocks
+                if TRUST_ORDER.get(b.trust, 0) >= floor
+                and (not lifecycle or b.lifecycle == lifecycle)]
+        filtered, blocks = len(blocks) - len(kept), kept
+    # Correction loop: non-active notes (contested by a person or the judge,
+    # under review, superseded) are demoted behind active ones (stable), never
+    # dropped — the render marks them so the answer step can distrust them.
+    # An agent's own flag stays in place: labelled, not decisive (M3).
+    blocks = [b for b in blocks if not b.non_active] + [b for b in blocks if b.non_active]
+    perception = Perception(query=query, blocks=blocks, filtered=filtered,
+                            all_non_active=bool(blocks) and all(b.non_active for b in blocks))
     # use_memory=False means "this vault only": the episodic store homes in the
     # memory vault with no abstain rule of its own (episodic.py), so the facts
     # block is the same foreign lane through a second door and goes dark with it.

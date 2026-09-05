@@ -105,45 +105,6 @@ def _payload_fsm() -> InjectorFSM:
     return fsm
 
 
-def test_second_file_diversions_are_deferred_under_their_own_file():
-    """The novelty gate defers before the chunk cursor moves onto its own file.
-
-    _defer_ops derives content_hash and source_path from the cursor, so file 2's
-    diverted concepts used to land in file 1's bundle.
-    """
-    from silica.kernel.recall.deferred import get_deferred_store
-
-    fsm = _payload_fsm()
-    seen: dict[str, str] = {}
-
-    def _gate(gate_fsm, raw_payload, *a, **kw):
-        # Exactly the values the real gate reads for its defer + WorkItem.
-        seen["content_hash"] = gate_fsm._current_content_hash
-        seen["source_file"] = gate_fsm._current_source_file
-        gate_fsm._defer_ops(
-            [{"op": "write", "heading": "Dup", "path": "Concepts/Dup.md",
-              "snippet": "x", "hub": gate_fsm.hub}],
-            {"Dup": "novelty_gate score=0.960"},
-            phase="NOVELTY",
-        )
-        return {"schema_version": 1, "batches": []}, 1
-
-    res = {"chunks": [{"schema_version": 1, "batches": [
-        {"inbox_file": "Inbox/b.md", "concepts": [{"name": "Dup", "excerpt": "x"}]}]}]}
-    with patch.object(s.orch, "silica_payload", return_value=res), \
-         patch.object(s, "novelty_gate", _gate):
-        s.handle_payload(fsm)
-
-    assert seen == {"content_hash": "hash-of-b", "source_file": "Inbox/b.md"}
-
-    store = get_deferred_store()
-    assert store.get("hash-of-a") is None
-    bundle = store.get("hash-of-b")
-    assert bundle is not None
-    assert bundle["source_path"] == "Inbox/b.md"
-    # The previous file's payload must not ride along as this file's grounding.
-    assert all(b.get("inbox_file") != "Inbox/a.md"
-               for p in bundle.get("payloads", []) for b in p.get("batches", []))
 
 
 def test_payload_reassembles_a_file_whose_chunks_never_attached():

@@ -26,7 +26,6 @@ def _fact(i: int, dim: int = 8, vec: bool = True) -> Fact:
         last_seen="2026-08-17",
         runs=[f"run{i}"],
         vec=[float(i) + j / 10 for j in range(dim)] if vec else None,
-        supersede_cos=0.5 if i % 2 else None,
     )
 
 

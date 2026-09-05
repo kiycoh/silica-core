@@ -131,94 +131,18 @@ def test_synonym_keys_start_separate_chains(tmp_path):
     assert len(store.live_facts()) == 2
 
 
-class _TextEmbedder:
-    """Fixed vec per fact text — drives the supersede gate deterministically."""
-
-    _TABLE = {
-        "the dog is named Tom": [1.0, 0.0, 0.0],
-        "the dog is named Rex": [0.9, 0.436, 0.0],   # cos vs Tom ≈ 0.9
-        "pottery class started yesterday": [0.0, 1.0, 0.0],  # cos vs Tom = 0
-    }
-
-    def embed(self, texts):
-        return [self._TABLE.get(t, [0.0, 0.0, 1.0]) for t in texts]
 
 
-def test_supersede_gate_forks_distinct_facts_under_a_reused_key(tmp_path):
-    """The key-collision fix: same slot key, unrelated text — both facts stay
-    live as sibling chains, no fabricated 'previously'."""
-    store = _store(tmp_path)
-    store.capture([{"key": "user.event.date", "text": "the dog is named Tom"}],
-                  run_id="r1", seen="2026-08-01",
-                  embedder=_TextEmbedder(), supersede_tau=0.7)
-    store.capture([{"key": "user.event.date", "text": "pottery class started yesterday"}],
-                  run_id="r2", seen="2026-08-02",
-                  embedder=_TextEmbedder(), supersede_tau=0.7)
-    live = store.live_facts()
-    assert len(live) == 2
-    assert all(f.supersedes is None for f in live)
-    assert {f.key for f in live} == {"user.event.date"}
 
 
-def test_supersede_gate_lets_a_genuine_update_supersede(tmp_path):
-    store = _store(tmp_path)
-    store.capture([{"key": "user.dog.name", "text": "the dog is named Tom"}],
-                  run_id="r1", seen="2026-08-01",
-                  embedder=_TextEmbedder(), supersede_tau=0.7)
-    store.capture([{"key": "user.dog.name", "text": "the dog is named Rex"}],
-                  run_id="r2", seen="2026-08-02",
-                  embedder=_TextEmbedder(), supersede_tau=0.7)
-    live = store.live_facts()
-    assert len(live) == 1
-    assert live[0].text == "the dog is named Rex"
-    assert len(store.chain(live[0])) == 2
 
 
-def test_supersede_gate_abstains_without_an_embedder(tmp_path):
-    """No vectors -> legacy supersede, never a silent behavior flip."""
-    store = _store(tmp_path)
-    store.capture([{"key": "k", "text": "the dog is named Tom"}],
-                  run_id="r1", seen="2026-08-01", supersede_tau=0.7)
-    store.capture([{"key": "k", "text": "pottery class started yesterday"}],
-                  run_id="r2", seen="2026-08-02", supersede_tau=0.7)
-    assert len(store.live_facts()) == 1
 
 
-def test_supersede_gate_abstains_when_the_head_has_no_vec(tmp_path):
-    store = _store(tmp_path)
-    store.capture([{"key": "k", "text": "the dog is named Tom"}],
-                  run_id="r1", seen="2026-08-01")  # no embedder: head unembedded
-    store.capture([{"key": "k", "text": "pottery class started yesterday"}],
-                  run_id="r2", seen="2026-08-02",
-                  embedder=_TextEmbedder(), supersede_tau=0.7)
-    assert len(store.live_facts()) == 1
 
 
-def test_supersede_gate_ships_off(monkeypatch):
-    """Off until something moves the product metric: the conv-26 answer A/B was
-    null (52.8% -> 53.8%, p=0.845). The gate works — it just has not earned the
-    default. config.py loads ~/.silica/.env at import, so the default_factory
-    reads the developer's own pin unless it is cleared here."""
-    from silica.config import SilicaConfig
-
-    monkeypatch.delenv("SILICA_EPISODIC_SUPERSEDE_TAU", raising=False)
-    assert SilicaConfig().episodic_supersede_tau == 0
 
 
-def test_capture_from_distill_wires_supersede_tau_from_config(tmp_path, monkeypatch):
-    import silica.agent.providers as providers
-    from silica.config import CONFIG
-    from silica.kernel.recall.episodic import EpisodicStore, capture_from_distill
-
-    monkeypatch.setattr(CONFIG, "episodic_supersede_tau", 0.7, raising=False)
-    monkeypatch.setattr(providers, "get_embedder", lambda cfg: _TextEmbedder())
-    capture_from_distill(
-        {"ephemerals": [{"key": "user.slot", "text": "the dog is named Tom"}]},
-        run_id="r1", seen="2026-08-01")
-    capture_from_distill(
-        {"ephemerals": [{"key": "user.slot", "text": "pottery class started yesterday"}]},
-        run_id="r2", seen="2026-08-02")
-    assert len(EpisodicStore().live_facts()) == 2
 
 
 def test_episodic_home_resolves_even_when_active_vault_is_memory_vault(tmp_path, monkeypatch):
