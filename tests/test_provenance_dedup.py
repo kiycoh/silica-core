@@ -35,7 +35,8 @@ def test_double_patch_is_idempotent(tmp_vault):
 
     assert res.get("skipped") == "duplicate"
     assert tmp_vault.read(target) == after_first   # no second block appended
-    assert after_first.count("## Additional notes: Async IO (from meeting.md)") == 1
+    assert "## Additional notes" not in after_first
+    assert after_first.count("first fact[^meeting]") == 1
 
 
 def test_patch_skipped_when_source_already_authored_note(tmp_vault):
@@ -73,7 +74,7 @@ def test_patch_proceeds_for_a_different_source(tmp_vault):
     res = execute_one(op)
 
     assert res.get("skipped") is None
-    assert "## Additional notes: Machine Learning (from lezione_9.md)" in tmp_vault.read(target)
+    assert "new fact from a different lecture[^lezione_9]" in tmp_vault.read(target)
 
 
 def test_duplicate_skip_stamps_ai_flag(tmp_vault):
@@ -136,4 +137,4 @@ def test_patch_proceeds_when_the_ledger_claims_a_note_that_lost_the_content(tmp_
     res = execute_one(op)
 
     assert res.get("skipped") is None
-    assert "## Additional notes: Machine Learning (from lezione_1.md)" in tmp_vault.read(target)
+    assert "re-distilled excerpt[^lezione_1]" in tmp_vault.read(target)

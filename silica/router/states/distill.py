@@ -469,12 +469,23 @@ def _run_outline_chunk(fsm: "InjectorFSM", idx: int, chunk: dict,
         language=language,
         vault_outline=rows, outline=prior, only_titles=only, steer_context=steer_context,
     )
-    fsm._chunks[idx] = {**chunk, "batches": [{"inbox_file": inbox_file, "concepts": res["concepts"]}]}
+    concepts = list(res["concepts"])
+    if only is not None:
+        # The retry names only the regenerated bodies, but VALIDATE re-checks
+        # the carried (already accepted) ops against this same list. Narrowing
+        # it deferred all of Lezione 3 after one bad body (26 carried ops
+        # rejected as "not present in payload concepts", 2026-09-05).
+        fresh = {c.get("name") for c in concepts}
+        prev = (fsm._chunks[idx].get("batches") or [{}])[0].get("concepts") or []
+        concepts += [c for c in prev if c.get("name") not in fresh]
+    fsm._chunks[idx] = {**chunk, "batches": [{"inbox_file": inbox_file, "concepts": concepts}]}
     if only is None:
         fsm.context[f"chunk_{idx}_outline"] = res["outline"]
     if fsm.warning_ledger is not None:
         for gap in res.get("gaps", []):
             fsm.warning_ledger.add(inbox_file, "outline_gap", f"no idea and no skip for section '{gap}'")
+        for t in res.get("missing_bodies", []):
+            fsm.warning_ledger.add(inbox_file, "outline_body_missing", f"no body for idea '{t}' after two asks")
     return {"updates": res["updates"], "ephemerals": res.get("ephemerals", [])}
 
 
@@ -692,6 +703,9 @@ def handle_validate(fsm: "InjectorFSM") -> None:
                 "ungrounded_span",
                 f"{u.get('heading', '')}: " + " | ".join(s[:60] for s in u.get("spans", [])),
             )
+    # The score behind the warning, kept until CLEANUP writes it to the
+    # provenance record (finalize._record_provenance drains it per source).
+    fsm.context.setdefault("grounding", []).extend(res.get("grounding", []))
 
     max_rate = fsm._get_recipe_gate("rejection_rate_max", 0.10)
 
@@ -816,7 +830,13 @@ def handle_validate(fsm: "InjectorFSM") -> None:
         # Provisional; CLEANUP overrides to Success if the run had ops elsewhere (A24).
         fsm.context["final_status"] = "no_ops"
         fsm._chunk_ctx["ops_path"] = ops_path
-        fsm._progress_note(fsm._chunk_task_id("validate"), "validate", "done")
+        # "failed", not "done": CLEANUP archives a file only when none of its
+        # tasks failed, and a chunk whose every op sits in the deferred store
+        # must keep its source in the inbox (Lezione 3 went to Done/ with 0
+        # notes, 2026-09-05).
+        fsm.context["has_partial_failure"] = True
+        fsm._progress_note(fsm._chunk_task_id("validate"), "validate", "failed",
+                           error="all ops rejected — deferred")
         fsm.state = orch.InjectorState.CLEANUP
         return
 

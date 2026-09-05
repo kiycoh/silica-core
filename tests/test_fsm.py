@@ -328,6 +328,11 @@ def test_fsm_gate_all_rejected_steers_then_defers(mock_validate):
     fsm.step()
     assert fsm.state == InjectorState.CLEANUP
     assert fsm.context.get("final_status") == "no_ops"
+    # The deferred chunk is a file failure: CLEANUP archives only failure-free
+    # files, and Lezione 3 (27 ops deferred, 0 landed) was moved to Done/ on
+    # 2026-09-05 because the validate task read "done".
+    assert any(t.id.startswith("f0_") and t.status == "failed" for t in fsm.progress.tasks)
+    assert fsm.context.get("has_partial_failure") is True
 
 
 @patch("silica.router.orchestrator.silica_validate_ops")

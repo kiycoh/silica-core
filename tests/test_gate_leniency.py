@@ -32,6 +32,14 @@ def test_close_unbalanced_fences_appends_when_odd():
     assert out.rstrip().endswith("```")
 
 
+def test_close_unbalanced_fences_closes_an_open_display_math_line():
+    body = "intro\n$$\\forall x, d(x) = 1\n\nprosa dopo\n$$a=b$$\n"
+    out = close_unbalanced_fences(body)
+    assert out.count("$$") % 2 == 0
+    assert "$$\\forall x, d(x) = 1 $$" in out
+    assert out.endswith("$$a=b$$\n")
+
+
 def test_close_unbalanced_fences_noop_when_balanced():
     body = "text\n```python\nprint(1)\n```\n"
     assert close_unbalanced_fences(body) == body

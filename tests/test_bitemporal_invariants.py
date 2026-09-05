@@ -60,7 +60,7 @@ def test_sources_block_lands_above_the_superseded_section(tmp_vault):
     )
 
     out = tmp_vault.read(note)
-    assert "[[src]]" in out, out
+    assert "[[sources/src]]" in out, out
     assert out.index("## Sources") < out.index(SUPERSEDED_HEADING)
     assert out.rstrip().endswith("claim vecchio.")
 

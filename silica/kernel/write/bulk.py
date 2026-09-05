@@ -190,28 +190,47 @@ def _execute_patch(op: Op, path: str) -> dict:
         raise ValueError(f"Cannot patch; {e}") from e
 
     # Idempotent re-injection: skip the append when this note already carries
-    # this source's content (deterministic, no LLM). Two signals:
-    #   1. the exact provenance block is present (a prior PATCH from this source);
-    #   2. the provenance ledger records this source as the note's author (a
-    #      prior WRITE lays down no block, so #1 can't see it) — this is the
+    # this source's content (deterministic, no LLM). A relation bullet is keyed
+    # on its pair (templates.missing_relations). Prose has three signals:
+    #   1. a legacy provenance block for (heading, source): pre-2026-09-04
+    #      patches wrapped the snippet in a header, and that vault is still
+    #      out there;
+    #   2. the snippet's own first line already in the note (snippet_present):
+    #      the key that survives a retry between WRITE and the ledger append;
+    #   3. the provenance ledger records this source as the note's author (a
+    #      prior WRITE lays down no block, so #1/#2 can't see it), the
     #      re-ingest case: an edited source re-distills unchanged concepts that
-    #      collision-match their own prior notes and would each gain a redundant
-    #      "Additional notes: <heading> (from <source>)" block.
+    #      collision-match their own prior notes and would each gain a
+    #      redundant copy.
     # Either way the hub-link repair must still land, or the post-write lint
     # fails this op on every retry (2026-07-17 nucleate run: notes patched by
     # an interrupted run could never be re-patched).
     # read_records memoizes the parsed ledger on (path, mtime, size), so this
     # stays one parse per run rather than one per patch op.
-    from silica.kernel.write.provenance import note_authored_by
+    from silica.kernel.write.provenance import note_authored_by, ungrounded_spans
     # The ledger leg needs the note to still SAY the heading: the ledger is
     # never pruned (revert rewinds bodies, not records), so on its own it kept
     # claiming authorship after the section was hand-deleted or the note
     # rewritten, and the enrichment was skipped as a "duplicate" in silence.
-    already_present = templates.block_present(nc.content, heading, source_basename) or (
-        bool(source_basename)
-        and heading.casefold() in nc.content.casefold()
-        and note_authored_by(path, source_basename)
-    )
+    # It also needs the snippet to bring no formula or constant the note
+    # lacks: an edited source that CHANGED a value re-distills the same
+    # heading, and skipping it kept the old value in place while the gate
+    # had just scored the new one as grounded (2026-09-04, beta_2 0.999 ->
+    # 0.99). Spans are the only difference the patch path can see without a
+    # judge, so a prose-only rewording still reads as the same concept.
+    if op.relation:
+        already_present = not templates.missing_relations(nc.content, snippet)
+    else:
+        already_present = (
+            templates.block_present(nc.content, heading, source_basename)
+            or templates.snippet_present(nc.content, snippet)
+            or (
+                bool(source_basename)
+                and heading.casefold() in nc.content.casefold()
+                and note_authored_by(path, source_basename)
+                and not ungrounded_spans(snippet, nc.content)
+            )
+        )
     if already_present:
         # Same lint floor as the real-patch path below: a safe-mode skip lands
         # on a freshly-seeded mirror copy of a human note (no `AI` key), and an
@@ -231,6 +250,7 @@ def _execute_patch(op: Op, path: str) -> dict:
         hub=op.hub,
         existing_content=nc.content,
         valid_from=op.valid_from,
+        relation=op.relation,
     )
     if op.contested_by:
         from silica.kernel.write.contested import mark_contested

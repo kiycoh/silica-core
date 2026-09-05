@@ -93,7 +93,7 @@ def test_injector_write_defers_failing_note_keeps_siblings(vault_fsm, monkeypatc
         # Diff-aware patch lint: the bad note only fails once the patch appends
         # its block, so the violation counts as newly introduced.
         from silica.driver import DRIVER
-        introduced = "Bad" in str(note_name) and "Additional notes" in DRIVER.read_note(note_name).content
+        introduced = "Bad" in str(note_name) and "[^" in DRIVER.read_note(note_name).content
         return {"success": not introduced, "errors": ["e"] if introduced else []}
     monkeypatch.setattr("silica.tools.composed.silica_lint", fake_lint)
 

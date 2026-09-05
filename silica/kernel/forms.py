@@ -87,6 +87,14 @@ def stamped_form(text: str) -> str:
 _sniff_memo: dict[str, str] = {}
 
 
+def pin_sniff(text: str, form: str) -> None:
+    """Make every later sniff of `text` answer `form` (the folder vote): the
+    memo is what RECON's resolve() reads, so one write keeps dispatch and the
+    FSM in agreement without stamping the source."""
+    import hashlib
+    _sniff_memo[hashlib.sha256(text[:2000].encode("utf-8", "replace")).hexdigest()[:16]] = form
+
+
 def sniff_form(text: str) -> str:
     """One small classification call; "" on unsure or any failure.
 

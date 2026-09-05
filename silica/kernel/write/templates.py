@@ -8,7 +8,6 @@ hack removed (no longer needed — this is a proper Python package now).
 """
 import datetime
 import logging
-import os
 import re
 
 import yaml
@@ -52,7 +51,19 @@ def close_unbalanced_fences(text: str) -> str:
     ponytail: balances only the top-level fence count; a snippet that nests
     fences pathologically still needs a real fix."""
     if text.count("```") % 2:
-        return text.rstrip() + "\n```\n"
+        text = text.rstrip() + "\n```\n"
+    # Same rule for display math: a body whose `$$` count is odd fails the
+    # same lint and was deferred whole ("Iperpiano come classificatore
+    # lineare", 2026-09-05: one formula line opened `$$` and never closed it).
+    # The block is closed where it was opened, on the last line with an odd
+    # count, so the text after it stays prose.
+    if text.count("$$") % 2:
+        lines = text.split("\n")
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].count("$$") % 2:
+                lines[i] = lines[i].rstrip() + " $$"
+                break
+        text = "\n".join(lines)
     return text
 
 
@@ -354,27 +365,241 @@ AI: true
     return frontmatter + content
 
 
-def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str | None = None, existing_content: str | None = None, valid_from: str | None = None) -> str:
-    # No valid_from → no stamp line and the block is byte-identical to what
-    # every pre-stamp write produced. Only the FSM supplies one today.
-    stamp_line = ""
+RELATIONS_MARKER = "## Relations"
+SOURCES_MARKER = "## Sources"      # same literal as recall.paths.SOURCES_MARKER; no import cycle
+SUPERSEDED_MARKER = "## Superseded"
+_TAIL_MARKERS = (RELATIONS_MARKER, SOURCES_MARKER, SUPERSEDED_MARKER)
+# A hub's index blocks (`## From: <source>`, legacy `## Da: `) are a tail too:
+# a facet appended after them filed itself under the index (2026-09-05).
+_MOC_PREFIXES = ("## From: ", "## Da: ")
+
+
+def _is_tail(line: str) -> bool:
+    return line.rstrip() in _TAIL_MARKERS or line.startswith(_MOC_PREFIXES)
+_HEADING_RE = re.compile(r"^(#{1,6})\s")
+# A bullet the outline lane emits for a cross edge: `- [[From]] applies this (Spine): why`.
+_RELATION_BULLET_RE = re.compile(r"^- (\[\[[^\]]+\]\]) .*? this \(([^)]+)\)")
+
+
+def _body_lines(content: str):
+    """(index, line) for every line outside the frontmatter block and outside
+    a code fence: the only lines a heading test may look at."""
+    lines = content.splitlines()
+    start = 0
+    if content.startswith("---\n"):
+        for i in range(1, len(lines)):
+            if lines[i].rstrip() == "---":
+                start = i + 1
+                break
+    fenced = False
+    for i in range(start, len(lines)):
+        if lines[i].lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced:
+            yield i, lines[i]
+
+
+def _trim_blank(lines: list[str]) -> list[str]:
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
+def _insert_before(content: str, pred, block: str) -> str:
+    """`block` as its own paragraph above the first body line `pred` accepts,
+    or at EOF when none does."""
+    lines = content.splitlines()
+    for i, line in _body_lines(content):
+        if pred(line):
+            out = _trim_blank(lines[:i]) + [""] + block.rstrip("\n").splitlines() + [""] + lines[i:]
+            return "\n".join(out) + ("\n" if content.endswith("\n") else "")
+    return content.rstrip() + "\n\n" + block.rstrip("\n") + "\n"
+
+
+def append_under(content: str, heading: str, block: str, *, above: tuple[str, ...]) -> str:
+    """Append `block` as the last lines of the `heading` section.
+
+    The section runs to the next heading of the same or a higher level, so a
+    `### sub` inside it stays inside. A missing section is created above the
+    first of `above` present (else at EOF): that is what keeps live content
+    out of `## Superseded` and a relation out of `## Sources`.
+    """
+    lines = content.splitlines()
+    start = next((i for i, l in _body_lines(content) if l.rstrip() == heading), None)
+    if start is None:
+        return _insert_before(content, lambda l: l.rstrip() in above, f"{heading}\n{block}")
+    level = len(lines[start]) - len(lines[start].lstrip("#"))
+    stop = re.compile(rf"^#{{1,{level}}}\s")
+    end = start + 1
+    while end < len(lines) and not stop.match(lines[end]):
+        end += 1
+    while end > start + 1 and not lines[end - 1].strip():
+        end -= 1
+    out = lines[:end] + block.rstrip("\n").splitlines() + lines[end:]
+    return "\n".join(out) + ("\n" if content.endswith("\n") else "")
+
+
+def missing_relations(content: str, snippet: str) -> list[str]:
+    """The bullets of `snippet` the note does not carry yet.
+
+    A bullet is keyed on the pair, `[[From]]` and `this (<spine>)`, not on its
+    wording: a re-ingest that re-labels or rewords the same edge must not add
+    a second bullet for it. A line that is not in the emitter's shape is keyed
+    on itself.
+    """
+    out = []
+    for raw in snippet.splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        m = _RELATION_BULLET_RE.match(line)
+        if m:
+            link, spine = m.group(1), f"this ({m.group(2)})"
+            if any(link in l and spine in l for l in content.splitlines()):
+                continue
+        elif line in content:
+            continue
+        out.append(line)
+    return out
+
+
+def _first_prose_line(text: str) -> str | None:
+    for _, line in _body_lines(text):
+        st = line.strip()
+        if not st or st.startswith(("#", "$$", "<!--", "```")):
+            continue
+        return st
+    return None
+
+
+def snippet_present(content: str, snippet: str) -> bool:
+    """True when the note already holds this snippet's first prose line.
+
+    The idempotency key that replaces the provenance header: it survives the
+    crash window between WRITE and the ledger append at CLEANUP (a retried op
+    lands the identical snippet), and it stays invisible. Whitespace is folded
+    on both sides; a trailing footnote marker on either is ignored.
+    """
+    key = _first_prose_line(snippet) or (snippet.strip().splitlines() or [""])[0].strip()
+    norm = lambda t: " ".join(re.sub(r"\[\^[^\]]+\]", "", t).split())
+    key = norm(key)
+    return bool(key) and key in norm(content)
+
+
+_EMBED_RE = re.compile(r"^!\[\[[^\]]+\]\]$")
+
+
+def _cite(block: str, label: str) -> str:
+    """`[^label]` once, on the block's last prose line, or on a line of its
+    own when that line cannot carry it (a fence, a math delimiter, a table
+    row, a stamp): one citation per added concept, the way a person would.
+
+    Trailing image embeds are attachments, not the claim: the marker goes on
+    the last line above them (live 2026-09-05, `![[img.jpg]][^Lezione-6]`).
+    """
+    lines = block.rstrip("\n").splitlines()
+    if not lines:
+        return block
+    marker = f"[^{label}]"
+    i = len(lines) - 1
+    while i > 0 and (not lines[i].strip() or _EMBED_RE.match(lines[i].strip())):
+        i -= 1
+    last = lines[i].rstrip()
+    if (last.startswith(("```", "$$", "|", "<!--", "#")) or _EMBED_RE.match(last)
+            or last.endswith(marker)):
+        # Blank line first: straight after a table row the marker line is
+        # parsed as one more row (GFM, verified 2026-09-05).
+        lines.extend(("", marker))
+    else:
+        lines[i] = last + marker
+    return "\n".join(lines)
+
+
+def _split_snippet(snippet: str) -> tuple[str, str]:
+    """(lead, facets): the paragraphs before the snippet's first heading, and
+    the rest with its headings promoted so the shallowest is an H2. The lead is
+    more prose about the note's own concept; a facet is a section of its own."""
+    lines = snippet.splitlines()
+    heads = [(i, len(m.group(1))) for i, l in _body_lines(snippet) if (m := _HEADING_RE.match(l))]
+    if not heads:
+        return snippet.strip("\n"), ""
+    first = heads[0][0]
+    delta = 2 - min(level for _, level in heads)
+    for i, level in heads:
+        lines[i] = "#" * (level + delta) + lines[i][level:]
+    lead = "\n".join(lines[:first]).strip("\n")
+    return lead, "\n".join(lines[first:]).strip("\n")
+
+
+def patch_snippet(heading: str, snippet: str, source_basename: str, hub: str | None = None,
+                  existing_content: str | None = None, valid_from: str | None = None,
+                  relation: bool = False) -> str:
+    """The note after a patch (or, without `existing_content`, the text the
+    patch adds).
+
+    No provenance header (2026-09-04): a lecture folder held 136
+    `## Additional notes: <heading> (from <source>)` blocks, 112 of them one
+    typed-relation bullet. A relation bullet joins `## Relations`; prose joins
+    the body, its lead paragraphs above the note's first H2 and its own
+    sections after the note's, cited once with the source's footnote label.
+    CLEANUP (finalize._write_source_leaf) defines the label. `heading` is kept
+    for the callers and the legacy read side (block_present).
+    """
+    if relation:
+        block = "\n".join(missing_relations(existing_content or "", snippet))
+        if existing_content is None:
+            return f"\n{block}\n"
+        return append_under(ensure_hub_link(existing_content, hub), RELATIONS_MARKER, block,
+                            above=(SOURCES_MARKER, SUPERSEDED_MARKER))
+
+    from silica.kernel.write.provenance import footnote_label
+
+    label = footnote_label(source_basename)
+    text = close_unbalanced_fences(snippet.strip())
+    # The keyphrase distiller opens a snippet with `## <concept>`; in the note
+    # of that concept it is a section named after the note. Drop it and the
+    # text under it is more prose about the note (live 2026-09-05).
+    titles = {heading.casefold()}
+    if existing_content:
+        h1 = next((l[2:].strip() for _, l in _body_lines(existing_content) if l.startswith("# ")), "")
+        titles.add(h1.casefold())
+    first = text.split("\n", 1)
+    m = _HEADING_RE.match(first[0])
+    if m and first[0][m.end():].strip().casefold() in titles:
+        text = first[1].lstrip("\n") if len(first) > 1 else ""
+    lead, facets = _split_snippet(text)
+    lead = _cite(lead, label) if lead else ""
+    facets = _cite(facets, label) if facets else ""
+    # No valid_from -> no stamp line and the text is what every pre-stamp
+    # write produced. Only the FSM supplies one today.
     if valid_from:
         from silica.kernel.write.contested import stamp
         rendered = stamp(valid_from=valid_from)
-        if rendered:
-            stamp_line = f"{rendered}\n\n"
-    patch_text = f"""
-
-{provenance_header(heading, source_basename)}
-
-{stamp_line}{close_unbalanced_fences(snippet.strip())}
-"""
-    if existing_content is not None:
-        from silica.kernel.write.contested import append_before_superseded
-        existing_content = ensure_hub_link(existing_content, hub)
-        return append_before_superseded(existing_content, patch_text)
-
-    return patch_text
+        if rendered and lead:
+            lead = f"{rendered}\n{lead}"
+        elif rendered:
+            facets = f"{rendered}\n{facets}"
+    if existing_content is None:
+        return "\n" + "\n\n".join(x for x in (lead, facets) if x) + "\n"
+    content = ensure_hub_link(existing_content, hub)
+    if lead:
+        content = _insert_before(content, lambda l: _HEADING_RE.match(l) and l.startswith("##"), lead)
+    if facets:
+        content = _insert_before(content, _is_tail, facets)
+    # The writer of the marker writes its definition, as the source's plain
+    # name: CLEANUP skips the leaf on a partial run (the source stays in the
+    # inbox for retry) and three notes carried `[^Lezione-6]` with nothing
+    # defining it (2026-09-05). When the leaf lands, finalize._write_source_leaf
+    # replaces this line with the link.
+    marker = f"[^{label}]"
+    if (lead or facets) and f"{marker}:" not in content:
+        define = f"{marker}: {source_basename}"
+        if SOURCES_MARKER in content:
+            content = append_under(content, SOURCES_MARKER, define, above=(SUPERSEDED_MARKER,))
+        else:
+            content = _insert_before(content, lambda l: l.rstrip() == SUPERSEDED_MARKER, define)
+    return content
 
 
 _AI_KEY_RE = re.compile(r"^AI:\s", re.MULTILINE)
@@ -412,16 +637,19 @@ _AGENT_KEY_RE = re.compile(r"^agent:.*$", re.MULTILINE)
 
 
 def _stamp_agent(content: str) -> str:
-    """Set/refresh `agent: "<id>"` in the frontmatter head when SILICA_AGENT_ID
-    is set — provenance for a vault written by a fleet of agents.
+    """Set/refresh `agent: "<id>"` in the frontmatter head when an agent is
+    writing (see `notetype.agent_id`) — provenance for a vault written by a
+    fleet of agents or through an MCP client.
 
     Last-writer-wins, exactly like `last modified`: the field names who last
-    touched the note; git keeps the full authorship history. Unset env → the
-    field is never added and any existing one is left intact, so single-user
-    writes are byte-for-byte unchanged. The value is quoted and escaped so a
-    stray value can never break or inject YAML.
+    touched the note; git keeps the full authorship history. No agent → the
+    field is never added and any existing one is left intact, so a person's
+    REPL writes are byte-for-byte unchanged. The value is quoted and escaped
+    so a stray value can never break or inject YAML.
     """
-    agent = os.environ.get("SILICA_AGENT_ID", "").strip()
+    from silica.kernel.write.notetype import agent_id
+
+    agent = agent_id()
     if not agent or not content.startswith("---\n"):
         return content
     end = content.find("\n---\n", 4)
@@ -650,24 +878,21 @@ def ensure_system_floor(content: str, prior: str | None = None) -> str:
     return _stamp_agent(head + tail)
 
 
+# Emitted until 2026-09-04 (English) and 2026-08 (Italian). Recognized
+# forever, never emitted: the header was the idempotency key for a patch block
+# (block_present), so a vault carrying blocks in either spelling must keep
+# matching or every re-ingest appends a second copy of what it already wrote.
+# Today a patch lands headerless (patch_snippet); its keys are snippet_present
+# and missing_relations.
 PROVENANCE_HEADER_PREFIX = "## Additional notes"
-
-# Emitted until 2026-08. Recognized forever: the header is the idempotency key
-# for a patch block (block_present), so a vault carrying blocks in the old
-# spelling must keep matching or every re-ingest appends a second copy of what
-# it already wrote. Never emitted — read side only.
 LEGACY_PROVENANCE_HEADER_PREFIX = "## Note aggiuntive"
 
 PROVENANCE_HEADER_PREFIXES = (PROVENANCE_HEADER_PREFIX, LEGACY_PROVENANCE_HEADER_PREFIX)
 
 
 def provenance_header(heading: str, source_basename: str) -> str:
-    """The exact header line patch_snippet emits for a (heading, source) block.
-
-    Single source of truth so the patch executor can detect an already-injected
-    block and stay idempotent on re-injection — patch_snippet interpolates this
-    rather than repeating the literal, which is what let the two drift apart.
-    """
+    """The header line a pre-2026-09-04 patch emitted for a (heading, source)
+    block; block_present matches it so those blocks are never re-appended."""
     return f"{PROVENANCE_HEADER_PREFIX}: {heading} (from {source_basename})"
 
 

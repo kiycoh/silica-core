@@ -46,6 +46,25 @@ def test_neighbourhood_finds_a_pre_existing_body_mentioning_a_new_title(tmp_vaul
     assert hood == ["Attention.md"]
 
 
+def test_neighbourhood_stays_inside_the_target_folder(tmp_vault):
+    """Live 2026-09-05: a new ML note "Capacità" was wrapped into 50
+    pre-existing notes vault-wide, psychology and law included, where the word
+    means something else. A backlink into a note the run is not curating is
+    a guess; the target subtree is where the mention is about the new note."""
+    import os
+
+    from silica.router.states.linking import _backlink_neighbourhood
+
+    tmp_vault.note("Corso/Attention.md", "# Attention\n\nSparse attention is cheaper.\n")
+    tmp_vault.note("Altro/Law.md", "# Law\n\nSparse attention to detail is a virtue.\n")
+    drv = _driver()
+    drv.create("Corso/Sparse attention.md", "# Sparse attention\n\nbody\n")
+
+    touched = {os.path.abspath("Corso/Sparse attention.md")}
+    assert _backlink_neighbourhood(["Sparse attention"], touched, within_dir="Corso") == ["Corso/Attention.md"]
+    assert sorted(_backlink_neighbourhood(["Sparse attention"], touched)) == ["Altro/Law.md", "Corso/Attention.md"]
+
+
 def test_neighbourhood_excludes_notes_this_chunk_touched(tmp_vault):
     """A note written by this chunk is not a pre-existing neighbour, even when
     its body mentions another new title (autolink already handled it)."""

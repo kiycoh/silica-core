@@ -54,6 +54,28 @@ def test_parse_outline_keeps_order_drops_unknown_targets_and_duplicates():
     assert deps == [{"title": "Margine geometrico", "relation": "bounds", "why": "il bound e' in gamma"}]
 
 
+def test_parse_outline_rejects_slide_lines_and_capitalises_titles():
+    obj = {"lesson_title": "t", "spine": [], "ideas": [
+        {"title": "gradiente", "section": "S", "claim": "c", "depends_on": []},
+        {"title": "Da notare che", "section": "S", "claim": "c", "depends_on": []},
+        {"title": "Arrivo alla fine, caso l=L", "section": "S", "claim": "c", "depends_on": []},
+        {"title": "Fase di back, caso 1<l<L", "section": "S", "claim": "c", "depends_on": []},
+        {"title": "Per calcolare la matrice di confusione occorre un insieme preclassificato V={V1,V2} dove Vi è l'insieme dei dati per la classe i e K è l'insieme delle classi", "section": "S", "claim": "c", "depends_on": []},
+        {"title": "Libri di testo", "section": "S", "claim": "c", "depends_on": []},
+        {"title": "Bias, varianza e MSE", "section": "S", "claim": "c", "depends_on": []},
+        {"title": "Proprietà del margine (caso norma 2)", "section": "S", "claim": "c", "depends_on": []},
+    ]}
+    assert ol.parse_outline(obj).titles() == ["Gradiente", "Bias, varianza e MSE", "Proprietà del margine (caso norma 2)"]
+
+
+def test_parse_outline_drops_ideas_from_apparatus_sections():
+    obj = {"lesson_title": "t", "spine": [], "ideas": [
+        {"title": "Giosuè Lo Bosco", "section": "Machine Learning (9 CFU)", "claim": "c", "depends_on": []},
+        {"title": "Test di Turing", "section": "Storia dell'AI", "claim": "c", "depends_on": []},
+    ]}
+    assert ol.parse_outline(obj).titles() == ["Test di Turing"]
+
+
 def test_source_headings_drop_noise_and_repeats():
     heads = ol.source_headings(_SRC)
     assert heads == ["Support vector machines", "Margine", "Errore del percettrone online",
@@ -84,6 +106,30 @@ def test_select_edges_filters_and_caps_per_target():
     assert [(e["from"], e["to"], e["relation"]) for e in kept] == [
         ("A", "X", "applies"), ("B", "X", "relaxes"), ("C", "X", "bounds"), ("E", "Y", "same_as"),
     ]
+
+
+def test_select_edges_keeps_an_edge_between_two_new_ideas_as_intra():
+    # Stage B kept proposing new -> new edges whatever the prompt said (24 of
+    # 79 proposals dropped in one run, 2026-09-05): "SVD -> Riduzione della
+    # dimensionalità" is a real dependency, so it lands on the idea instead.
+    why = "una frase abbastanza lunga da contare"
+    raw = [{"from": "A", "to": "B", "relation": "applies", "why": why},
+           {"from": "A", "to": "B", "relation": "same_as", "why": why},   # two new ideas are never merged here
+           {"from": "A", "to": "Lezione 10", "relation": "applies", "why": why}]
+    kept = ol.select_edges(raw, ideas={"A", "B", "Lezione 10"}, existing={}, spine_titles={"Lezione 10"})
+    assert kept == [{"from": "A", "to": "B", "relation": "applies", "why": why, "intra": True}]
+
+
+def test_outline_ops_intra_edge_lands_in_the_relations_of_the_idea():
+    outline = ol.parse_outline(_OUTLINE_JSON)
+    why = "il margine geometrico entra nell'errore come soglia"
+    ops = ol.outline_ops(outline, target="ML", hub="H", source_basename="Lezione 11.md",
+                         edges=[{"from": "Errore del percettrone online", "to": "Margine geometrico",
+                                 "relation": "applies", "why": why, "intra": True}], existing={})
+    op = next(o for o in ops if o["heading"] == "Errore del percettrone online")
+    assert f"- applies [[Margine geometrico]]: {why}" in op["snippet"]
+    assert "Margine geometrico" in op["related"]
+    assert not any(o["op"] == "patch" for o in ops)
 
 
 def test_select_edges_accepts_an_echoed_outline_row_as_the_target():
@@ -225,7 +271,7 @@ def test_vault_outline_reads_claims_and_skips_spines(tmp_vault):
 def test_run_outliner_call_plan_and_result_shape():
     calls: list[str] = []
 
-    def ask(system: str, user: str, *, max_tokens: int) -> dict:
+    def ask(system: str, user: str, *, max_tokens: int, **kw) -> dict:
         calls.append(system.split("\n", 1)[0])
         if system.startswith(ol.STAGE_A_TAG):
             return _OUTLINE_JSON
@@ -234,7 +280,7 @@ def test_run_outliner_call_plan_and_result_shape():
                                "claim": "I vincoli entrano nella funzione obiettivo.", "depends_on": []}],
                     "skips": [{"section": "Support vector machines", "reason": "titolo vuoto"}]}
         if system.startswith(ol.STAGE_BODIES_TAG):
-            titles = re.findall(r"^(.+?) \| ", user.split("IDEAS:\n", 1)[1], re.M)
+            titles = re.findall(r'^- "(.+?)" \(section: ', user.split("IDEAS:\n", 1)[1], re.M)
             return {"bodies": {t: f"corpo di {t}" for t in titles}}
         if system.startswith(ol.STAGE_B_TAG):
             return {"edges": [{"from": "Margine geometrico", "to": "Margine", "relation": "same_as",
@@ -257,33 +303,177 @@ def test_run_outliner_call_plan_and_result_shape():
     assert "Support vector machines" in res["outline"]["skips"][0]["section"]
 
 
-def test_run_outliner_bodies_in_batches_of_eight_and_no_stage_b_on_empty_vault():
+def test_run_outliner_bodies_in_batches_and_no_stage_b_on_empty_vault():
     big = {"lesson_title": "t", "spine": [f"I{i}" for i in range(11)],
            "ideas": [{"title": f"I{i}", "section": "S", "claim": "c", "depends_on": []} for i in range(11)]}
     calls: list[str] = []
 
-    def ask(system: str, user: str, *, max_tokens: int) -> dict:
+    def ask(system: str, user: str, *, max_tokens: int, **kw) -> dict:
         calls.append(system.split("\n", 1)[0])
         if system.startswith(ol.STAGE_A_TAG):
             return big
         if system.startswith(ol.STAGE_BODIES_TAG):
-            titles = re.findall(r"^(.+?) \| ", user.split("IDEAS:\n", 1)[1], re.M)
-            assert len(titles) <= 8
+            titles = re.findall(r'^- "(.+?)" \(section: ', user.split("IDEAS:\n", 1)[1], re.M)
+            assert len(titles) <= ol.BODIES_BATCH
             return {"bodies": {t: "b" for t in titles}}
         raise AssertionError(system[:40])
 
     res = ol.run_outliner(source_text="## S\ntext", source_basename="L.md", target="T", hub="H",
                           language="English", vault_outline=[], ask=ask)
-    assert calls == [ol.STAGE_A_TAG, ol.STAGE_BODIES_TAG, ol.STAGE_BODIES_TAG]
+    assert calls == [ol.STAGE_A_TAG] + [ol.STAGE_BODIES_TAG] * -(-11 // ol.BODIES_BATCH)
     assert len([o for o in res["updates"] if o["op"] == "write"]) == 12
+
+
+def test_repair_json_escapes_keeps_latex_backslashes():
+    # The model forgets to double backslashes in LaTeX-heavy bodies: `\R` made
+    # the reply unparseable (retry) and `\b` in `\boldsymbol` parsed as a
+    # BACKSPACE, landing "$oldsymbol{...}" in a note (both 2026-09-05).
+    raw = '{"b": "$\\boldsymbol{x} \\Rightarrow \\\\alpha \\text{a}$\\n- b \\neq c\\nfine \\underline{u} \\u00e8"}'
+    import json
+    assert json.loads(ol._repair_json_escapes(raw))["b"] == (
+        "$\\boldsymbol{x} \\Rightarrow \\alpha \\text{a}$\n- b \\neq c\nfine \\underline{u} \u00e8")
+
+
+def test_default_ask_accepts_literal_newlines_inside_strings(monkeypatch):
+    from types import SimpleNamespace
+    reply = '{"bodies": {"A": "riga uno\nriga due"}}'
+    monkeypatch.setattr("silica.kernel.prep_delegation._call_with_deadline", lambda fn, *a, **k: SimpleNamespace(text=reply, finish_reason="stop"))
+    monkeypatch.setattr("silica.agent.providers.get_provider", lambda *a, **k: SimpleNamespace(call_llm=lambda **k: None))
+    assert ol._default_ask(ol.STAGE_BODIES_TAG + " x", "u", max_tokens=10)["bodies"]["A"] == "riga uno\nriga due"
+
+
+def test_decode_objects_merges_back_to_back_objects():
+    text = 'x {"bodies": {"A": "a"}}\n{"bodies": {"B": "b"}}\n{"edges": [1]} trailing'
+    assert ol._decode_objects(text, text.find("{")) == {"bodies": {"A": "a", "B": "b"}, "edges": [1]}
+
+
+def test_parse_bodies_text_splits_on_idea_markers():
+    text = 'preamble\n ### IDEA: "Norma vettoriale"\nLa norma $\\|x\\|_p$ ...\n\n### Proprietà\n- $f(x)=0$\n  ### IDEA: Prodotto scalare\n$x^T y$\n### IDEA: Vuota\n'
+    got = ol._parse_bodies_text(text)
+    assert list(got) == ["Norma vettoriale", "Prodotto scalare"]
+    assert got["Norma vettoriale"].startswith("La norma $\\|x\\|_p$") and "### Proprietà" in got["Norma vettoriale"]
+
+
+def test_parse_bodies_text_falls_back_to_headings_that_name_the_titles():
+    text = "### Misura di Performance\n\nLa misura P dipende dal task.\n\n### Esperienza\n\ncorpo e\n\n### Non richiesta\n\nx"
+    got = ol._parse_bodies_text(text, ["Misura di performance", "Esperienza nel ML"])
+    assert got == {"Misura di performance": "La misura P dipende dal task."}
+
+
+def test_default_ask_raw_returns_text_and_retries_without_a_marker(monkeypatch):
+    from types import SimpleNamespace
+    replies = iter(["   ", "### IDEA: A\ncorpo \\alpha"])
+    monkeypatch.setattr("silica.kernel.prep_delegation._call_with_deadline",
+                        lambda fn, *a, **k: SimpleNamespace(text=next(replies), finish_reason="stop"))
+    monkeypatch.setattr("silica.agent.providers.get_provider", lambda *a, **k: SimpleNamespace(call_llm=lambda **k: None))
+    assert ol._default_ask(ol.STAGE_BODIES_TAG + " x", "u", max_tokens=10, raw=True) == {"text": "### IDEA: A\ncorpo \\alpha"}
+
+
+def test_unwrap_string_encoded_reply():
+    import json
+    inner = '{"bodies": {"A": "$\\\\alpha$"}}'
+    assert ol._unwrap_string_encoded(json.dumps(inner)[1:-1]) == inner
+    assert ol._unwrap_string_encoded(inner) == inner
+
+
+def _bodies_ask(bodies_replies: list[dict], calls: list[list[str]]):
+    """Stage A + GAP answered from _OUTLINE_JSON; bodies replies popped in order."""
+    def ask(system: str, user: str, *, max_tokens: int, **kw) -> dict:
+        if system.startswith(ol.STAGE_A_TAG):
+            return _OUTLINE_JSON
+        if system.startswith(ol.STAGE_GAP_TAG):
+            return {"ideas": [], "skips": []}
+        if system.startswith(ol.STAGE_BODIES_TAG):
+            calls.append(re.findall(r'^- "(.+?)" \(section: ', user.split("IDEAS:\n", 1)[1], re.M))
+            return bodies_replies.pop(0)
+        raise AssertionError(system[:40])
+    return ask
+
+
+def test_run_outliner_bodies_tolerate_a_missing_wrapper_and_recased_keys():
+    # Seen live 2026-09-05: one batch came back as {"<title>": ...} with no
+    # "bodies" key, and 15 of 82 notes landed with the claim alone.
+    calls: list[list[str]] = []
+    ask = _bodies_ask([{"margine geometrico | Margine": "corpo 1", "**Errore del percettrone online**": "corpo 2"}], calls)
+    res = ol.run_outliner(source_text=_SRC, source_basename="L.md", target="T", hub="H",
+                          language="Italian", vault_outline=[], ask=ask)
+    snippets = {o["heading"]: o["snippet"] for o in res["updates"] if o["op"] == "write"}
+    assert "corpo 1" in snippets["Margine geometrico"]
+    assert "corpo 2" in snippets["Errore del percettrone online"]
+    assert res["missing_bodies"] == []
+
+
+def test_match_bodies_takes_a_section_key_only_for_a_lone_idea():
+    # Lezione 1, run 3 (2026-09-05): every batch came back keyed by section.
+    reply = {"bodies": {"Storia": "storia body", "Percettrone": "p body"}}
+    sections = {"A": "Storia", "B": "Storia", "Percettrone": "Reti"}
+    assert ol._match_bodies(reply, ["A", "B", "Percettrone"], sections=sections) == {"Percettrone": "p body"}
+    assert ol._match_bodies(reply, ["A"], sections={"A": "Storia"}) == {"A": "storia body"}
+
+
+def test_match_bodies_takes_a_close_paraphrase_as_last_resort():
+    reply = {"bodies": {"Feature discrete multi-cluster e naïf Bayes": "b1", "Altro": "b2"}}
+    assert ol._match_bodies(reply, ["Feature discrete multi-classe e naïf Bayes", "Basi di funzioni"]) == {
+        "Feature discrete multi-classe e naïf Bayes": "b1"}
+
+
+def test_run_outliner_survives_a_failed_bodies_batch():
+    calls: list[list[str]] = []
+    replies = [ValueError("no bodies after retry"), {"bodies": {"Margine geometrico": "corpo 1"}}]
+
+    def ask(system: str, user: str, *, max_tokens: int, **kw) -> dict:
+        if system.startswith(ol.STAGE_A_TAG):
+            return _OUTLINE_JSON
+        if system.startswith(ol.STAGE_GAP_TAG):
+            return {"ideas": [], "skips": []}
+        calls.append(re.findall(r'^- "(.+?)" \(section: ', user.split("IDEAS:\n", 1)[1], re.M))
+        r = replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    res = ol.run_outliner(source_text=_SRC, source_basename="L.md", target="T", hub="H",
+                          language="Italian", vault_outline=[], ask=ask)
+    assert len(calls) == 2 and set(calls[1]) == set(calls[0])  # the re-ask names the whole batch
+    assert res["missing_bodies"] == ["Errore del percettrone online"]
+    assert any(o["heading"] == "Margine geometrico" and "corpo 1" in o["snippet"] for o in res["updates"])
+
+
+def test_run_outliner_asks_once_more_for_ideas_without_a_body():
+    calls: list[list[str]] = []
+    ask = _bodies_ask([{"bodies": {"Margine geometrico": "corpo 1"}},
+                       {"bodies": {"Errore del percettrone online": ""}}], calls)
+    res = ol.run_outliner(source_text=_SRC, source_basename="L.md", target="T", hub="H",
+                          language="Italian", vault_outline=[], ask=ask)
+    assert calls[1] == ["Errore del percettrone online"]  # the re-ask names only the missing idea
+    assert res["missing_bodies"] == ["Errore del percettrone online"]
+
+
+def test_run_outliner_runs_bodies_batches_concurrently():
+    import time
+    big = {"lesson_title": "t", "spine": ["I0"],
+           "ideas": [{"title": f"I{i}", "section": "S", "claim": "c", "depends_on": []} for i in range(32)]}
+
+    def ask(system: str, user: str, *, max_tokens: int, **kw) -> dict:
+        if system.startswith(ol.STAGE_A_TAG):
+            return big
+        titles = re.findall(r'^- "(.+?)" \(section: ', user.split("IDEAS:\n", 1)[1], re.M)
+        time.sleep(0.25)
+        return {"bodies": {t: "b" for t in titles}}
+
+    t0 = time.monotonic()
+    res = ol.run_outliner(source_text="## S\ntext", source_basename="L.md", target="T", hub="H",
+                          language="English", vault_outline=[], ask=ask)
+    assert time.monotonic() - t0 < 0.8  # 8 batches x 0.25 s would be 2.0 s in series
+    assert len([o for o in res["updates"] if o["op"] == "write"]) == 33
 
 
 def test_run_outliner_retry_regenerates_only_the_named_bodies():
     calls: list[str] = []
 
-    def ask(system: str, user: str, *, max_tokens: int) -> dict:
+    def ask(system: str, user: str, *, max_tokens: int, **kw) -> dict:
         calls.append(system.split("\n", 1)[0])
-        titles = re.findall(r"^(.+?) \| ", user.split("IDEAS:\n", 1)[1], re.M)
+        titles = re.findall(r'^- "(.+?)" \(section: ', user.split("IDEAS:\n", 1)[1], re.M)
         assert titles == ["Margine geometrico"]
         assert "steer me" in user
         return {"bodies": {"Margine geometrico": "corpo nuovo"}}
@@ -393,6 +583,35 @@ def test_delegate_steer_retry_regenerates_only_rejected_bodies(mock_run, mock_vo
     assert kw["outline"].spine == ["Margine geometrico"]
     assert kw["steer_context"] == "snippet too short"
     assert fsm.state == InjectorState.SANITIZE
+
+
+@patch("silica.router.states.distill.vault_outline", return_value=[])
+@patch("silica.router.states.distill.run_outliner")
+def test_delegate_steer_retry_keeps_the_whole_whitelist(mock_run, mock_vo):
+    # VALIDATE re-checks the carried (already accepted) ops against the
+    # chunk's concept list on the retry pass. Lezione 3, 2026-09-05: the retry
+    # replaced the 27-title list with the single retried title, the 26 carried
+    # ops were rejected as "not present in payload concepts" and the whole
+    # file was deferred after one bad body.
+    fsm = InjectorFSM("Inbox/test.md", "TargetDir")
+    chunk = _outline_chunk()
+    chunk["batches"][0]["concepts"] = [
+        {"name": "Margine geometrico", "inbox_excerpt": "old"},
+        {"name": "Iperpiano"}, {"name": "Lezione 10"}]
+    fsm._chunks = [chunk]
+    fsm._current_chunk_idx = 0
+    fsm.state = InjectorState.DELEGATE
+    fsm.context["chunk_0_outline"] = _outliner_result()["outline"]
+    fsm.context["chunk_0_retry_payload"] = {**chunk, "batches": [{"inbox_file": "Inbox/test.md",
+                                                                  "concepts": [{"name": "Margine geometrico"}]}]}
+    fsm.context["chunk_0_steer_context"] = "meta-description"
+    fsm.context["chunk_0_hash"] = "h"
+    mock_run.return_value = _outliner_result()  # concepts: the one retried title only
+    with patch.object(fsm, "_make_tmp", return_value="tmp.json"):
+        fsm.step()
+    concepts = fsm._chunks[0]["batches"][0]["concepts"]
+    assert [c["name"] for c in concepts] == ["Margine geometrico", "Iperpiano", "Lezione 10"]
+    assert concepts[0]["inbox_excerpt"] == ""  # the retried entry is the fresh one
 
 
 def test_assemble_file_chunks_outline_lane_makes_one_full_text_chunk():
@@ -568,3 +787,12 @@ def test_recon_ignores_a_sniffed_clip_for_the_lane(monkeypatch):
         fsm.step()
     mock_recon.assert_not_called()
     assert fsm.context["file_0_lane"] == "outline"
+
+
+def test_outline_cross_edge_patch_is_flagged_as_a_relation():
+    """The bullet joins `## Relations` on the existing note; without the flag
+    the executor would wrap it in a provenance block of its own."""
+    out, ops = _ops()
+    p = next(o for o in ops if o["op"] == "patch")
+    assert p["relation"] is True
+    assert not any(o.get("relation") for o in ops if o["op"] == "write")

@@ -45,6 +45,7 @@ class Op(BaseModel):
     linked_axis: str | None = None      # thematic axis this concept belongs to (Layer 2)
     parent: str | None = None           # specific parent note (≠ run hub); None → falls back to hub
     contested_by: str | None = None     # patch only: contradiction ref → mark_contested on the target
+    relation: bool = False              # patch only: snippet is typed-relation bullets → joins ## Relations (outline lane)
     valid_from: str | None = None       # write/patch: source event clock, stamped on the claim; None → no stamp
     from_path: str | None = None        # move op: current vault-relative path
     to_path: str | None = None          # move op: destination vault-relative path

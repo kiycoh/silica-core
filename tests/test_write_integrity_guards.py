@@ -52,7 +52,7 @@ def test_skipped_restore_does_not_report_reverted(tmp_vault, monkeypatch):
     # introduced (a pre-existing one is tolerated by the patch baseline).
     def fake_lint(note_name, op_type="", hub=""):
         from silica.driver import DRIVER
-        introduced = "Additional notes" in DRIVER.read_note(note_name).content
+        introduced = "[^" in DRIVER.read_note(note_name).content
         return {"success": not introduced, "errors": ["bad link"] if introduced else []}
     monkeypatch.setattr("silica.tools.composed.silica_lint", fake_lint)
 
@@ -73,7 +73,7 @@ def test_successful_restore_still_reports_reverted(tmp_vault, monkeypatch):
 
     def fake_lint(note_name, op_type="", hub=""):
         from silica.driver import DRIVER
-        introduced = "Additional notes" in DRIVER.read_note(note_name).content
+        introduced = "[^" in DRIVER.read_note(note_name).content
         return {"success": not introduced, "errors": ["bad link"] if introduced else []}
     monkeypatch.setattr("silica.tools.composed.silica_lint", fake_lint)
 

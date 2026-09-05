@@ -51,7 +51,11 @@ RELATION_LABEL = {
 # went to the lecture-level note when it was visible).
 SPINE_SECTION = "(outline)"
 
-BODIES_BATCH = 8            # ideas per bodies call: 8 x ~600 tokens stays under every worker's output cap
+BODIES_BATCH = 4            # ideas per bodies call. Was 8: the wall time of a lecture is its longest
+                            # stream, and two 8-idea batches streamed 3.7 and 6.5 min on deepseek
+                            # flash (2026-09-05); four ideas halve the stream, the pool below runs them.
+BODIES_WORKERS = 6          # concurrent bodies calls per file: the batches are independent, and one
+                            # lecture of 4 batches spent 12 of its 13 minutes on them in series (2026-09-05)
 MAX_EDGES_PER_TARGET = 3    # a target with more is a hub in disguise, not three real dependencies
 MIN_WHY_CHARS = 20          # "e' collegato" is not a reason
 MAX_OUTLINE_ROWS = 400      # ponytail: folder-scoped outline; reopen at 400 notes in one folder, then seed with cosine top-k
@@ -70,7 +74,7 @@ Emit ONLY a JSON object:
  "spine": ["<idea title>", ...],
  "ideas": [
    {{
-     "title": "<noun phrase in {lang} naming ONE idea; never a sentence fragment>",
+     "title": "<noun phrase in {lang} of 2-6 words naming ONE idea, capitalised like a note title; never a sentence, a slide line ('Note that', 'Arriving at the end, case l=L') or a formula>",
      "section": "<heading of the source section(s) the idea comes from, verbatim>",
      "claim": "<one sentence in {lang}: what this idea asserts>",
      "depends_on": [{{"title": "<another idea title from THIS list>", "relation": "<one of {rels}>", "why": "<one sentence in {lang}>"}}]
@@ -94,11 +98,56 @@ Emit ONLY a JSON object: {{"ideas": [...], "skips": [{{"section": "<heading>", "
 """
 
 STAGE_BODIES = STAGE_BODIES_TAG + """
-You are given one complete source document (markdown, LaTeX kept) and a list of ideas already identified in it (title | source section). For EACH listed idea write its note body in {lang}: the facts themselves (definitions, formulas in LaTeX verbatim, theorem statements, algorithm steps), copied from the source, never outside knowledge, never a description of the source. Markdown. Keep every formula that belongs to the idea, drop repeated slides.
+You are given one complete source document (markdown, LaTeX kept) and a list of ideas already identified in it (a quoted title, then the source section it comes from). For EACH listed idea write its note body in {lang}: the facts themselves (definitions, formulas in LaTeX verbatim, theorem statements, algorithm steps), copied from the source, never outside knowledge, never a description of the source. Markdown. Keep every formula that belongs to the idea, drop repeated slides.
 
-Emit ONLY a JSON object: {{"bodies": {{"<idea title verbatim>": "<markdown body>", ...}}}}
-JSON strings: escape every backslash (write \\\\alpha for \\alpha), newlines as \\n. No markdown fences.
+Reply in PLAIN MARKDOWN, not JSON: for each listed idea, one line `### IDEA: <idea title exactly as quoted>` followed by its body on the following lines. One section per listed idea, in the given order, keyed by the idea title and never by the section (several ideas can share one section). Nothing before the first marker, no code fences around the reply.
 """
+
+# Bodies are LaTeX-heavy prose: as JSON strings they came back with single
+# backslashes, literal newlines, unescaped quotes and objects split in two
+# (four reply shapes, about one retry per lecture, 2026-09-05). A marker line
+# per idea needs no escaping at all.
+# Leading blanks allowed: the model indents marker lines by a space now and
+# then (" ### IDEA: ...", 2026-09-05) and a line-anchored `#` missed them all.
+_IDEA_MARK = re.compile(r"^[ \t]*#{1,6}\s*IDEA:\s*(.+?)\s*$", re.M)
+
+
+_ANY_HEADING = re.compile(r"^[ \t]*(#{1,6})\s+(.+?)\s*$", re.M)
+
+
+def _parse_bodies_text(text: str, titles: list[str] | None = None) -> dict[str, str]:
+    """`### IDEA: title` sections -> {title: body}; a fenced reply is unwrapped.
+
+    Without a single IDEA marker the reply is split on the headings that name
+    a requested title (the model drops the prefix and writes `### Title`,
+    seen on the first lecture that used this format, 2026-09-05).
+    """
+    text = re.sub(r"^```(?:markdown|md)?\s*|\s*```$", "", (text or "").strip())
+    mark = _IDEA_MARK
+    if not mark.search(text) and titles:
+        from difflib import SequenceMatcher
+        keys = {_clean_title(t).casefold(): t for t in titles}
+
+        def _owner(h: str) -> str | None:
+            k = _clean_title(h).casefold()
+            if k in keys:
+                return keys[k]
+            best = max(((SequenceMatcher(None, k, c).ratio(), t) for c, t in keys.items()), default=(0, None))
+            return best[1] if best[0] >= 0.85 else None
+
+        out: dict[str, str] = {}
+        heads = [(m.start(), m.end(), len(m.group(1)), _owner(m.group(2))) for m in _ANY_HEADING.finditer(text)]
+        for i, (_s, e, level, t) in enumerate(heads):
+            if not t:
+                continue
+            # A body runs to the next heading of its own level or higher:
+            # deeper headings belong to it, sibling sections do not.
+            nxt = next((h[0] for h in heads[i + 1:] if h[2] <= level), len(text))
+            if text[e:nxt].strip():
+                out.setdefault(t, text[e:nxt].strip())
+        return out
+    parts = mark.split(text)
+    return {t.strip().strip('"*').strip(): b.strip() for t, b in zip(parts[1::2], parts[2::2]) if b.strip()}
 
 STAGE_B = STAGE_B_TAG + """
 You maintain a knowledge vault. Below is the OUTLINE of the vault so far (one line per existing note: lesson | title | claim), then the ideas of a NEW source (title | claim).
@@ -106,7 +155,7 @@ You maintain a knowledge vault. Below is the OUTLINE of the vault so far (one li
 Find the connections a careful student would draw between the NEW ideas and the EXISTING notes: where a new idea applies, relaxes, generalizes, bounds, justifies, contrasts with, is an instance of, or is the same idea as an existing one. Propose only connections you can justify in one sentence from the two claims; at most three connections per existing note.
 
 Emit ONLY a JSON object: {{"edges": [{{"from": "<new idea title>", "to": "<existing note title>", "relation": "<one of {rels}>", "why": "<one sentence in {lang}>"}}]}}
-"from" MUST be a new idea title and "to" an existing note title, both verbatim. Use "same_as" only for the same idea restated. Every why is written in {lang}. No markdown fences.
+"from" MUST be a new idea title and "to" an existing note title, both verbatim; the new ideas are already linked to each other, so never propose an edge between two NEW ideas. Use "same_as" only for the same idea restated. Every why is written in {lang}. No markdown fences.
 """
 
 
@@ -206,16 +255,53 @@ def _clean_title(s: object) -> str:
     return re.sub(r"\s+", " ", str(s or "")).strip().strip("*").strip()
 
 
+# Course apparatus the model turns into ideas when a lecture opens with it
+# ("Libri di testo" became a note, 2026-09-05). Closed, bilingual, exact.
+_APPARATUS_TITLES = frozenset({
+    "libri di testo", "testi consigliati", "bibliografia", "riferimenti", "contatti",
+    "orario", "esame", "modalità d'esame", "textbooks", "bibliography", "references",
+    "contacts", "schedule", "exam", "syllabus",
+})
+
+
+def _title_ok(title: str) -> bool:
+    """A note name, not a slide line. Live 2026-09-05: "Da notare che",
+    "Arrivo alla fine, caso l=L", "Fase di back, caso 1<l<L" and a 150-char
+    sentence with V={V1,...} all became notes. Rejected ideas leave their
+    section to the coverage pass, which asks once more or records a skip."""
+    from silica.kernel.text.recon import _dangles
+    if len(title) > 90 or len(title.split()) > 12:
+        return False
+    if title.casefold().strip() in _APPARATUS_TITLES:
+        return False
+    if re.search(r"[=<>{}]|,$", title):
+        return False
+    return not _dangles(title)
+
+
 def parse_outline(obj: dict) -> Outline:
     """Model JSON -> Outline. Drops duplicate titles, unknown dependency
-    targets, self-dependencies and relations outside the closed set."""
+    targets, self-dependencies, relations outside the closed set and titles
+    that are not names (_title_ok); a lowercase first letter is capitalised."""
     ideas: list[Idea] = []
     seen: set[str] = set()
     for raw in obj.get("ideas") or []:
         if not isinstance(raw, dict):
             continue
         title = _clean_title(raw.get("title"))
+        if title[:1].islower():
+            title = title[0].upper() + title[1:]
         if not title or title.casefold() in seen:
+            continue
+        if not _title_ok(title):
+            logger.info("outline: idea title rejected as a slide line: %r", title)
+            continue
+        section = _clean_title(raw.get("section"))
+        # An idea born in an apparatus section is apparatus: the lecturer's
+        # name under "Machine Learning (9 CFU)" became a note the bodies
+        # stage then had nothing to say about (2026-09-05).
+        if section and _NOISE_HEADING_RE.search(section):
+            logger.info("outline: idea %r dropped, its section %r is apparatus", title, section)
             continue
         seen.add(title.casefold())
         ideas.append(Idea(title=title, section=_clean_title(raw.get("section")),
@@ -306,7 +392,12 @@ def select_edges(raw: list, *, ideas: set[str], existing: dict[str, str],
         tgt = existing_by_key.get(_endpoint_key(e.get("to")))
         rel = str(e.get("relation") or "").strip()
         why = str(e.get("why") or "").strip()
-        if not src or not tgt or tgt.casefold() in spine_keys:
+        # An edge between two NEW ideas is kept as an intra edge on the source
+        # idea: the prompt forbids them and the model proposes them anyway (24
+        # of 79 in one run, 2026-09-05), and they are real dependencies. Never
+        # same_as: two ideas of one outline are distinct by construction.
+        intra = tgt is None and rel != "same_as" and (tgt := idea_by_key.get(_endpoint_key(e.get("to")))) is not None
+        if not src or not tgt or tgt == src or tgt.casefold() in spine_keys:
             dropped += 1
             logger.debug("outline stage B: dropped edge %r -> %r (unknown endpoint or spine)", e.get("from"), e.get("to"))
             continue
@@ -317,7 +408,7 @@ def select_edges(raw: list, *, ideas: set[str], existing: dict[str, str],
         if per_target.get(tgt, 0) >= MAX_EDGES_PER_TARGET:
             continue
         per_target[tgt] = per_target.get(tgt, 0) + 1
-        kept.append({"from": src, "to": tgt, "relation": rel, "why": why})
+        kept.append({"from": src, "to": tgt, "relation": rel, "why": why, **({"intra": True} if intra else {})})
     logger.info("outline stage B: %d edge(s) proposed, %d kept, %d dropped", len(raw or []), len(kept), dropped)
     return kept
 
@@ -353,6 +444,10 @@ def outline_ops(outline: Outline, *, target: str, hub: str | None, source_basena
         related = [d["title"] for d in idea.depends_on]
         review = None
         for e in by_from.get(idea.title, []):
+            if e.get("intra"):
+                lines.append(f"- {RELATION_LABEL[e['relation']]} [[{e['to']}]]: {e['why']}")
+                related.append(e["to"])
+                continue
             if e["relation"] == "same_as":
                 review = f"near_title candidate='{e['to']}' path='{existing[e['to']]}' ratio=1.00"
                 continue
@@ -379,12 +474,12 @@ def outline_ops(outline: Outline, *, target: str, hub: str | None, source_basena
             "section": SPINE_SECTION,
         })
         for e in edges:
-            if e["relation"] == "same_as":
+            if e["relation"] == "same_as" or e.get("intra"):
                 continue
             ops.append({
                 "op": "patch", "path": existing[e["to"]], "heading": e["to"],
                 "snippet": f"- [[{e['from']}]] {RELATION_LABEL[e['relation']]} this ({spine_title}): {e['why']}\n",
-                "source_basename": source_basename,
+                "source_basename": source_basename, "relation": True,
             })
     return ops
 
@@ -487,13 +582,93 @@ def vault_outline(target_dir: str, *, exclude_titles: AbstractSet[str] = frozens
 
 
 # -------------------------------------------------------------- the runner --
-def _default_ask(system: str, user: str, *, max_tokens: int) -> dict:
-    """One JSON reply from the worker model, no tools, no thinking.
+_LATEX_N = re.compile(r"n(?=abla\b|eq\b|e\b|ot\b|u\b|ewline\b)")
+
+
+def _repair_json_escapes(text: str) -> str:
+    """Double the backslashes a model left single inside JSON strings.
+
+    LaTeX-heavy bodies come back with `\\Rightarrow` (invalid escape: the
+    whole reply is lost to a retry) and `\\boldsymbol` (`\\b` is a valid
+    escape: it parses to a backspace and "$oldsymbol{...}" lands in the note,
+    seen 2026-09-05). Every escape that is not valid JSON, `\\b \\f \\r \\t`
+    followed by a letter, `\\u` not followed by four hex digits and the few
+    LaTeX commands that start with `n` are doubled; `\\\\` is left alone so
+    a reply that did escape is unchanged.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c != "\\" or i + 1 >= n:
+            out.append(c); i += 1; continue
+        nxt = text[i + 1]
+        if nxt == "\\":
+            out.append("\\\\"); i += 2; continue
+        latex = (
+            nxt not in '"/bfnrtu'
+            or (nxt in "bfrt" and text[i + 2:i + 3].isalpha())
+            or (nxt == "u" and not re.match(r"[0-9a-fA-F]{4}", text[i + 2:i + 6]))
+            or (nxt == "n" and _LATEX_N.match(text, i + 1))
+        )
+        out.append("\\\\" if latex else "\\")
+        i += 1
+    return "".join(out)
+
+
+def _decode_objects(text: str, start: int) -> dict:
+    """The JSON object at `start`, merged with any objects that follow it.
+
+    Two reply shapes of 2026-09-05 live here: a literal newline inside a body
+    string (strict=False), and two objects back to back (`{...}\n{...}`: the
+    slice to the last brace failed at the boundary, one retry per batch).
+    Later objects merge dict-into-dict and list-onto-list at the top level, so
+    a split "bodies" comes back whole.
+    """
+    import json as _json
+    dec = _json.JSONDecoder(strict=False)
+    obj, idx = dec.raw_decode(text, start)
+    if not isinstance(obj, dict):
+        raise ValueError("top-level JSON is not an object")
+    while True:
+        nxt = text.find("{", idx)
+        if nxt < 0 or text[idx:nxt].strip():
+            break
+        try:
+            extra, idx = dec.raw_decode(text, nxt)
+        except ValueError:
+            break
+        for k, v in (extra.items() if isinstance(extra, dict) else []):
+            if isinstance(v, dict) and isinstance(obj.get(k), dict):
+                obj[k].update(v)
+            elif isinstance(v, list) and isinstance(obj.get(k), list):
+                obj[k].extend(v)
+            else:
+                obj.setdefault(k, v)
+    return obj
+
+
+def _unwrap_string_encoded(text: str) -> str:
+    """A reply that is the JSON *string encoding* of its object (`{\\"bodies\\":
+    ...`, every quote escaped, backslashes doubled twice) decodes to the object
+    text in one string-literal pass; seen on a bodies call, 2026-09-05."""
+    if not text.startswith('{\\"'):
+        return text
+    try:
+        import json as _json
+        return _json.loads('"' + text + '"')
+    except ValueError:
+        return text
+
+
+def _default_ask(system: str, user: str, *, max_tokens: int, raw: bool = False) -> dict:
+    """One JSON reply from the worker model, no tools, no thinking; `raw`
+    returns {"text": reply} for the marker-delimited bodies stage (one retry
+    on an empty reply or one without a marker).
 
     reasoning=False: measured 2026-09-02 on deepseek-v4-flash, the thinking
     trace ate the whole completion budget and the reply carried no JSON.
     """
-    import json as _json
     import threading
     from silica.agent.providers import get_provider
     from silica.config import CONFIG
@@ -508,7 +683,7 @@ def _default_ask(system: str, user: str, *, max_tokens: int) -> dict:
         # while the schema-constrained one repeated itself past 12k tokens
         # twice. The two fail differently, which is what makes the retry a
         # second chance rather than the same ask again.
-        schema = schema_for_retry if attempt else None
+        schema = schema_for_retry if attempt and not raw else None
         # Wall-clock bound, same helper and knob as run_distiller: a dead
         # upstream keeps the socket alive with keep-alive bytes, and the first
         # live run of this lane (2026-09-02) sat ten minutes on one such call.
@@ -520,22 +695,73 @@ def _default_ask(system: str, user: str, *, max_tokens: int) -> dict:
         ), float(os.getenv("DISTILLER_TIMEOUT", "300")), abandoned)
         if resp is None:
             raise TimeoutError("outline stage call abandoned")
+        if raw:
+            # Any text goes back to the parser (headings without the IDEA
+            # prefix are matched there); only an empty reply is retried.
+            if (resp.text or "").strip():
+                return {"text": resp.text or ""}
+            last = f"finish={resp.finish_reason} empty reply"
+            logger.warning("outline stage reply unusable (attempt %d): %s", attempt + 1, last)
+            continue
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", (resp.text or "").strip())
-        start, end = text.find("{"), text.rfind("}")
-        if start >= 0 and end > start:
+        text = _unwrap_string_encoded(text)
+        text = _repair_json_escapes(text)
+        start = text.find("{")
+        why = "no JSON object"
+        if start >= 0:
             try:
-                return _json.loads(text[start:end + 1])
-            except ValueError:
-                pass
-        last = f"finish={resp.finish_reason} head={text[:200]!r}"
+                return _decode_objects(text, start)
+            except ValueError as exc:
+                why = str(exc)
+        # The head alone never said what broke: 3 of the first 5 lecture runs
+        # of 2026-09-05 retried on replies whose first 200 chars parsed fine.
+        last = f"finish={resp.finish_reason} {why} head={text[:200]!r}"
         logger.warning("outline stage reply unusable (attempt %d): %s", attempt + 1, last)
         if resp.finish_reason == "length":
             max_tokens *= 2  # a cut JSON: the same ask with room to finish
-    raise ValueError(f"outline stage returned no JSON after retry ({last})")
+    raise ValueError(f"outline stage returned no {'bodies' if raw else 'JSON'} after retry ({last})")
 
 
 def _strip_images(md: str) -> str:
     return re.sub(r"!\[[^\]]*\]\([^)]*\)", "", md)
+
+
+def _match_bodies(reply: dict, titles: list[str],
+                  sections: dict[str, str] | None = None) -> dict[str, str]:
+    """Reply bodies keyed back to the requested titles.
+
+    Tolerates a reply without the "bodies" wrapper and keys the model re-cased,
+    padded or bolded: both shapes came back on 2026-09-05 and, matched by exact
+    key, left 15 of 82 notes with the claim alone. Empty bodies count as missing.
+    A body keyed by the SECTION is taken only when one requested idea comes
+    from that section: several ideas under one section share one text then,
+    and no split of it is right.
+    """
+    raw = reply.get("bodies") if isinstance(reply.get("bodies"), dict) else reply
+    # First pipe field: the model echoes the "title | section" row it was
+    # shown as the key (8 of 8 bodies of one batch lost that way, 2026-09-05).
+    by_key = {_clean_title(str(k).split("|")[0]).casefold(): v for k, v in (raw or {}).items()
+              if isinstance(v, str) and v.strip()}
+    got = {t: by_key[_clean_title(t).casefold()] for t in titles if _clean_title(t).casefold() in by_key}
+    for t in titles:
+        if t in got or not sections or not sections.get(t):
+            continue
+        sec = _clean_title(sections[t]).casefold()
+        if sec in by_key and sum(1 for u in titles if _clean_title(sections.get(u, "")).casefold() == sec) == 1:
+            got[t] = by_key[sec]
+    # Last resort, a paraphrased key ("multi-classe" -> "multi-cluster",
+    # 2026-09-05): the closest unused key, and only when it is close.
+    from difflib import SequenceMatcher
+    used = {k for k, v in by_key.items() if any(v is w for w in got.values())}
+    for t in titles:
+        if t in got:
+            continue
+        key = _clean_title(t).casefold()
+        best = max(((SequenceMatcher(None, key, k).ratio(), k) for k in by_key if k not in used), default=(0, ""))
+        if best[0] >= 0.85:
+            got[t] = by_key[best[1]]
+            used.add(best[1])
+    return got
 
 
 def run_outliner(*, source_text: str, source_basename: str, target: str, hub: str | None,
@@ -564,16 +790,49 @@ def run_outliner(*, source_text: str, source_basename: str, target: str, hub: st
             merged.skips = [s for s in (extra.get("skips") or []) if isinstance(s, dict)]
             outline = merged
     titles = [i.title for i in outline.ideas if only_titles is None or i.title in only_titles]
-    for k in range(0, len(titles), BODIES_BATCH):
-        batch = titles[k:k + BODIES_BATCH]
+
+    def _bodies(batch: list[str]) -> dict[str, str]:
+        section_of = {t: next(i.section for i in outline.ideas if i.title == t) for t in batch}
+        # Quoted titles with the section set apart: shown as "title | section"
+        # rows, the model keyed a whole lecture's bodies by the section (three
+        # batches of Lezione 1, 2026-09-05) or echoed the row as the key.
         user = "SOURCE:\n" + src + "\n\nIDEAS:\n" + "\n".join(
-            f"{t} | {next(i.section for i in outline.ideas if i.title == t)}" for t in batch)
+            f'- "{t}" (section: {section_of[t]})' for t in batch)
         if steer_context:
             user += "\n\nPREVIOUS ATTEMPT WAS REJECTED:\n" + steer_context
-        bodies = ask(STAGE_BODIES.format(lang=language), user, max_tokens=12000).get("bodies") or {}
-        for idea in outline.ideas:
-            if idea.title in batch:
-                idea.body = str(bodies.get(idea.title) or "")
+        try:
+            reply = ask(STAGE_BODIES.format(lang=language), user, max_tokens=12000, raw=True)
+        except (ValueError, TimeoutError) as exc:
+            # One batch must not take the lecture down: Lezione 8 landed 0
+            # notes when a batch failed twice (2026-09-05). Its titles go to
+            # the re-ask and, at worst, land as claim-only notes flagged for
+            # review, which the source kept in the inbox does not.
+            logger.warning("outline bodies: batch of %d failed (%s); asking again for its titles", len(batch), exc)
+            return {}
+        bodies = _parse_bodies_text(reply["text"], batch) if "text" in reply else reply
+        got = _match_bodies(bodies, batch, sections=section_of)
+        if len(got) < len(batch):
+            inner = bodies.get("bodies") if isinstance(bodies.get("bodies"), dict) else bodies
+            logger.warning("outline bodies: no body for %s (reply keys: %s)",
+                           [t for t in batch if t not in got], list(inner)[:12])
+        return got
+
+    from concurrent.futures import ThreadPoolExecutor
+    batches = [titles[k:k + BODIES_BATCH] for k in range(0, len(titles), BODIES_BATCH)]
+    got: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=max(1, min(BODIES_WORKERS, len(batches)))) as pool:
+        for part in pool.map(_bodies, batches):
+            got.update(part)
+    missing = [t for t in titles if t not in got]
+    if missing:
+        # One more ask, only for what came back empty: cheaper than landing a
+        # claim-only note the gate can only flag.
+        for k in range(0, len(missing), BODIES_BATCH):
+            got.update(_bodies(missing[k:k + BODIES_BATCH]))
+        missing = [t for t in titles if t not in got]
+    for idea in outline.ideas:
+        if idea.title in got:
+            idea.body = got[idea.title]
     edges: list[dict] = []
     existing = {r["title"]: r["path"] for r in vault_outline}
     if vault_outline and only_titles is None:
@@ -586,7 +845,7 @@ def run_outliner(*, source_text: str, source_basename: str, target: str, hub: st
     ops = outline_ops(outline, target=target, hub=hub, source_basename=source_basename,
                       edges=edges, existing=existing, only_titles=only_titles)
     return {
-        "updates": ops, "ephemerals": [], "concepts": concept_entries(ops, src),
+        "updates": ops, "ephemerals": [], "concepts": concept_entries(ops, src), "missing_bodies": missing,
         "outline": {"lesson_title": outline.lesson_title, "spine": outline.spine,
                     "ideas": [i.__dict__ for i in outline.ideas], "skips": outline.skips},
         "gaps": coverage_gaps(outline, source_headings(src)),

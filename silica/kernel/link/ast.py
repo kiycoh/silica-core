@@ -323,7 +323,10 @@ def _balanced(body: str) -> list[str]:
 
     walk(tokens)
 
-    combined_text = "".join(text_pieces)
+    # Joined with a separator: glued pieces let two list items ending and
+    # starting with `$` read as one `$$` (2026-09-05, two notes deferred at
+    # WRITE on a false "unbalanced $$ block").
+    combined_text = "\n".join(text_pieces)
 
     if combined_text.count("$$") % 2:
         issues.append("unbalanced $$ block")

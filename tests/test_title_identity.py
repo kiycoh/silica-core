@@ -50,6 +50,19 @@ def test_title_key_distinct_concepts_stay_distinct():
 # near_titles — the fuzzy band under key-equality
 # ---------------------------------------------------------------------------
 
+def test_title_key_keeps_negations():
+    from silica.kernel.text.title import title_key
+    assert title_key("Apprendimento Supervisionato", lang="italian") != title_key("Apprendimento non supervisionato", lang="italian")
+    assert title_key("Supervised learning", lang="english") != title_key("Not supervised learning", lang="english")
+
+
+def test_title_key_keeps_direction_words_under_the_vault_language(monkeypatch):
+    from silica.kernel.text.title import title_key
+    monkeypatch.setattr("silica.config.CONFIG.cooccurrence_lang", "italian")
+    keys = {title_key(t) for t in ("Back-propagation", "Forward propagation", "Propagation (da l-1 a l)")}
+    assert len(keys) == 3
+
+
 def test_near_titles_catches_descriptor_description():
     from silica.kernel.text.title import near_titles
 

@@ -40,8 +40,18 @@ def _run_title_refs(fsm: "InjectorFSM") -> list[typing.Any]:
     return fsm._run_title_refs
 
 
-def _backlink_neighbourhood(new_titles: list[str], touched_abs: set[str]) -> list[str]:
-    """Pre-existing notes whose body mentions any of `new_titles`.
+def _backlink_neighbourhood(new_titles: list[str], touched_abs: set[str],
+                            within_dir: str | None = None) -> list[str]:
+    """Pre-existing notes whose body mentions any of `new_titles`, limited to
+    the `within_dir` subtree when given.
+
+    The limit is the whole guard against cross-domain false positives: the
+    sweep below is a substring match and `autolink` links on the title alone,
+    so a new ML note "Capacità" was wrapped into 50 psychology and law notes
+    of one vault (86 notes edited outside the target, 2026-09-05). A mention
+    inside the folder being curated is about the new note; outside it, the
+    same word is a guess, and a wrong link in a note the user wrote is worse
+    than a missing one.
 
     NOT a mention index (deleted 2026-08-23, it had no reader left): this phase
     used to ask `DRIVER.mentions_of`, whose postings were keyed by the titles in
@@ -70,6 +80,7 @@ def _backlink_neighbourhood(new_titles: list[str], touched_abs: set[str]) -> lis
         logger.debug("BACKLINK: neighbourhood sweep failed (phase abstains): %s", e)
         return []
 
+    scope = (within_dir or "").replace("\\", "/").strip("/")
     neighbourhood: list[str] = []
     seen_norm: set[str] = set()
     for title in new_titles:
@@ -77,6 +88,9 @@ def _backlink_neighbourhood(new_titles: list[str], touched_abs: set[str]) -> lis
             path = hit.ref.path
             norm = os.path.abspath(path)
             if norm in seen_norm or norm in touched_abs:
+                continue
+            rel = path.replace("\\", "/").strip("/")
+            if scope and rel != scope and not rel.startswith(scope + "/"):
                 continue
             seen_norm.add(norm)
             neighbourhood.append(path)
@@ -211,7 +225,7 @@ def handle_backlink(fsm: "InjectorFSM") -> None:
             if p is not None
         }
 
-        neighbourhood = _backlink_neighbourhood(new_titles, touched_paths_abs)
+        neighbourhood = _backlink_neighbourhood(new_titles, touched_paths_abs, within_dir=fsm.target_dir)
 
         if not neighbourhood:
             fsm._progress_note(fsm._chunk_task_id("backlink"), "backlink", "done")

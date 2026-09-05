@@ -33,6 +33,18 @@ _DASH_SUFFIX = re.compile(r"\s+[—–-]\s+.*$")
 _PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
 
 
+# Words the stopword lists drop that are identity in a title: "Apprendimento
+# non supervisionato" was the key of "Apprendimento supervisionato" and took its
+# patch (2026-09-05); "Back-propagation" collapsed onto "Propagation".
+_KEEP = frozenset({"non", "not", "no", "senza", "without", "back", "forward"})
+
+
+def _vault_lang() -> str | None:
+    from silica.config import CONFIG
+    lang = getattr(CONFIG, "cooccurrence_lang", "auto") or "auto"
+    return None if lang == "auto" else lang
+
+
 def title_key(t: str, *, lang: str | None = None) -> str:
     """Equivalence key: two titles with the same key name the same note.
 
@@ -41,7 +53,7 @@ def title_key(t: str, *, lang: str | None = None) -> str:
     2-4 word label is weak.
     """
     from silica.kernel.text import language
-    from silica.kernel.text.text import tokens
+    from silica.kernel.text.text import stem_word
 
     s = (t or "").strip()
     for rx in (_PAREN_SUFFIX, _DASH_SUFFIX):
@@ -51,11 +63,16 @@ def title_key(t: str, *, lang: str | None = None) -> str:
     s = _PUNCT.sub(" ", s.casefold())
     if not s.strip():
         return ""
-    lang = lang or language.detect(s)
+    # The vault's declared language before detection: a 2-word label detects
+    # as English and the English stopword list eats "back" and "forward", so
+    # "Back-propagation", "Forward propagation" and "Propagation (da l-1 a l)"
+    # shared one key and the first was patched onto the last (2026-09-05).
+    lang = lang or _vault_lang() or language.detect(s)
+    stop = language.stopwords_for(lang)
     stems = [
-        stem
-        for sent in tokens(s, lang=lang, stem=True, stopword_lang=lang, min_len=2)
-        for (stem, _surface) in sent
+        stem_word(w, lang=lang)
+        for w in re.findall(r"\w+", s)
+        if len(w) >= 2 and (w not in stop or w in _KEEP)
     ]
     # Titles made purely of stopwords/short tokens ("Le basi") must not all
     # collapse onto the empty key: fall back to the folded surface.

@@ -238,6 +238,10 @@ def handle_write(fsm: "InjectorFSM") -> None:
             ]
             _errors = {r.path: (r.error or "lint/write failed") for r in result.failed}
             fsm._defer_ops(_deferred, _errors, phase="WRITE")
+            # The reasons used to live only in the deferred bundle: a verbose
+            # run showed "2 op(s) failed lint/write" and nothing else.
+            for _p, _e in _errors.items():
+                logger.debug("WRITE: deferred %s — %s", _p, _e)
             logger.warning(
                 "WRITE: %d op(s) failed lint/write — deferred. "
                 "Continuing with %d committed op(s).",

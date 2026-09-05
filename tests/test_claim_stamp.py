@@ -70,25 +70,19 @@ def test_event_date_survives_broken_yaml():
 
 def test_patch_snippet_byte_identical_without_valid_from():
     """The parity guarantee: no valid_from, no diff."""
-    expected = (
-        "\n\n## Additional notes: Warfarin (from appunti.md)\n\n"
-        "Il dosaggio raccomandato è 5mg/die.\n"
-    )
+    expected = "\nIl dosaggio raccomandato è 5mg/die.[^appunti]\n"
     assert templates.patch_snippet(
         heading="Warfarin", snippet="Il dosaggio raccomandato è 5mg/die.",
         source_basename="appunti.md",
     ) == expected
 
 
-def test_patch_snippet_stamps_under_the_header():
+def test_patch_snippet_stamps_right_above_the_prose():
     out = templates.patch_snippet(
         heading="Warfarin", snippet="Il dosaggio raccomandato è 5mg/die.",
         source_basename="appunti.md", valid_from="2023-05-08",
     )
-    header_i = out.index("## Additional notes")
-    stamp_i = out.index("<!-- silica:")
-    body_i = out.index("Il dosaggio raccomandato")
-    assert header_i < stamp_i < body_i
+    assert "<!-- silica: valid_from=2023-05-08 -->\nIl dosaggio raccomandato" in out
     assert parse_stamp(out) == {"valid_from": "2023-05-08"}
 
 
@@ -151,7 +145,8 @@ def test_execute_patch_stamps_the_block(tmp_vault):
 
     content = tmp_vault.read(path)
     assert parse_stamp(content) == {"valid_from": "2023-05-08"}
-    assert content.index("## Additional notes") < content.index("<!-- silica:")
+    assert "## Additional notes" not in content
+    assert content.index("<!-- silica:") < content.index("INR target 2.0-3.0.[^appunti]")
     assert "5mg/die" in content  # the pre-existing claim is untouched
 
 
@@ -208,3 +203,19 @@ def test_garbage_seen_is_refused_not_stamped(tmp_vault, monkeypatch):
     )
     assert calls.get("seen_override") is None
     assert calls  # the run itself still dispatched
+
+
+def test_a_citation_after_a_table_is_its_own_paragraph():
+    """A marker line straight after a table row is parsed as another row
+    (GFM, verified against GitHub's renderer 2026-09-05): the blank line is
+    what ends the table."""
+    from silica.kernel.write.templates import _cite
+
+    block = "| A | B |\n| --- | --- |\n| 1 | 2 |"
+    assert _cite(block, "src") == block + "\n\n[^src]"
+
+
+def test_a_citation_after_a_fence_needs_no_blank():
+    from silica.kernel.write.templates import _cite
+
+    assert _cite("```py\nx = 1\n```", "src") == "```py\nx = 1\n```\n\n[^src]"

@@ -56,7 +56,7 @@ def test_keep_sources_writes_leaf_and_links(tmp_vault):
     assert "source_id: src.md" in leaf
     assert "date: 2026-03-01" in leaf  # the source's own date is preserved
     note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
-    assert "## Sources" in note and "[[src]]" in note
+    assert "## Sources" in note and "[[sources/src]]" in note
     kinds = [inv.kind for _, inv, _ in fsm._run_inverses]
     assert kinds == [InverseOpKind.delete_created, InverseOpKind.restore_version]
 
@@ -102,7 +102,7 @@ def test_capture_always_writes_leaf_with_capture_date(tmp_vault):
 
     leaf = _vault_file("sources/session_2.md").read_text(encoding="utf-8")
     assert "date: 2023-05-20" in leaf and "alice said hello" in leaf
-    assert "[[session_2]]" in _vault_file("memory/Alice.md").read_text(encoding="utf-8")
+    assert "[[sources/session_2]]" in _vault_file("memory/Alice.md").read_text(encoding="utf-8")
 
 
 def test_sources_block_idempotent_on_reingest(tmp_vault):
@@ -115,7 +115,7 @@ def test_sources_block_idempotent_on_reingest(tmp_vault):
                                      keep_sources=True), "Inbox/src.md")
 
     note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
-    assert note.count("[[src]]") == 1 and note.count("## Sources") == 1
+    assert note.count("[[sources/src]]") == 1 and note.count("## Sources") == 1
 
 
 def test_second_source_appends_link_to_existing_block(tmp_vault):
@@ -127,7 +127,7 @@ def test_second_source_appends_link_to_existing_block(tmp_vault):
 
     note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
     assert note.count("## Sources") == 1
-    assert "[[a]]" in note and "[[b]]" in note
+    assert "[[a]]" in note and "[[sources/b]]" in note
 
 
 def test_prewritten_leaf_links_without_any_flag(tmp_vault):
@@ -141,7 +141,7 @@ def test_prewritten_leaf_links_without_any_flag(tmp_vault):
     finalize._write_source_leaf(fsm, "Inbox/topic.md")
 
     note = _vault_file("Concepts/T.md").read_text(encoding="utf-8")
-    assert "[[topic]]" in note
+    assert "[[sources/topic]]" in note
     # the pre-existing leaf is not rewritten
     assert "raw excerpts" in _vault_file("sources/topic.md").read_text(encoding="utf-8")
 
@@ -308,8 +308,8 @@ def test_grounded_lines_carry_the_leaf_id_and_its_definition(tmp_vault):
 
     note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
     assert f"{verbatim}[^src]" in note        # the claim carries the key
-    assert "[^src]: [[src]]" in note          # the key resolves to the leaf
-    assert "## Sources" in note and "[[src]]" in note
+    assert "[^src]: [[sources/src]]" in note          # the key resolves to the leaf
+    assert "## Sources" in note and "[[sources/src]]" in note
 
 
 def test_a_note_with_no_verbatim_line_gets_no_footnote(tmp_vault):
@@ -322,7 +322,7 @@ def test_a_note_with_no_verbatim_line_gets_no_footnote(tmp_vault):
 
     note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
     assert "[^src]" not in note
-    assert "## Sources" in note and "[[src]]" in note   # the block still lands
+    assert "## Sources" in note and "[[sources/src]]" in note   # the block still lands
 
 
 def test_leaf_in_frontmatter_does_not_suppress_the_sources_block(tmp_vault):
@@ -359,4 +359,115 @@ def test_relinking_the_same_leaf_twice_is_still_a_no_op(tmp_vault):
     twice = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
 
     assert once == twice
-    assert twice.count("[[src]]") == 1
+    assert twice.count("[[sources/src]]") == 1
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-04: the link is path-qualified and lands inside the block
+# ---------------------------------------------------------------------------
+
+def test_sources_link_is_path_qualified_so_a_spine_note_cannot_capture_it(tmp_vault):
+    """The outline lane writes a spine note with the source's own stem next to
+    the concept notes; a bare `[[Lezione 3]]` resolves to that sibling, so
+    every `## Sources` block pointed at the spine and the leaf was unreachable."""
+    tmp_vault.note("Inbox/Lezione 3.md", "verbatim words\n")
+    tmp_vault.note("ML/Lezione 3.md", "# Lezione 3\n1. [[A]]\n")
+    tmp_vault.note("ML/A.md", "# A\nbody\n")
+    fsm = _fsm([_entry("Lezione 3.md", "write", "ML/A")], keep_sources=True)
+
+    finalize._write_source_leaf(fsm, "Inbox/Lezione 3.md")
+
+    note = _vault_file("ML/A.md").read_text(encoding="utf-8")
+    assert "[[sources/Lezione 3]]" in note
+    assert "\n[[Lezione 3]]\n" not in note
+
+
+def test_second_source_link_lands_inside_the_existing_sources_block(tmp_vault):
+    """A patch appended after the block used to push the next link to EOF,
+    orphaned under whatever section came last."""
+    tmp_vault.note("Inbox/b.md", "more words\n")
+    tmp_vault.note("Concepts/A.md",
+                   "# A\n\n## Sources\n[[sources/a]]\n\n## Relations\n- applies [[X]]: y\n")
+    fsm = _fsm([_entry("b.md", "patch", "Concepts/A")], keep_sources=True)
+
+    finalize._write_source_leaf(fsm, "Inbox/b.md")
+
+    note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
+    block = note.split("## Sources", 1)[1].split("## Relations", 1)[0]
+    assert "[[sources/a]]" in block and "[[sources/b]]" in block
+    assert note.rstrip().endswith("- applies [[X]]: y")
+
+
+def test_a_legacy_bare_link_in_the_block_still_counts_as_linked(tmp_vault):
+    tmp_vault.note("Inbox/src.md", "words\n")
+    tmp_vault.note("Concepts/A.md", "# A\n\n## Sources\n[[src]]\n")
+    fsm = _fsm([_entry("src.md", "write", "Concepts/A")], keep_sources=True)
+
+    finalize._write_source_leaf(fsm, "Inbox/src.md")
+
+    note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
+    assert "[[sources/src]]" not in note and note.count("[[src]]") == 1
+
+
+def test_a_patch_marker_gets_its_definition_even_when_no_line_is_verbatim(tmp_vault):
+    """The patch executor cites distilled prose with the leaf's label; the
+    definition is CLEANUP's to write, or the marker dangles."""
+    tmp_vault.note("Inbox/src.md", "---\ndate: 2026-03-01\n---\nverbatim source words\n")
+    tmp_vault.note("Concepts/A.md", "# A\n\nDistilled, not verbatim.[^src]\n")
+    fsm = _fsm([_entry("src.md", "patch", "Concepts/A")], keep_sources=True)
+
+    finalize._write_source_leaf(fsm, "Inbox/src.md")
+    finalize._write_source_leaf(fsm, "Inbox/src.md")
+
+    note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
+    assert note.count("[^src]: [[sources/src]]") == 1
+
+
+def test_without_a_leaf_the_patch_marker_is_defined_as_plain_text(tmp_vault):
+    """`--no-keep-sources`: no leaf, no `## Sources` (the tier stays honest),
+    but the marker still resolves to the source's name."""
+    tmp_vault.note("Inbox/src.md", "words\n")
+    tmp_vault.note("Concepts/A.md", "# A\n\nDistilled.[^src]\n")
+    fsm = _fsm([_entry("src.md", "patch", "Concepts/A")])
+
+    finalize._write_source_leaf(fsm, "Inbox/src.md")
+    finalize._write_source_leaf(fsm, "Inbox/src.md")
+
+    note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
+    assert note.count("[^src]: src.md") == 1
+    assert "## Sources" not in note
+
+
+def test_attribute_lines_leaves_embeds_and_display_math_alone():
+    """An image embed or a formula is not a claim a reader can check against
+    the leaf; the marker lands on prose only (observed live 2026-09-04:
+    `![[img.jpg]][^Lezione-6]`)."""
+    from silica.kernel.write.provenance import attribute_lines
+
+    src = ("Il gradiente indica la direzione di massima crescita della funzione.\n"
+           "![[f55d1720baa2a486f64b0b06e2f6bdea915a214f1bdd38d54a50e3d99bd66912.jpg]]\n"
+           "$$x^{*} = \\arg \\min f(x) \\quad \\text{con } f \\text{ convessa}$$\n"
+           "$$\n\\boldsymbol{C} = \\boldsymbol{A} + \\boldsymbol{B} \\quad \\boldsymbol{C}_{i,j} = \\boldsymbol{A}_{i,j} + \\boldsymbol{B}_{i,j}\n$$\n")
+    out = attribute_lines("# N\n\n" + src, src, "src")
+
+    assert "Il gradiente indica la direzione di massima crescita della funzione.[^src]" in out
+    assert "]][^src]" not in out
+    assert "$$[^src]" not in out
+    assert "_{i,j}[^src]" not in out
+
+
+def test_leaf_upgrades_the_patch_executors_plain_definition_to_the_link(tmp_vault):
+    """The executor defines its marker as the source's name (it cannot know
+    whether a leaf will exist); once the leaf does, CLEANUP owns the
+    definition and points it at the leaf, leaving exactly one."""
+    tmp_vault.note("Inbox/src.md", "---\ndate: 2026-03-01\n---\nverbatim source words\n")
+    tmp_vault.note("Concepts/A.md", "# A\n\nDistilled.[^src]\n\n[^src]: src.md\n")
+    fsm = _fsm([_entry("src.md", "patch", "Concepts/A")], keep_sources=True)
+
+    finalize._write_source_leaf(fsm, "Inbox/src.md")
+    finalize._write_source_leaf(fsm, "Inbox/src.md")
+
+    note = _vault_file("Concepts/A.md").read_text(encoding="utf-8")
+    assert "[^src]: src.md" not in note
+    assert note.count("[^src]: [[sources/src]]") == 1
+    assert note.count("[^src]:") == 1
