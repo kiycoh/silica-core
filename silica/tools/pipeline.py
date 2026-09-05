@@ -11,10 +11,12 @@ exposed as silica_run_injector). Only the deferred retry is agent-facing.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 import logging
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from silica.driver import DRIVER
 from silica.tools import tool
@@ -134,12 +136,8 @@ def _prefers(candidate, incumbent) -> bool:
     return bool(a and b) and within(b, SAFE_WRITE_DIR) and not within(a, SAFE_WRITE_DIR)
 
 
-class ReconArgs(BaseModel):
-    inbox_file: str = Field(description="Path to the inbox file to analyze")
-    limit: int = Field(default=0, description="Limit for concept extraction")
-
-@tool(ReconArgs, cls="composed", internal=True)
-def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
+@tool(cls="composed", internal=True)
+def silica_recon(inbox_file: Annotated[str, Field(description='Path to the inbox file to analyze')], limit: Annotated[int, Field(description='Limit for concept extraction')] = 0) -> dict[str, Any]:
     """Mechanical extraction of concepts from an inbox file and searching for collisions in the vault."""
     from silica.kernel.text.recon import (
         collision_priority, is_title_match, mentions_whole_word, rank_hits,
@@ -241,13 +239,8 @@ def silica_recon(inbox_file: str, limit: int = 0) -> dict[str, Any]:
     }
 
 
-class PayloadArgs(BaseModel):
-    recon_report_path: str = Field(description="Path to the recon report JSON file")
-    max_concepts: int = Field(default=7, description="Maximum concepts per batch")
-    max_bytes: int = Field(default=80 * 1024, description="Maximum bytes (JSON size) per chunk")
-
-@tool(PayloadArgs, cls="composed", internal=True)
-def silica_payload(recon_report_path: str, max_concepts: int = 7, max_bytes: int = 80 * 1024) -> dict[str, Any]:
+@tool(cls="composed", internal=True)
+def silica_payload(recon_report_path: Annotated[str, Field(description='Path to the recon report JSON file')], max_concepts: Annotated[int, Field(description='Maximum concepts per batch')] = 7, max_bytes: Annotated[int, Field(description='Maximum bytes (JSON size) per chunk')] = 80 * 1024) -> dict[str, Any]:
     """Assembles payloads for the Distiller by pre-extracting snippets from the vault."""
     import orjson
     from silica.kernel.text.payload import build_payload
@@ -270,15 +263,9 @@ def silica_payload(recon_report_path: str, max_concepts: int = 7, max_bytes: int
     return {"payload": payload}
 
 
-class SanitizeArgs(BaseModel):
-    distiller_output_path: str = Field(description="Path to the raw distiller output JSON file")
-    verbatim_source: str | None = Field(
-        default=None,
-        description="The chunk's own inbox text; anchors verbatim-body escape repair per-site")
-
-@tool(SanitizeArgs, cls="composed", internal=True)
-def silica_sanitize(distiller_output_path: str,
-                    verbatim_source: str | None = None) -> dict[str, Any]:
+@tool(cls="composed", internal=True)
+def silica_sanitize(distiller_output_path: Annotated[str, Field(description='Path to the raw distiller output JSON file')],
+                    verbatim_source: Annotated[str | None, Field(description="The chunk's own inbox text; anchors verbatim-body escape repair per-site")] = None) -> dict[str, Any]:
     """Validates and sanitizes the JSON returned by Distiller workers."""
     from silica.kernel.text.sanitize import TruncatedArray, parse_json, normalize_ops
 
@@ -333,22 +320,14 @@ def silica_sanitize(distiller_output_path: str,
     return result
 
 
-class ValidateOpsArgs(BaseModel):
-    ops_json_path: str = Field(description="Path to the consolidated operations JSON file to validate")
-    payload_paths: list[str] = Field(default_factory=list, description="Paths to the original payload JSON files")
-    target_dir: str = Field(default="", description="Target folder in the vault")
-    hub: str = Field(default="", description="Hub note name")
-    future_ref_whitelist: list[str] = Field(default_factory=list, description="Optional whitelist of future reference note names")
-    profile: str | None = Field(default=None, description="Per-run distill profile (None = process-global resolution)")
-
-@tool(ValidateOpsArgs, cls="composed", internal=True)
+@tool(cls="composed", internal=True)
 def silica_validate_ops(
-    ops_json_path: str,
-    payload_paths: list[str] | None = None,
-    target_dir: str = "",
-    hub: str = "",
-    future_ref_whitelist: list[str] | None = None,
-    profile: str | None = None,
+    ops_json_path: Annotated[str, Field(description='Path to the consolidated operations JSON file to validate')],
+    payload_paths: Annotated[list[str] | None, Field(description='Paths to the original payload JSON files')] = None,
+    target_dir: Annotated[str, Field(description='Target folder in the vault')] = "",
+    hub: Annotated[str, Field(description='Hub note name')] = "",
+    future_ref_whitelist: Annotated[list[str] | None, Field(description='Optional whitelist of future reference note names')] = None,
+    profile: Annotated[str | None, Field(description='Per-run distill profile (None = process-global resolution)')] = None,
 ) -> dict[str, Any]:
     """Pre-write gate: checks structural validity and applies rejection threshold (10%).
 
@@ -378,6 +357,7 @@ def silica_validate_ops(
     cleared_parents: list[dict] = []
     cleared_links: list[dict] = []
     ungrounded: list[dict] = []
+    grounding: list[dict] = []
     normalized: dict[str, int] = {}
     validated_ops, rejected_ops = validate_operations(
         ops,
@@ -390,6 +370,7 @@ def silica_validate_ops(
         ungrounded_out=ungrounded,
         profile=profile,
         normalized_out=normalized,
+        grounding_out=grounding,
     )
 
     total = len(ops)
@@ -417,6 +398,7 @@ def silica_validate_ops(
         "cleared_parents": cleared_parents,
         "cleared_links": cleared_links,
         "ungrounded": ungrounded,
+        "grounding": grounding,
         # Malformed-but-unambiguous ops repaired rather than rejected, per
         # pattern. The reject total says an op failed; this says which prompt
         # rule the model keeps missing.
@@ -424,11 +406,8 @@ def silica_validate_ops(
     }
 
 
-class BulkWriteArgs(BaseModel):
-    ops_json_path: str = Field(description="Path to the validated operations JSON file")
-
-@tool(BulkWriteArgs, cls="composed", collapse="eager", internal=True)
-def silica_bulk_write(ops_json_path: str) -> dict[str, Any]:
+@tool(cls="composed", collapse="eager", internal=True)
+def silica_bulk_write(ops_json_path: Annotated[str, Field(description='Path to the validated operations JSON file')]) -> dict[str, Any]:
     """Applies write/patch/overwrite/delete operations in batch in the vault."""
     from silica.kernel.write.bulk import execute_operations
 
@@ -441,13 +420,8 @@ def silica_bulk_write(ops_json_path: str) -> dict[str, Any]:
     return res.model_dump()
 
 
-class LintArgs(BaseModel):
-    note_name: str = Field(description="Name of the note to lint")
-    op_type: str = Field(default="", description="Operation type (write/patch/overwrite) for conditional checks")
-    hub: str = Field(default="", description="Hub note name for wikilink validation")
-
-@tool(LintArgs, cls="composed", internal=True)
-def silica_lint(note_name: str, op_type: str = "", hub: str = "") -> dict[str, Any]:
+@tool(cls="composed", internal=True)
+def silica_lint(note_name: Annotated[str, Field(description='Name of the note to lint')], op_type: Annotated[str, Field(description='Operation type (write/patch/overwrite) for conditional checks')] = "", hub: Annotated[str, Field(description='Hub note name for wikilink validation')] = "") -> dict[str, Any]:
     """Post-write gate: executes the OFM linter to find structural regressions."""
     from silica.kernel.link.linter import validate_note
 
@@ -461,11 +435,8 @@ def silica_lint(note_name: str, op_type: str = "", hub: str = "") -> dict[str, A
     }
 
 
-class DeferredRetryArgs(BaseModel):
-    content_hash: str = Field(description="Content hash of the deferred bundle to retry (from silica_deferred_list)")
-
-@tool(DeferredRetryArgs, cls="composed", collapse="eager")
-def silica_deferred_retry(content_hash: str) -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_deferred_retry(content_hash: Annotated[str, Field(description='Content hash of the deferred bundle to retry (from silica_deferred_list)')]) -> dict[str, Any]:
     """Retry writing a deferred op bundle: re-validates against the current vault,
     snapshots, writes the ops that now pass, and updates the bundle.
 
@@ -620,19 +591,11 @@ def _record_recovered_writes(txn, validated, content_hash: str, bundle: dict) ->
         logger.debug("anneal: provenance append failed (non-fatal): %s", exc)
 
 
-class SubmitRepairedOpsArgs(BaseModel):
-    content_hash: str = Field(
-        description="Hash of the deferred bundle being repaired (given in the repair task)")
-    ops: list[dict] = Field(
-        description="Corrected ops in the standard op schema. Bodies are plain "
-                    "strings: real line breaks, single backslashes.")
-
-
 # collapse stays "lazy" (the default) on purpose: the verdict IS the feedback,
 # and an eager stub would erase the rejection reasons from the very history the
 # steer loop iterates on.
-@tool(SubmitRepairedOpsArgs, cls="composed", internal=True)
-def submit_repaired_ops(content_hash: str, ops: list[dict]) -> dict[str, Any]:
+@tool(cls="composed", internal=True)
+def submit_repaired_ops(content_hash: Annotated[str, Field(description='Hash of the deferred bundle being repaired (given in the repair task)')], ops: Annotated[list[dict], Field(description='Corrected ops in the standard op schema. Bodies are plain strings: real line breaks, single backslashes.')]) -> dict[str, Any]:
     """Validate and write repaired ops for a deferred bundle. Ops that pass the
     validator are written to the vault immediately and leave the bundle; ops
     that fail come back under "rejected" with the exact validator reason.
@@ -713,15 +676,8 @@ def submit_repaired_ops(content_hash: str, ops: list[dict]) -> dict[str, Any]:
     return result
 
 
-class AnnealArgs(BaseModel):
-    steer: bool = Field(
-        default=False,
-        description="After the mechanical pass, hand each bundle's still-failing ops to the escalation model (a bounded repair loop per bundle)",
-    )
-    limit: int = Field(default=0, description="Max bundles to process (0 = all)")
-
-@tool(AnnealArgs, cls="composed", collapse="eager")
-def silica_anneal(steer: bool = False, limit: int = 0) -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_anneal(steer: Annotated[bool, Field(description="After the mechanical pass, hand each bundle's still-failing ops to the escalation model (a bounded repair loop per bundle)")] = False, limit: Annotated[int, Field(description='Max bundles to process (0 = all)')] = 0) -> dict[str, Any]:
     """Boundary annealing: sweep EVERY deferred bundle through the mechanical
     retry (re-validate against the current vault, write what now passes), then
     with steer=True hand each bundle's still-failing ops to the escalation

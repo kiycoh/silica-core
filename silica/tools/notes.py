@@ -8,10 +8,11 @@ counterparts of the batch pipeline in silica.tools.pipeline.
 """
 from __future__ import annotations
 
-import logging
-from typing import Any
 
-from pydantic import BaseModel, Field
+import logging
+from typing import Annotated, Any
+
+from pydantic import Field
 
 from silica.driver import DRIVER
 from silica.tools import tool
@@ -20,14 +21,17 @@ from silica.kernel.write.ops import Op, OpType
 logger = logging.getLogger(__name__)
 
 
-_DOCUMENTS_FIELD = Field(
-    default=None,
-    description="Repo-relative paths (file or directory) whose rationale this note "
-                "records — the why, not the what: closed directions, measured "
-                "ceilings, constraints not derivable from the source. Conventionally "
-                "the note lives at <wiki_dir>/<repo-path>.md so the vault mirrors "
-                "the code tree. /stale flags the note once a commit moves the "
-                "bound path past the recorded code_ref.",
+# One description, two tools: write_note and patch_note bind `documents:` the
+# same way, and a model that learns the contract on one must read the same words
+# on the other. Kept as a bare string, not a Field: the parameter's default now
+# lives in the signature, and pydantic refuses a default declared twice.
+_DOCUMENTS_DESC = (
+    "Repo-relative paths (file or directory) whose rationale this note "
+    "records — the why, not the what: closed directions, measured "
+    "ceilings, constraints not derivable from the source. Conventionally "
+    "the note lives at <wiki_dir>/<repo-path>.md so the vault mirrors "
+    "the code tree. /stale flags the note once a commit moves the "
+    "bound path past the recorded code_ref."
 )
 
 
@@ -51,22 +55,14 @@ def _bind_documents(entries: list[str]) -> tuple[list[str], str | None, str | No
     return docs, ref, None
 
 
-class PatchNoteArgs(BaseModel):
-    name: str = Field(description="Name or vault-relative path of the note to patch")
-    heading: str = Field(description="Concept/section heading the snippet is filed under")
-    snippet: str = Field(description="Distilled body text to append to the note")
-    source_basename: str = Field(description="Provenance: source filename this snippet derives from")
-    hub: str | None = Field(default=None, description="Optional [[Hub]] to link in frontmatter if missing")
-    documents: list[str] | None = _DOCUMENTS_FIELD
-
-@tool(PatchNoteArgs, cls="composed", collapse="eager")
+@tool(cls="composed", collapse="eager")
 def silica_patch_note(
-    name: str,
-    heading: str,
-    snippet: str,
-    source_basename: str,
-    hub: str | None = None,
-    documents: list[str] | None = None,
+    name: Annotated[str, Field(description='Name or vault-relative path of the note to patch')],
+    heading: Annotated[str, Field(description='Concept/section heading the snippet is filed under')],
+    snippet: Annotated[str, Field(description='Distilled body text to append to the note')],
+    source_basename: Annotated[str, Field(description='Provenance: source filename this snippet derives from')],
+    hub: Annotated[str | None, Field(description='Optional [[Hub]] to link in frontmatter if missing')] = None,
+    documents: Annotated[list[str] | None, Field(description=_DOCUMENTS_DESC)] = None,
 ) -> dict[str, Any]:
     """Append a snippet under a heading in a single EXISTING note — the fast path
     for interactive edits.
@@ -162,16 +158,9 @@ def silica_patch_note(
             "checkpoint_depth": checkpoint_depth, "checkpoint_ok": checkpoint_ok}
 
 
-class FlagNoteArgs(BaseModel):
-    name: str = Field(description="Name or vault-relative path of the note to flag")
-    reason: str = Field(default="", description="Why the note is wrong or stale, in a few words")
-    clear: bool = Field(default=False, description="Clear a previously set flag instead of setting one")
-    ref: str = Field(default="", description="With clear: resolve only this entry of the note's `contradictions:` list, verbatim; default resolves every open one")
-
-
-@tool(FlagNoteArgs, cls="composed", collapse="eager")
-def silica_flag_note(name: str, reason: str = "", clear: bool = False,
-                     ref: str = "") -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_flag_note(name: Annotated[str, Field(description='Name or vault-relative path of the note to flag')], reason: Annotated[str, Field(description='Why the note is wrong or stale, in a few words')] = "", clear: Annotated[bool, Field(description='Clear a previously set flag instead of setting one')] = False,
+                     ref: Annotated[str, Field(description="With clear: resolve only this entry of the note's `contradictions:` list, verbatim; default resolves every open one")] = "") -> dict[str, Any]:
     """Flag an EXISTING note as wrong or stale, found while USING it: marks
     `contested` in frontmatter (clear with clear=True). Contested notes are
     demoted and marked at recall — never silently dropped — and surfaced in
@@ -179,7 +168,6 @@ def silica_flag_note(name: str, reason: str = "", clear: bool = False,
     Revertible with /undo.
     """
     import datetime
-    import os
 
     from silica.kernel.write.checkpoints import get_checkpoint_store
     from silica.kernel.write.contested import (
@@ -187,6 +175,7 @@ def silica_flag_note(name: str, reason: str = "", clear: bool = False,
         mark_contested,
         resolve_contested,
     )
+    from silica.kernel.write.notetype import agent_id
 
     try:
         nc = DRIVER.read_note(name)
@@ -195,7 +184,9 @@ def silica_flag_note(name: str, reason: str = "", clear: bool = False,
 
     path = nc.ref.path or name
     prior_content = nc.content
-    who = os.environ.get("SILICA_AGENT_ID") or "user"
+    # `user` only when no agent identity exists at all: a person at the REPL.
+    # An MCP client always has one (the server sets it from the handshake).
+    who = agent_id() or "user"
     today = datetime.date.today().isoformat()
 
     if clear:
@@ -240,29 +231,17 @@ def silica_flag_note(name: str, reason: str = "", clear: bool = False,
             "checkpoint_depth": checkpoint_depth, "checkpoint_ok": checkpoint_ok}
 
 
-class WriteNoteArgs(BaseModel):
-    path: str = Field(description="Vault-relative path for the new note (e.g. 'Computer Science/Computer Vision.md')")
-    body: str = Field(description="Markdown body only — NO YAML frontmatter; it is applied mechanically from the vault template")
-    title: str | None = Field(default=None, description="H1 title; defaults to the filename stem")
-    tags: list[str] | None = Field(default=None, description="Frontmatter tags; normalized automatically")
-    related: list[str] | None = Field(default=None, description="Related note names, rendered as frontmatter wikilinks")
-    parent: str | None = Field(default=None, description="Parent note name for the 'parent note' frontmatter key")
-    template: str | None = Field(default=None, description="Named template from the vault's templates dir; 'none' skips the skeleton (AI/last-modified floor still applied)")
-    props: dict[str, str] | None = Field(default=None, description="Extra scalar frontmatter keys, e.g. {'type': 'syllabus'}; AI/last modified/verified are reserved")
-    documents: list[str] | None = _DOCUMENTS_FIELD
-
-
-@tool(WriteNoteArgs, cls="composed", collapse="eager")
+@tool(cls="composed", collapse="eager")
 def silica_write_note(
-    path: str,
-    body: str,
-    title: str | None = None,
-    tags: list[str] | None = None,
-    related: list[str] | None = None,
-    parent: str | None = None,
-    template: str | None = None,
-    props: dict[str, str] | None = None,
-    documents: list[str] | None = None,
+    path: Annotated[str, Field(description="Vault-relative path for the new note (e.g. 'Computer Science/Computer Vision.md')")],
+    body: Annotated[str, Field(description='Markdown body only — NO YAML frontmatter; it is applied mechanically from the vault template')],
+    title: Annotated[str | None, Field(description='H1 title; defaults to the filename stem')] = None,
+    tags: Annotated[list[str] | None, Field(description='Frontmatter tags; normalized automatically')] = None,
+    related: Annotated[list[str] | None, Field(description='Related note names, rendered as frontmatter wikilinks')] = None,
+    parent: Annotated[str | None, Field(description="Parent note name for the 'parent note' frontmatter key")] = None,
+    template: Annotated[str | None, Field(description="Named template from the vault's templates dir; 'none' skips the skeleton (AI/last-modified floor still applied)")] = None,
+    props: Annotated[dict[str, str] | None, Field(description="Extra scalar frontmatter keys, e.g. {'type': 'syllabus'}; AI/last modified/verified are reserved")] = None,
+    documents: Annotated[list[str] | None, Field(description=_DOCUMENTS_DESC)] = None,
 ) -> dict[str, Any]:
     """Create a new note — the fast path for single-note creation.
 

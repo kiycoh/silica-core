@@ -16,15 +16,6 @@ call sites import (and monkeypatch) tool functions through this namespace.
 from __future__ import annotations
 
 from silica.tools.pipeline import (  # noqa: F401
-    BulkWriteArgs,
-    AnnealArgs,
-    DeferredRetryArgs,
-    LintArgs,
-    PayloadArgs,
-    ReconArgs,
-    SanitizeArgs,
-    SubmitRepairedOpsArgs,
-    ValidateOpsArgs,
     _same_note,
     silica_anneal,
     silica_bulk_write,
@@ -37,28 +28,15 @@ from silica.tools.pipeline import (  # noqa: F401
     submit_repaired_ops,
 )
 from silica.tools.notes import (  # noqa: F401
-    PatchNoteArgs,
-    WriteNoteArgs,
     silica_patch_note,
     silica_write_note,
 )
 from silica.tools.events import (  # noqa: F401
-    AgendaArgs,
-    EventCreateArgs,
-    EventUpdateArgs,
     silica_agenda,
     silica_event_create,
     silica_event_update,
 )
 from silica.tools.graph import (  # noqa: F401
-    AutolinkArgs,
-    BacklinkArgs,
-    CooccurrenceRefreshArgs,
-    EmbedRefreshArgs,
-    GraphExportArgs,
-    LexicalRefreshArgs,
-    SemanticSearchArgs,
-    VaultReportArgs,
     _in_folder,
     silica_autolink,
     silica_backlink,
@@ -72,22 +50,12 @@ from silica.tools.graph import (  # noqa: F401
     silica_vault_report,
 )
 from silica.tools.aliases import (  # noqa: F401
-    AliasesArgs,
     silica_aliases,
 )
 from silica.tools.curate import (  # noqa: F401
-    CurateArgs,
     silica_curate,
 )
 from silica.tools.runners import (  # noqa: F401
-    DedupFolderArgs,
-    DedupPairsArgs,
-    EnrichBatchArgs,
-    GenerateTaxonomyArgs,
-    LedgerDigestArgs,
-    RefineBatchArgs,
-    RunInjectorArgs,
-    RunOrganizerArgs,
     silica_dedup,
     silica_dedup_pairs,
     silica_enrich_batch,

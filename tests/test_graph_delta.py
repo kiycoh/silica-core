@@ -357,9 +357,13 @@ def test_markdown_omits_delta_sections_when_empty(synthetic_graph):
 # ---------------------------------------------------------------------------
 
 def test_vault_report_tool_exposes_with_cooccurrence_flag():
-    from silica.tools.composed import VaultReportArgs
-    args = VaultReportArgs()
-    assert args.with_cooccurrence is False  # default off, opt-in like with_embeddings
+    import silica.tools.composed  # noqa: F401  (registers the tool)
+    from silica.tools import TOOLS
+
+    # The args model is derived from the signature, so the schema the model
+    # sees IS the function's own default; read it where the model reads it.
+    fields = TOOLS["silica_vault_report"].params_model.model_fields
+    assert fields["with_cooccurrence"].default is False  # opt-in, like with_embeddings
 
 
 def test_delta_report_json_serializable(delta_report, tmp_path):

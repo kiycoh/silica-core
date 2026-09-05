@@ -1951,9 +1951,14 @@ def test_the_injector_tool_keeps_sources_like_nucleate_does():
     produced notes whose source could never be checked."""
     import inspect
 
-    from silica.tools.runners import RunInjectorArgs, silica_run_injector
+    from silica.tools import TOOLS
+    from silica.tools.runners import silica_run_injector
 
-    assert RunInjectorArgs.model_fields["keep_sources"].default is True
+    # One declaration since the args model is derived from the signature: the
+    # schema and the function can no longer disagree, so what is still worth
+    # pinning is the VALUE both of them carry.
+    assert TOOLS["silica_run_injector"].params_model.model_fields[
+        "keep_sources"].default is True
     fn = getattr(silica_run_injector, "__wrapped__", silica_run_injector)
     assert inspect.signature(fn).parameters["keep_sources"].default is True
 

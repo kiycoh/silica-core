@@ -8,16 +8,17 @@ passes, the vis.js graph export, and the structural vault report.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 import logging
 import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from silica.driver import DRIVER
 from silica.tools import tool
-from silica.tools.atomic import EmptyArgs
 
 logger = logging.getLogger(__name__)
 
@@ -25,27 +26,9 @@ logger = logging.getLogger(__name__)
 from silica.kernel.recall.paths import in_folder as _in_folder  # canonical folder-scope predicate
 
 
-class GraphExportArgs(BaseModel):
-    output_path: str = Field(
-        default="graph.html",
-        description="Filesystem path for the output HTML file (e.g. 'graph.html' or '/tmp/vault_graph.html')",
-    )
-    folder: str = Field(
-        default="",
-        description="Vault-relative folder to restrict scope (empty = entire vault)",
-    )
-    title: str = Field(
-        default="Vault Graph",
-        description="Title shown in the visualization header",
-    )
-    knn_k: int = Field(
-        default=6,
-        description="semantic overlay: nearest neighbours per note (SIMILAR edge density)",
-    )
-
-@tool(GraphExportArgs, cls="composed")
-def silica_graph_export(output_path: str = "graph.html", folder: str = "",
-                        title: str = "Vault Graph", knn_k: int = 6) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_graph_export(output_path: Annotated[str, Field(description="Filesystem path for the output HTML file (e.g. 'graph.html' or '/tmp/vault_graph.html')")] = "graph.html", folder: Annotated[str, Field(description='Vault-relative folder to restrict scope (empty = entire vault)')] = "",
+                        title: Annotated[str, Field(description='Title shown in the visualization header')] = "Vault Graph", knn_k: Annotated[int, Field(description='semantic overlay: nearest neighbours per note (SIMILAR edge density)')] = 6) -> dict[str, Any]:
     """Self-contained interactive HTML graph of the vault: the wikilink graph
     (Louvain-clustered; ghost nodes mark unresolved links) plus a toggleable
     embedding k-NN overlay that places link-orphans next to their semantic
@@ -66,12 +49,8 @@ def silica_graph_export(output_path: str = "graph.html", folder: str = "",
     return export_graph(output_path=output_path, folder=folder, title=title, knn_k=knn_k)
 
 
-class MindmapArgs(BaseModel):
-    note_path: str = Field(description="Vault-relative path of the note to root the map on")
-    force: bool = Field(default=False, description="Overwrite an existing maps/<stem>.canvas (defaults to no-clobber)")
-
-@tool(MindmapArgs, cls="composed")
-def silica_mindmap(note_path: str, force: bool = False) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_mindmap(note_path: Annotated[str, Field(description='Vault-relative path of the note to root the map on')], force: Annotated[bool, Field(description='Overwrite an existing maps/<stem>.canvas (defaults to no-clobber)')] = False) -> dict[str, Any]:
     """Radial mind-map rooted on one note, written to maps/<stem>.canvas
     (editable in Obsidian). Deterministic: BFS over wikilinks plus the latent
     relatedness leg, radial wedges by community. No-clobber: an existing map
@@ -116,13 +95,8 @@ def silica_mindmap(note_path: str, force: bool = False) -> dict[str, Any]:
     return {"path": str(out), "nodes": len(mv.nodes), "edges": len(mv.edges)}
 
 
-class AutolinkArgs(BaseModel):
-    note_paths: list[str] | None = Field(default=None, description="List of vault-relative paths to autolink")
-    note_path: str = Field(default="", description="Vault-relative path of the note to autolink (legacy single-file)")
-    use_candidates: bool = Field(default=True, description="Use embedding candidates to focus autolinking (requires index)")
-
-@tool(AutolinkArgs, cls="composed", collapse="eager")
-def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", use_candidates: bool = True) -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_autolink(note_paths: Annotated[list[str] | None, Field(description='List of vault-relative paths to autolink')] = None, note_path: Annotated[str, Field(description='Vault-relative path of the note to autolink (legacy single-file)')] = "", use_candidates: Annotated[bool, Field(description='Use embedding candidates to focus autolinking (requires index)')] = True) -> dict[str, Any]:
     """Scan the given notes for mentions of existing vault titles and wrap them
     as wikilinks. Skips frontmatter, code, math, headings, already-linked text;
     only links titles that exist (graph-safe).
@@ -242,12 +216,8 @@ def silica_autolink(note_paths: list[str] | None = None, note_path: str = "", us
     return result
 
 
-class BacklinkArgs(BaseModel):
-    new_titles: list[str] = Field(description="Titles of notes just created in this run")
-    neighbourhood: list[str] = Field(description="Vault-relative paths of candidate notes to scan")
-
-@tool(BacklinkArgs, cls="composed", collapse="eager")
-def silica_backlink(new_titles: list[str], neighbourhood: list[str]) -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_backlink(new_titles: Annotated[list[str], Field(description='Titles of notes just created in this run')], neighbourhood: Annotated[list[str], Field(description='Vault-relative paths of candidate notes to scan')]) -> dict[str, Any]:
     """Inject wikilinks to newly-created notes into pre-existing neighbouring notes.
 
     For each note in `neighbourhood`, wraps mentions of any title in `new_titles`
@@ -370,14 +340,8 @@ def _facade_search(text: str, k: int, memory: bool = True, folder: str = "") -> 
     }
 
 
-class SemanticSearchArgs(BaseModel):
-    query: str = Field(description="Free-form query text to embed and search against the vault index")
-    k: int = Field(default=5, description="Number of results to return")
-    memory: bool = Field(default=True, description="Include the personal-memory lane (ADR-0019). Pass false for questions scoped to THIS vault — repo and code questions — so an unrelated personal vault cannot occupy result slots.")
-    folder: str = Field(default="", description="Only notes under this vault folder (e.g. 'docs/adr'). Empty = whole vault.")
-
-@tool(SemanticSearchArgs, cls="composed")
-def silica_semantic_search(query: str, k: int = 5, memory: bool = True, folder: str = "") -> dict[str, Any]:
+@tool(cls="composed")
+def silica_semantic_search(query: Annotated[str, Field(description='Free-form query text to embed and search against the vault index')], k: Annotated[int, Field(description='Number of results to return')] = 5, memory: Annotated[bool, Field(description='Include the personal-memory lane (ADR-0019). Pass false for questions scoped to THIS vault — repo and code questions — so an unrelated personal vault cannot occupy result slots.')] = True, folder: Annotated[str, Field(description="Only notes under this vault folder (e.g. 'docs/adr'). Empty = whole vault.")] = "") -> dict[str, Any]:
     """Find vault notes by MEANING (embeddings + co-occurrence fused, reranked).
 
     Use for "what do I have about X" when the exact wording is unknown;
@@ -395,17 +359,11 @@ def silica_semantic_search(query: str, k: int = 5, memory: bool = True, folder: 
     return {"query": query, **_facade_search(query, k=k, memory=memory, folder=folder)}
 
 
-class RecallArgs(BaseModel):
-    query: str = Field(description="The question or topic to recall memory for")
-    k: int = Field(default=15, description="Maximum number of notes contributing to the context")
-    memory: bool = Field(default=True, description="Include the personal-memory lane and its facts (ADR-0019). Pass false for questions scoped to THIS vault — repo and code questions — so an unrelated personal vault cannot occupy context slots.")
-    vault: str = Field(default="", description="Peek: path of another Silica vault to answer from (see silica_vaults). Read-only; the session's vault does not change.")
-    folder: str = Field(default="", description="Only notes under this vault folder (e.g. 'docs/adr', 'silica'). Empty = whole vault. Use it when a subtree of unrelated notes (research on other products, fixtures) keeps taking the slots.")
-
-
-@tool(RecallArgs, cls="composed")
-def silica_recall(query: str, k: int = 15, memory: bool = True, vault: str = "",
-                  folder: str = "") -> dict[str, Any]:
+@tool(cls="composed")
+def silica_recall(query: Annotated[str, Field(description='The question or topic to recall memory for')], k: Annotated[int, Field(description='Maximum number of notes contributing to the context')] = 15, memory: Annotated[bool, Field(description='Include the personal-memory lane and its facts (ADR-0019). Pass false for questions scoped to THIS vault — repo and code questions — so an unrelated personal vault cannot occupy context slots.')] = True, vault: Annotated[str, Field(description="Peek: path of another Silica vault to answer from (see silica_vaults). Read-only; the session's vault does not change.")] = "",
+                  folder: Annotated[str, Field(description="Only notes under this vault folder (e.g. 'docs/adr', 'silica'). Empty = whole vault. Use it when a subtree of unrelated notes (research on other products, fixtures) keeps taking the slots.")] = "",
+                  min_trust: Annotated[str, Field(description="Trust floor: 'human' (a person wrote or vouched for it), 'grounded' (agent note with its verbatim source leaf), 'distilled' (agent note without one), 'kept' (a /keep of a web answer). Empty = no floor. A floor drops notes after retrieval, so `filtered` says how many you did not see.")] = "",
+                  lifecycle: Annotated[str, Field(description="Only notes in this state: 'active', 'review' (gate soft flag), 'contested' (unresolved contradiction), 'superseded'. Empty = every state; the header names the non-active ones anyway.")] = "") -> dict[str, Any]:
     """Assemble an answer-ready memory context for a question: fused retrieval,
     each note's query-densest window under a rank/evidence/date header,
     recalled personal facts first. Use when ANSWERING from vault memory
@@ -421,13 +379,24 @@ def silica_recall(query: str, k: int = 15, memory: bool = True, vault: str = "",
 
     from silica.kernel.code import codedocs
 
+    from silica.kernel.write.contested import LIFECYCLES, TRUST_ORDER
+
+    min_trust, lifecycle = min_trust.strip().lower(), lifecycle.strip().lower()
+    if min_trust and min_trust not in TRUST_ORDER:
+        return {"query": query, "error": f"unknown min_trust '{min_trust}'; one of "
+                + ", ".join(sorted(TRUST_ORDER, key=TRUST_ORDER.get, reverse=True)),
+                "context": "", "notes": [], "partial": [], "facts": 0}
+    if lifecycle and lifecycle not in LIFECYCLES:
+        return {"query": query, "error": f"unknown lifecycle '{lifecycle}'; one of "
+                + ", ".join(LIFECYCLES), "context": "", "notes": [], "partial": [], "facts": 0}
     peek = _peek_target(vault)
     if isinstance(peek, dict):  # a refusal, already shaped as the reply
         return {"query": query, **peek}
     rr: dict[str, Any] = {"reranked": False}
     p = perceive(query, now=datetime.date.today().isoformat(), k=k,
                  use_memory=memory, vault=peek, rerank_stats=rr,
-                 folder=folder.strip() or None)
+                 folder=folder.strip() or None,
+                 min_trust=min_trust or None, lifecycle=lifecycle or None)
     # Staleness is the ACTIVE vault's code lane; a peeked vault's paths would
     # only ever match it by coincidence.
     stale_map = {} if peek else _peek_stale()
@@ -446,6 +415,10 @@ def silica_recall(query: str, k: int = 15, memory: bool = True, vault: str = "",
            "partial": [b.path for b in p.blocks
                        if b.origin != "memory" and b.excerpt.strip() != b.body.strip()],
            "facts": len(p.fact_hits)}
+    if p.filtered:
+        out["filtered"] = p.filtered  # the model must know it saw less than retrieval found
+    if p.all_non_active:
+        out["all_non_active"] = True  # the context opens with the abstain rule (M3)
     if not rr.get("reranked"):
         # A top-level key, not a per-hit flag: the caller reads `context` and
         # never looks at scores, so the one place it can learn the ordering is
@@ -503,13 +476,8 @@ def _peek_target(vault: str) -> str | dict | None:
     return str(target)
 
 
-class VaultsArgs(BaseModel):
-    query: str = Field(default="", description="Question to score each vault against; empty = the plain list")
-    k: int = Field(default=3, description="Top titles per vault")
-
-
-@tool(VaultsArgs, cls="atomic")
-def silica_vaults(query: str = "", k: int = 3) -> dict[str, Any]:
+@tool(cls="atomic")
+def silica_vaults(query: Annotated[str, Field(description='Question to score each vault against; empty = the plain list')] = "", k: Annotated[int, Field(description='Top titles per vault')] = 3) -> dict[str, Any]:
     """The Silica vaults this machine knows (active, personal memory, adopted
     Obsidian vaults): name, path, brief, write_dir, coverage. With `query`,
     each row adds `top` titles and `rerank`, to tell WHICH vault to read with
@@ -527,14 +495,8 @@ def silica_vaults(query: str = "", k: int = 3) -> dict[str, Any]:
     return {"query": query, "active": active, **out}
 
 
-class TimelineArgs(BaseModel):
-    start: str = Field(default="", description="Inclusive ISO start date (empty = unbounded)")
-    end: str = Field(default="", description="Inclusive ISO end date (empty = unbounded)")
-    limit: int = Field(default=50, description="Maximum rows; on overflow the most recent are kept")
-
-
-@tool(TimelineArgs, cls="composed")
-def silica_timeline(start: str = "", end: str = "", limit: int = 50) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_timeline(start: Annotated[str, Field(description='Inclusive ISO start date (empty = unbounded)')] = "", end: Annotated[str, Field(description='Inclusive ISO end date (empty = unbounded)')] = "", limit: Annotated[int, Field(description='Maximum rows; on overflow the most recent are kept')] = 50) -> dict[str, Any]:
     """Chronological index of the vault's dated notes, oldest first — for
     ORDERING and TIME questions ("when did X happen", "most recent Z"). Reads
     `date` frontmatter; undated notes are excluded. Order here, then
@@ -556,13 +518,8 @@ def silica_timeline(start: str = "", end: str = "", limit: int = 50) -> dict[str
             "total_dated": t["total_dated"], "dropped": t["dropped"]}
 
 
-class RelatedArgs(BaseModel):
-    note: str = Field(description="Note name (wikilink-style) or vault-relative path to find related notes for")
-    k: int = Field(default=5, description="Number of results to return")
-    memory: bool = Field(default=True, description="Include the personal-memory lane (ADR-0019). Pass false for questions scoped to THIS vault — repo and code questions — so an unrelated personal vault cannot occupy result slots.")
-
-@tool(RelatedArgs, cls="composed")
-def silica_related(note: str, k: int = 5, memory: bool = True) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_related(note: Annotated[str, Field(description='Note name (wikilink-style) or vault-relative path to find related notes for')], k: Annotated[int, Field(description='Number of results to return')] = 5, memory: Annotated[bool, Field(description='Include the personal-memory lane (ADR-0019). Pass false for questions scoped to THIS vault — repo and code questions — so an unrelated personal vault cannot occupy result slots.')] = True) -> dict[str, Any]:
     """Given an EXISTING note (by name or path), the notes most related to it —
     embeddings + co-occurrence fused into one ranked shortlist, then reranked.
 
@@ -711,13 +668,8 @@ def silica_related(note: str, k: int = 5, memory: bool = True) -> dict[str, Any]
     return out
 
 
-class ConceptsArgs(BaseModel):
-    term: str = Field(default="", description="A single word/concept to look up in the vault's co-occurrence graph")
-    note: str = Field(default="", description="An existing note (name or path): return ITS concepts instead of a term's neighbourhood")
-    k: int = Field(default=10, description="Number of neighbouring concepts and containing notes to return")
-
-@tool(ConceptsArgs, cls="composed")
-def silica_concepts(term: str = "", note: str = "", k: int = 10) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_concepts(term: Annotated[str, Field(description="A single word/concept to look up in the vault's co-occurrence graph")] = "", note: Annotated[str, Field(description="An existing note (name or path): return ITS concepts instead of a term's neighbourhood")] = "", k: Annotated[int, Field(description='Number of neighbouring concepts and containing notes to return')] = 10) -> dict[str, Any]:
     """The vault's concepts (deterministic co-occurrence graph, embedder-free).
 
     `term=`: canonical label, centrality, top co-occurring concepts, top notes
@@ -787,12 +739,8 @@ def silica_concepts(term: str = "", note: str = "", k: int = 10) -> dict[str, An
     return out
 
 
-class EmbedRefreshArgs(BaseModel):
-    folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
-    force: bool = Field(default=False, description="Re-embed all notes, even if already indexed")
-
-@tool(EmbedRefreshArgs, cls="composed", collapse="eager")
-def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_embed_refresh(folder: Annotated[str, Field(description='Vault-relative folder to restrict indexing (empty = entire vault)')] = "", force: Annotated[bool, Field(description='Re-embed all notes, even if already indexed')] = False) -> dict[str, Any]:
     """Build or refresh the vault embedding index.
 
     Powers silica_semantic_search, silica_related, and silica_dedup — run it
@@ -856,12 +804,8 @@ def silica_embed_refresh(folder: str = "", force: bool = False) -> dict[str, Any
     return out
 
 
-class CooccurrenceRefreshArgs(BaseModel):
-    folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
-    force: bool = Field(default=False, description="Re-process all notes, even if already indexed")
-
-@tool(CooccurrenceRefreshArgs, cls="composed", collapse="eager")
-def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_cooccurrence_refresh(folder: Annotated[str, Field(description='Vault-relative folder to restrict indexing (empty = entire vault)')] = "", force: Annotated[bool, Field(description='Re-process all notes, even if already indexed')] = False) -> dict[str, Any]:
     """Build or refresh the co-occurrence index: a deterministic concept graph
     from note text, works without the embedder. Powers cluster naming and
     silica_vault_report signals. Incremental (force=True to redo). Seed once
@@ -929,15 +873,11 @@ def silica_cooccurrence_refresh(folder: str = "", force: bool = False) -> dict[s
     }
 
 
-class LexicalRefreshArgs(BaseModel):
-    folder: str = Field(default="", description="Vault-relative folder to restrict indexing (empty = entire vault)")
-    force: bool = Field(default=False, description="Rebuild the scanned folder's slice from empty (the whole index when folder is empty)")
-
-@tool(LexicalRefreshArgs, cls="composed", collapse="eager")
-def silica_lexical_refresh(folder: str = "", force: bool = False) -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_lexical_refresh(folder: Annotated[str, Field(description='Vault-relative folder to restrict indexing (empty = entire vault)')] = "", force: Annotated[bool, Field(description="Rebuild the scanned folder's slice from empty (the whole index when folder is empty)")] = False) -> dict[str, Any]:
     """Build or refresh the lexical (BM25/fuzzy) index over note title+body —
-    strong on rare tokens, proper nouns, dates. Seeds the optional use_lexical
-    retrieval leg; run once on an existing vault, writes keep it fresh
+    strong on rare tokens, proper nouns, and dates. The perception window
+    selector uses its term weights; run once on an existing vault, writes keep it fresh
     afterwards.
     """
     from silica.kernel.recall.lexical import get_lexical_store
@@ -1012,20 +952,13 @@ def _covering_stem(path: Path) -> str:
     return stem if len(stem) >= 3 and stem != path.stem else ""
 
 
-class VaultReportArgs(BaseModel):
-    folder: str = Field(default="", description="Vault-relative folder to scope (empty = whole vault)")
-    top_k: int = Field(default=10, description="How many god-nodes / bridges to surface")
-    with_embeddings: bool = Field(default=False, description="Also propose missing links via the embedding index")
-    with_cooccurrence: bool = Field(default=False, description="Also compute the co-occurrence vs wikilink delta (autolink candidates, stale links, missing hubs) — embedder-free")
-    seed_ledger: bool = Field(default=True, description="Persist a run (TaskLedger+ProgressLedger) pre-seeded with remediation tasks")
-
-@tool(VaultReportArgs, cls="composed")
+@tool(cls="composed")
 def silica_vault_report(
-    folder: str = "",
-    top_k: int = 10,
-    with_embeddings: bool = False,
-    with_cooccurrence: bool = False,
-    seed_ledger: bool = True,
+    folder: Annotated[str, Field(description='Vault-relative folder to scope (empty = whole vault)')] = "",
+    top_k: Annotated[int, Field(description='How many god-nodes / bridges to surface')] = 10,
+    with_embeddings: Annotated[bool, Field(description='Also propose missing links via the embedding index')] = False,
+    with_cooccurrence: Annotated[bool, Field(description='Also compute the co-occurrence vs wikilink delta (autolink candidates, stale links, missing hubs) — embedder-free')] = False,
+    seed_ledger: Annotated[bool, Field(description='Persist a run (TaskLedger+ProgressLedger) pre-seeded with remediation tasks')] = True,
 ) -> dict[str, Any]:
     """Deterministic structural audit — the entry point for /graph and vault
     health. Computes god-nodes, surprising cross-cluster connections, orphans,
@@ -1195,7 +1128,7 @@ def silica_vault_report(
     return result
 
 
-@tool(EmptyArgs, cls="composed")
+@tool(cls="composed")
 def silica_health() -> dict[str, Any]:
     """Retrieval + write-path health check, live: `fusion` (masked-wikilink
     recovery — low recall or embed_coverage < 1.0 means related/semantic

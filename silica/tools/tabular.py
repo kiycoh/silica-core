@@ -15,6 +15,8 @@ file's own directory before the query runs.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 import io
 import json
 import logging
@@ -22,7 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from silica.tools import tool
 
@@ -209,39 +211,9 @@ def _fit_rows(rows: list[list[Any]]) -> list[list[Any]]:
     return rows
 
 
-class QueryTableArgs(BaseModel):
-    path: str = Field(
-        description=(
-            "Path to the data file to query "
-            "(.csv/.tsv/.parquet/.json, or .xlsx/.xls for one sheet at a time)"
-        ),
-    )
-    sql: str = Field(
-        description=(
-            "A single read-only SELECT. The file is bound to the table name `t` "
-            "— e.g. SELECT region, avg(score) FROM t GROUP BY 1. "
-            "When the columns are unknown, call with `SUMMARIZE t` first: one "
-            "call returns every column's type, min/max, distinct count and "
-            "null share, without spending rows."
-        ),
-    )
-    limit: int = Field(
-        default=200,
-        description="Max rows returned; the reply flags whether it truncated",
-    )
-    sheet: str = Field(
-        default="",
-        description=(
-            "Excel files only: which sheet to query. Omit for single-sheet "
-            "workbooks; a multi-sheet workbook rejects the call and lists its "
-            "sheet names."
-        ),
-    )
-
-
-@tool(QueryTableArgs, cls="atomic")
+@tool(cls="atomic")
 def silica_query_table(
-    path: str, sql: str, limit: int = 200, sheet: str = ""
+    path: Annotated[str, Field(description='Path to the data file to query (.csv/.tsv/.parquet/.json, or .xlsx/.xls for one sheet at a time)')], sql: Annotated[str, Field(description="A single read-only SELECT. The file is bound to the table name `t` — e.g. SELECT region, avg(score) FROM t GROUP BY 1. When the columns are unknown, call with `SUMMARIZE t` first: one call returns every column's type, min/max, distinct count and null share, without spending rows.")], limit: Annotated[int, Field(description='Max rows returned; the reply flags whether it truncated')] = 200, sheet: Annotated[str, Field(description='Excel files only: which sheet to query. Omit for single-sheet workbooks; a multi-sheet workbook rejects the call and lists its sheet names.')] = ""
 ) -> dict[str, Any]:
     """Answers a question about a data file (.csv/.tsv/.parquet/.json, Excel
     via sheet=) by running SQL over it — the aggregation path semantic search
@@ -399,23 +371,8 @@ def _describe_table(src: Path) -> dict[str, Any]:
         return {"error": f"{type(first).__name__}: {first}"}
 
 
-class TablesArgs(BaseModel):
-    folder: str = Field(
-        default="",
-        description="Vault-relative folder to scope the census; empty = the whole vault",
-    )
-    column: str = Field(
-        default="",
-        description=(
-            "Case-insensitive substring filter: only tables with a matching "
-            "column name return, with the matches named"
-        ),
-    )
-    limit: int = Field(default=50, description="Max tables described in the reply")
-
-
-@tool(TablesArgs, cls="atomic")
-def silica_tables(folder: str = "", column: str = "", limit: int = 50) -> dict[str, Any]:
+@tool(cls="atomic")
+def silica_tables(folder: Annotated[str, Field(description='Vault-relative folder to scope the census; empty = the whole vault')] = "", column: Annotated[str, Field(description='Case-insensitive substring filter: only tables with a matching column name return, with the matches named')] = "", limit: Annotated[int, Field(description='Max tables described in the reply')] = 50) -> dict[str, Any]:
     """Census of the vault's tabular files (.csv/.tsv/.parquet/.ndjson, Excel):
     path, size and column schema per file, filterable by column name — the
     orientation call before silica_query_table. column= answers "which table

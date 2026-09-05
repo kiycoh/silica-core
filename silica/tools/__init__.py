@@ -18,9 +18,9 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, get_type_hints
 
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 
 logger = logging.getLogger(__name__)
 
@@ -147,8 +147,25 @@ class Tool:
 TOOLS: dict[str, Tool] = {}
 
 
+def _model_from_signature(fn: Callable) -> type[BaseModel]:
+    """Build the tool input model from its annotated public parameters."""
+    hints = get_type_hints(fn, include_extras=True)
+    fields: dict[str, tuple[Any, Any]] = {}
+    for name, param in inspect.signature(fn).parameters.items():
+        if name in {"cancel_token", "progress"}:
+            continue
+        if param.kind in {param.VAR_POSITIONAL, param.VAR_KEYWORD}:
+            raise TypeError(f"Tool {fn.__name__} cannot expose variadic parameter {name!r}")
+        annotation = hints.get(name, param.annotation)
+        if annotation is inspect.Parameter.empty:
+            raise TypeError(f"Tool {fn.__name__} parameter {name!r} needs a type annotation")
+        default = ... if param.default is inspect.Parameter.empty else param.default
+        fields[name] = (annotation, default)
+    return create_model(f"{fn.__name__}Args", **fields)
+
+
 def tool(
-    params_model: type[BaseModel],
+    params_model: type[BaseModel] | None = None,
     cls: str = "atomic",
     collapse: str = "lazy",
     sensitive: bool = False,
@@ -157,10 +174,7 @@ def tool(
     """Decorator that registers a function as a Silica tool.
 
     Usage:
-        class ReadNoteArgs(BaseModel):
-            name: str
-
-        @tool(ReadNoteArgs, cls="atomic")
+        @tool(cls="atomic")
         def silica_read_note(name: str):
             '''Read a vault note by name (wikilink-style resolution).'''
             return DRIVER.read_note(name)
@@ -172,8 +186,9 @@ def tool(
         # indentation, and every "\n    " is its own token in a description sent
         # on every request.
         tool_desc = inspect.cleandoc(fn.__doc__ or "")
+        model = params_model or _model_from_signature(fn)
         TOOLS[tool_name] = Tool(
-            fn, tool_name, tool_desc, params_model, cls,
+            fn, tool_name, tool_desc, model, cls,
             collapse=collapse, sensitive=sensitive,
             internal=internal,
         )

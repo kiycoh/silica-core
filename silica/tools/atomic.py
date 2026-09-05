@@ -10,6 +10,8 @@ From SILICA.md §4.2:
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 import re
 import subprocess
 import unicodedata
@@ -32,10 +34,6 @@ from silica.tools import tool
 # defends the context window (a 1000-note vault ≈ 20k tokens uncapped); no
 # paging — narrowing by folder, or acting on a sample, covers the real uses.
 _FILES_CAP = 200
-
-
-class SearchArgs(BaseModel):
-    query: str = Field(description="Text to search for in note names in the vault")
 
 
 # 868 names re-folded on every search, ~30 searches in one agent turn. Measured
@@ -76,8 +74,8 @@ def _fold(text: str) -> str:
 _SEARCH_CAP = 40
 
 
-@tool(SearchArgs, cls="atomic")
-def silica_search(query: str) -> dict:
+@tool(cls="atomic")
+def silica_search(query: Annotated[str, Field(description='Text to search for in note names in the vault')]) -> dict:
     """Search for notes by NAME/title match. Returns the paths of matching notes.
 
     A note's wikilink name is its filename without the extension. Case and
@@ -196,10 +194,6 @@ def _stale_map() -> dict[str, str]:
     return out
 
 
-class SearchContextArgs(BaseModel):
-    query: str = Field(description="Text to search for within the content of vault notes")
-
-
 # A literal grep over every body is unbounded by nature: one Hit per matching
 # LINE, so a short query returns the vault. Measured on a 719-note vault:
 # "OSI" → 529 hits / 170k chars in a single payload, "e" → 14535 hits. The
@@ -258,8 +252,8 @@ def _source_hits(query: str) -> list[dict] | None:
     return hits
 
 
-@tool(SearchContextArgs, cls="atomic")
-def silica_search_context(query: str) -> dict:
+@tool(cls="atomic")
+def silica_search_context(query: Annotated[str, Field(description='Text to search for within the content of vault notes')]) -> dict:
     """Search note BODIES for exact text; returns snippets with line numbers.
 
     Use to find literal mentions of a term. When the exact wording is unknown,
@@ -320,13 +314,8 @@ def silica_search_context(query: str) -> dict:
     return out
 
 
-class ReadNoteArgs(BaseModel):
-    name: str = Field(description="Name of the note to read (wikilink style, without file extension)")
-    vault: str = Field(default="", description="Read from another Silica vault (the `vault` or `memory_vault` a recall reply named). Read-only.")
-
-
-@tool(ReadNoteArgs, cls="atomic")
-def silica_read_note(name: str, vault: str = "") -> str:
+@tool(cls="atomic")
+def silica_read_note(name: Annotated[str, Field(description='Name of the note to read (wikilink style, without file extension)')], vault: Annotated[str, Field(description='Read from another Silica vault (the `vault` or `memory_vault` a recall reply named). Read-only.')] = "") -> str:
     """Reads the complete content of a note in the vault by name (wikilink-style
     resolution). DO NOT use paths. `vault=<path>` reads from another vault,
     read-only."""
@@ -394,20 +383,14 @@ def _with_stale_banner(content: str, path: str = "", vault: str | None = None) -
     return "".join(f"> {b}\n\n" for b in banners) + content
 
 
-class PropsArgs(BaseModel):
-    name: str = Field(description="Name of the note to read the frontmatter properties from")
-
-@tool(PropsArgs, cls="atomic")
-def silica_props(name: str) -> dict:
+@tool(cls="atomic")
+def silica_props(name: Annotated[str, Field(description='Name of the note to read the frontmatter properties from')]) -> dict:
     """Reads the frontmatter properties of a note (saves tokens, does not read the body)."""
     return DRIVER.props_of(name)
 
 
-class OutlineArgs(BaseModel):
-    name: str = Field(description="Name of the note to display the heading tree of")
-
-@tool(OutlineArgs, cls="atomic")
-def silica_outline(name: str) -> list:
+@tool(cls="atomic")
+def silica_outline(name: Annotated[str, Field(description='Name of the note to display the heading tree of')]) -> list:
     """Displays the heading tree (H1-H6) of a note."""
     headings = DRIVER.outline(name)
     return [{"level": h.level, "text": h.text} for h in headings]
@@ -417,31 +400,22 @@ def silica_outline(name: str) -> list:
 # Graph
 # ---------------------------------------------------------------------------
 
-class LinksArgs(BaseModel):
-    name: str = Field(description="Name of the note to list outgoing links from")
-
-@tool(LinksArgs, cls="atomic")
-def silica_links(name: str) -> list:
+@tool(cls="atomic")
+def silica_links(name: Annotated[str, Field(description='Name of the note to list outgoing links from')]) -> list:
     """Lists outgoing links from a note (connected notes)."""
     refs = DRIVER.links(name)
     return [r.path for r in refs]
 
 
-class BacklinksArgs(BaseModel):
-    name: str = Field(description="Name of the note to list incoming links (backlinks) for")
-
-@tool(BacklinksArgs, cls="atomic")
-def silica_backlinks(name: str) -> list:
+@tool(cls="atomic")
+def silica_backlinks(name: Annotated[str, Field(description='Name of the note to list incoming links (backlinks) for')]) -> list:
     """Lists incoming links (backlinks) pointing to a note."""
     refs = DRIVER.backlinks(name)
     return [r.path for r in refs]
 
 
-class FileLinksArgs(BaseModel):
-    target: str = Field(description="A note (name or path), OR a file path/basename (e.g. foto.jpg, analysis.ipynb, src/mod.py)")
-
-@tool(FileLinksArgs, cls="atomic")
-def silica_file_links(target: str) -> dict:
+@tool(cls="atomic")
+def silica_file_links(target: Annotated[str, Field(description='A note (name or path), OR a file path/basename (e.g. foto.jpg, analysis.ipynb, src/mod.py)')]) -> dict:
     """Note↔file connections, both directions. Given a note: the files it
     references (image/media/notebook embeds + `documents:` frontmatter) as
     {note, embeds, documents, unresolved}. Given a file: the notes referencing
@@ -472,10 +446,7 @@ def silica_file_links(target: str) -> dict:
     return out
 
 
-class EmptyArgs(BaseModel):
-    pass
-
-@tool(EmptyArgs, cls="atomic")
+@tool(cls="atomic")
 def silica_orphans() -> dict:
     """Lists orphan notes (notes with no incoming links) in the vault.
 
@@ -491,7 +462,7 @@ def silica_orphans() -> dict:
     return out
 
 
-@tool(EmptyArgs, cls="atomic")
+@tool(cls="atomic")
 def silica_unresolved() -> list:
     """Lists unresolved wikilinks in the vault (links pointing to non-existent notes)."""
     links = DRIVER.unresolved()
@@ -623,11 +594,8 @@ def _vault_rel(path: str) -> str:
     return path.replace("\\", "/").strip("/")
 
 
-class ListFilesArgs(BaseModel):
-    folder: str = Field(default="", description="Optional folder path to filter results")
-
-@tool(ListFilesArgs, cls="atomic")
-def silica_files(folder: str = "") -> dict:
+@tool(cls="atomic")
+def silica_files(folder: Annotated[str, Field(description='Optional folder path to filter results')] = "") -> dict:
     """Lists vault notes and source files under a folder.
 
     Returns {"total", "files"} for markdown (wikilink name = filename minus
@@ -700,11 +668,8 @@ def _source_folder_census() -> dict[str, int]:
     return dict(counts.most_common(_FILES_CAP))
 
 
-class ExistsArgs(BaseModel):
-    path: str = Field(description="Relative path of the note in the vault")
-
-@tool(ExistsArgs, cls="atomic")
-def silica_exists(path: str) -> bool:
+@tool(cls="atomic")
+def silica_exists(path: Annotated[str, Field(description='Relative path of the note in the vault')]) -> bool:
     """Verifies a file exists in the vault — notes, inbox, and source files
     alike (PDFs too). `read_note` only opens markdown: "I cannot read it" is
     not the same answer as "it is not there".
@@ -731,7 +696,7 @@ def silica_exists(path: str) -> bool:
 # Deferred Op Store
 # ---------------------------------------------------------------------------
 
-@tool(EmptyArgs, cls="atomic")
+@tool(cls="atomic")
 def silica_deferred_list() -> list:
     """List all pending deferred op bundles (concepts rejected by the validator in previous runs).
 
@@ -742,11 +707,8 @@ def silica_deferred_list() -> list:
     return get_deferred_store().list_all()
 
 
-class DeferredFlushArgs(BaseModel):
-    content_hash: str = Field(description="Content hash of the deferred bundle to permanently discard")
-
-@tool(DeferredFlushArgs, cls="atomic", collapse="eager")
-def silica_deferred_flush(content_hash: str) -> dict:
+@tool(cls="atomic", collapse="eager")
+def silica_deferred_flush(content_hash: Annotated[str, Field(description='Content hash of the deferred bundle to permanently discard')]) -> dict:
     """Discard a deferred op bundle — marks those rejected ops as permanently skipped."""
     from silica.kernel.recall.deferred import get_deferred_store
     # purge, not remove: the user's explicit discard also drops any declared
@@ -757,7 +719,7 @@ def silica_deferred_flush(content_hash: str) -> dict:
     return {"removed": False, "error": f"No deferred bundle found for {content_hash[:8]}…"}
 
 
-@tool(EmptyArgs, cls="atomic")
+@tool(cls="atomic")
 def silica_inbox_ls() -> list:
     """Lists all files in the Inbox folder (inbox_dir), including non-markdown
     files (PDFs etc.). Non-markdown files cannot be read or nucleated directly:
@@ -771,13 +733,8 @@ def silica_inbox_ls() -> list:
 # Graph path / explain
 # ---------------------------------------------------------------------------
 
-class GraphPathArgs(BaseModel):
-    source: str = Field(description="Source note name or vault-relative path")
-    target: str = Field(description="Target note name or vault-relative path")
-    max_paths: int = Field(default=1, description="Maximum number of shortest paths to return")
-
-@tool(GraphPathArgs, cls="atomic")
-def silica_graph_path(source: str, target: str, max_paths: int = 1) -> dict:
+@tool(cls="atomic")
+def silica_graph_path(source: Annotated[str, Field(description='Source note name or vault-relative path')], target: Annotated[str, Field(description='Target note name or vault-relative path')], max_paths: Annotated[int, Field(description='Maximum number of shortest paths to return')] = 1) -> dict:
     """Shortest connection(s) between two notes over the resolved wikilink graph.
 
     Returns path(s) as lists of note ids, or an error dict if no path exists.
@@ -832,12 +789,8 @@ def silica_graph_path(source: str, target: str, max_paths: int = 1) -> dict:
         return {"error": f"Node not found: {exc}"}
 
 
-class GraphExplainArgs(BaseModel):
-    note: str = Field(description="Note name or vault-relative path to explain")
-    depth: int = Field(default=1, description="Neighbourhood depth (1=direct links only)")
-
-@tool(GraphExplainArgs, cls="atomic")
-def silica_graph_explain(note: str, depth: int = 1) -> dict:
+@tool(cls="atomic")
+def silica_graph_explain(note: Annotated[str, Field(description='Note name or vault-relative path to explain')], depth: Annotated[int, Field(description='Neighbourhood depth (1=direct links only)')] = 1) -> dict:
     """Explain a note's structural position: cluster, degree rank, betweenness,
     out-links, backlinks, cross-cluster bridges. Low degree + high betweenness
     = a bridge whose removal fragments the vault, worth reinforcing.
@@ -985,18 +938,14 @@ def silica_graph_explain(note: str, depth: int = 1) -> dict:
 # Ledger steering — silica_ledger_next / silica_ledger_update
 # ---------------------------------------------------------------------------
 
-class LedgerNextArgs(BaseModel):
-    run_id: str = Field(description="Run ID returned by silica_vault_report")
-
-
 # Fixed byte budget per drain — payloads carry ~4KB path chunks, and a 40-task
 # run would otherwise land ~40k tokens in one tool result. Tool-arg promotion
 # declined 2026-08-19: no caller wants a different slice.
 LEDGER_DRAIN_BYTES = 12000
 
 
-@tool(LedgerNextArgs, cls="atomic")
-def silica_ledger_next(run_id: str) -> dict:
+@tool(cls="atomic")
+def silica_ledger_next(run_id: Annotated[str, Field(description='Run ID returned by silica_vault_report')]) -> dict:
     """Return EVERY task that is ready to run now, as `tasks` — not one task.
 
     Each entry carries its own capability (tool name), validated payload, and
@@ -1050,14 +999,8 @@ def silica_ledger_next(run_id: str) -> dict:
     return {"tasks": tasks, "remaining": len(ready) - len(tasks)}
 
 
-class LedgerUpdateArgs(BaseModel):
-    run_id: str = Field(description="Run ID")
-    task_id: str = Field(description="Task ID returned by silica_ledger_next")
-    status: str = Field(description="Outcome: done | failed | skipped | blocked")
-    error: str = Field(default="", description="Error message if status is 'failed'")
-
-@tool(LedgerUpdateArgs, cls="atomic")
-def silica_ledger_update(run_id: str, task_id: str, status: str, error: str = "") -> dict:
+@tool(cls="atomic")
+def silica_ledger_update(run_id: Annotated[str, Field(description='Run ID')], task_id: Annotated[str, Field(description='Task ID returned by silica_ledger_next')], status: Annotated[str, Field(description='Outcome: done | failed | skipped | blocked')], error: Annotated[str, Field(description="Error message if status is 'failed'")] = "") -> dict:
     """Mark a task's outcome on the run's ProgressLedger and persist it.
 
     Returns {"ok": true, "digest": ...} so the agent has the updated state
@@ -1101,12 +1044,8 @@ class QuizResult(BaseModel):
     anchor: str = Field(default="", description="Optional citation into the note: '#Heading', or '#^id' only if that block id already exists in the note body")
 
 
-class RecordQuizArgs(BaseModel):
-    results: list[QuizResult] = Field(description="One entry per graded question")
-
-
-@tool(RecordQuizArgs, cls="atomic")
-def silica_record_quiz(results: list) -> dict:
+@tool(cls="atomic")
+def silica_record_quiz(results: Annotated[list, Field(description='One entry per graded question')]) -> dict:
     """Record graded quiz answers so the notes the reader failed resurface.
 
     Call once after grading, one entry per question. Writes no note — derived
@@ -1135,17 +1074,8 @@ def silica_record_quiz(results: list) -> dict:
     return {"recorded": written, "wrong": sum(1 for e in entries if not e["correct"])}
 
 
-class ReviewQueueArgs(BaseModel):
-    limit: int = Field(default=10, description="How many notes to return (global picker mode)")
-    target: str = Field(default="", description="Optional vault path prefix: report EVERY note under it with its retention state instead of picking — the calibration read a study plan starts from")
-
-
-class DoctorArgs(BaseModel):
-    live: bool = Field(default=False, description="Also run one tiny PAID completion against the configured model — proves the model actually answers, not just that the config looks right. Off by default because it costs money.")
-
-
-@tool(DoctorArgs, cls="atomic")
-def silica_doctor(live: bool = False) -> dict:
+@tool(cls="atomic")
+def silica_doctor(live: Annotated[bool, Field(description='Also run one tiny PAID completion against the configured model — proves the model actually answers, not just that the config looks right. Off by default because it costs money.')] = False) -> dict:
     """Silica's own health: model, endpoints, vault, indexes, hooks — the
     `silica doctor` checks as data. Call when a capability behaves as if off
     (relatedness finds nothing, a write lands nowhere) instead of guessing.
@@ -1161,14 +1091,8 @@ def silica_doctor(live: bool = False) -> dict:
     return checks.report_payload(results)
 
 
-class ChangesArgs(BaseModel):
-    scope: str = Field(default="session", description="'session' = this process (default); 'vault' = every session on this vault, rows with session/ts/mine")
-    since: str = Field(default="", description="vault scope: ISO-8601; only rows first touched after it (pass the last `ts` you saw)")
-    limit: int = Field(default=200, description="vault scope: newest rows kept")
-
-
-@tool(ChangesArgs, cls="atomic")
-def silica_changes(scope: str = "session", since: str = "", limit: int = 200) -> dict:
+@tool(cls="atomic")
+def silica_changes(scope: Annotated[str, Field(description="'session' = this process (default); 'vault' = every session on this vault, rows with session/ts/mine")] = "session", since: Annotated[str, Field(description='vault scope: ISO-8601; only rows first touched after it (pass the last `ts` you saw)')] = "", limit: Annotated[int, Field(description='vault scope: newest rows kept')] = 200) -> dict:
     """What changed in the vault: path, created/modified/moved/deleted, lines
     added/removed, measured against the file as it is now (an /undo empties
     its row). scope='session' is this process; scope='vault' is every
@@ -1201,8 +1125,8 @@ def silica_changes(scope: str = "session", since: str = "", limit: int = 200) ->
     return {"scope": "session", "total": len(rows), "changes": rows}
 
 
-@tool(ReviewQueueArgs, cls="atomic")
-def silica_review_queue(limit: int = 10, target: str = "") -> list:
+@tool(cls="atomic")
+def silica_review_queue(limit: Annotated[int, Field(description='How many notes to return (global picker mode)')] = 10, target: Annotated[str, Field(description='Optional vault path prefix: report EVERY note under it with its retention state instead of picking — the calibration read a study plan starts from')] = "") -> list:
     """What the reader should review next — the learner model's picker.
 
     Rows carry estimated retention R (0..1, null = never measured) and a pool:

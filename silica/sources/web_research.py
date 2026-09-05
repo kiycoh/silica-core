@@ -65,7 +65,6 @@ from silica.tools import tool
 # TOOLS for the AgentConstraints below to name. Bound as a module, not as the
 # function, so fetch_to_inbox() resolves the attribute at call time.
 from silica.sources import web_fetch as _web_fetch  # noqa: F401
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +144,6 @@ matters is still empty."""
 # Gate seam. evals/probe_web_gate.py flips this to run gate arm A (the exact
 # pre-steering loop) live; product code never touches it.
 _STEERING = True
-
-
-class WebSearchArgs(BaseModel):
-    query: str
 
 
 # Which lane answered each web_search call of the current turn, in call order.
@@ -250,7 +245,7 @@ def _squash(text: str) -> str:
     return " ".join(text.translate(_TYPOGRAPHY).split())
 
 
-@tool(WebSearchArgs, cls="atomic", sensitive=True)
+@tool(cls="atomic", sensitive=True)
 def web_search(query: str) -> str:
     """Search the web for a single query. Returns a JSON list of
     {title, url, content} results. Use iteratively to research a concept."""
@@ -319,13 +314,7 @@ def _lane_line() -> str:
     return f"Search lanes: {named}. DuckDuckGo was challenged; these answered instead."
 
 
-class RememberArgs(BaseModel):
-    url: str
-    quote: str
-    why: str
-
-
-@tool(RememberArgs, cls="atomic", sensitive=True)
+@tool(cls="atomic", sensitive=True)
 def remember(url: str, quote: str, why: str) -> str:
     """Bank one verbatim quote from a page already read with web_fetch, to cite
     in the findings. Copy the quote exactly as the fetched text shows it; `why`
@@ -361,12 +350,7 @@ def remember(url: str, quote: str, why: str) -> str:
     return f"banked [{qid}] — cite it inline as [{qid}]"
 
 
-class FindInPageArgs(BaseModel):
-    url: str
-    pattern: str
-
-
-@tool(FindInPageArgs, cls="atomic", sensitive=True)
+@tool(cls="atomic", sensitive=True)
 def find_in_page(url: str, pattern: str) -> str:
     """Find every line containing a word or phrase in a page already read with
     web_fetch, shown with a line of context. Mine the pages you have before
@@ -407,11 +391,7 @@ def find_in_page(url: str, pattern: str) -> str:
     return "\n…\n".join(windows)[:4000] + tail
 
 
-class PlanArgs(BaseModel):
-    outline: str
-
-
-@tool(PlanArgs, cls="atomic", sensitive=True)
+@tool(cls="atomic", sensitive=True)
 def plan(outline: str) -> str:
     """Save or replace your working plan for the findings note: markdown
     `## ` section headings, each optionally ending with the banked quote IDs
@@ -879,10 +859,6 @@ _ANSWER_SYSTEM_PROMPT = (
 )
 
 
-class WebAnswerArgs(BaseModel):
-    question: str
-
-
 # The inner tools worth showing live: the query it typed and the page it opened.
 # An allowlist rather than "everything except remember/plan/find_in_page" — a
 # tool added to web_turn_constraints() later stays out of the chat by
@@ -916,7 +892,7 @@ def _live_progress(progress):
     return _forward
 
 
-@tool(WebAnswerArgs, cls="composed")
+@tool(cls="composed")
 def silica_web_answer(question: str, cancel_token=None, progress=None) -> str:
     """Answer a question from the live web, with citations.
 

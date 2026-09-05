@@ -19,11 +19,13 @@ line via run_log.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 import logging
 import uuid
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from silica.agent.subagent import run_subagent_batch
 from silica.kernel.recall.curator import CurationPlan, compose_curation_plan
@@ -329,28 +331,12 @@ def apply_curation_plan(
 # tool
 # ---------------------------------------------------------------------------
 
-class CurateArgs(BaseModel):
-    apply: bool = Field(
-        default=False,
-        description="If True, enqueue/execute the plan; default is a dry-run that only returns the plan.",
-    )
-    folder: str = Field(default="", description="Vault-relative folder to scope the audit (empty = whole vault)")
-    kinds: list[str] = Field(
-        default_factory=list,
-        description='Keep only these item kinds (autolink|orphan|dedup|refine); empty = all kinds.',
-    )
-    targets: list[str] = Field(
-        default_factory=list,
-        description="Keep only items touching these note paths (matches target or dedup partner, by path suffix); empty = all.",
-    )
-
-
-@tool(CurateArgs, cls="composed")
+@tool(cls="composed")
 def silica_curate(
-    apply: bool = False,
-    folder: str = "",
-    kinds: list[str] | None = None,
-    targets: list[str] | None = None,
+    apply: Annotated[bool, Field(description='If True, enqueue/execute the plan; default is a dry-run that only returns the plan.')] = False,
+    folder: Annotated[str, Field(description='Vault-relative folder to scope the audit (empty = whole vault)')] = "",
+    kinds: Annotated[list[str] | None, Field(description='Keep only these item kinds (autolink|orphan|dedup|refine); empty = all kinds.')] = None,
+    targets: Annotated[list[str] | None, Field(description='Keep only items touching these note paths (matches target or dedup partner, by path suffix); empty = all.')] = None,
     cancel_token: Any = None,
 ) -> dict[str, Any]:
     """Curate the vault: turn the report's findings (autolinks, orphans,

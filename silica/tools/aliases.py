@@ -14,11 +14,13 @@ Dry-run by default; apply=True commits each note through the write gate.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 import logging
 import os
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from silica.tools import tool
 
@@ -135,16 +137,8 @@ def _propose_groups_single(titles: list[str], config: Any) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-class AliasesArgs(BaseModel):
-    apply: bool = Field(
-        default=False,
-        description="If True, write the gated aliases into frontmatter; default is a dry-run that only returns the proposals.",
-    )
-    folder: str = Field(default="", description="Vault-relative folder to scope the pass (empty = whole vault)")
-
-
-@tool(AliasesArgs, cls="composed")
-def silica_aliases(apply: bool = False, folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_aliases(apply: Annotated[bool, Field(description='If True, write the gated aliases into frontmatter; default is a dry-run that only returns the proposals.')] = False, folder: Annotated[str, Field(description='Vault-relative folder to scope the pass (empty = whole vault)')] = "", cancel_token: Any = None) -> dict[str, Any]:
     """Propose and record frontmatter aliases for existing note titles. One
     LLM call proposes variants; each passes the read-time ambiguity gate (no
     collision with a real title, single claimant, noise floor). Dry-run by

@@ -33,7 +33,6 @@ from typing import NamedTuple
 from urllib.parse import unquote, urlencode, urlsplit
 
 import httpx
-from pydantic import BaseModel
 
 from silica.tools import tool
 
@@ -584,10 +583,6 @@ def _wikipedia_extract(url: str) -> tuple[str, str] | None:
     return extract, " ".join(str(pages[0].get("title", "")).split())[:_MAX_TITLE]
 
 
-class WebFetchArgs(BaseModel):
-    url: str
-
-
 class Page(NamedTuple):
     """What one fetch yielded: the rendered text, and the page's own title.
 
@@ -628,7 +623,7 @@ def fetch_page(url: str) -> Page:
     return Page(_render(final_url, _truncate(text)), page_title(body) if is_html else "")
 
 
-@tool(WebFetchArgs, cls="atomic", sensitive=True)
+@tool(cls="atomic", sensitive=True)
 def web_fetch(url: str) -> str:
     """Read one web page and return its text, boilerplate stripped and
     truncated. Call this on a promising search result instead of guessing from

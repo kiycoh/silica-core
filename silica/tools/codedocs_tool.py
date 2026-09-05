@@ -12,17 +12,15 @@ curation pipeline refines Inbox stubs.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import Field
 
 from silica.tools import tool
 
 
-class DocumentArgs(BaseModel):
-    path: str = Field(description="Repo-relative path to the source file to document")
-
-
-@tool(DocumentArgs, cls="composed")
-def silica_document(path: str) -> dict:
+@tool(cls="composed")
+def silica_document(path: Annotated[str, Field(description='Repo-relative path to the source file to document')]) -> dict:
     """Extract a shallow AST skeleton from a source code file and stage it as a
     documentation stub in Inbox/ (never directly in the vault). Sets
     documents:/code_ref frontmatter for staleness tracking; source-derived text
@@ -45,25 +43,6 @@ def silica_document(path: str) -> dict:
     }
 
 
-class CodePackArgs(BaseModel):
-    target: str = Field(
-        description="Repo-relative source path, optionally narrowed with "
-                    "'#Class' or '#Class.member'"
-    )
-    budget_chars: int = Field(
-        default=24000,
-        description="Character budget for the whole pack. The target is always "
-                    "served, sections fill what is left.",
-    )
-    sections: list[str] = Field(
-        default_factory=list,
-        description="Which sections to emit besides the target: any of "
-                    "'hierarchy', 'neighborhood', 'external', 'importers'. "
-                    "Empty = all. Pass ['importers'] on a second pack in the "
-                    "same package so the neighbourhood outline is not repaid.",
-    )
-
-
 def _stamp_code_pack_use() -> None:
     """Kill-gate evidence for codepack (kill by 2026-10-28 if unused): one
     timestamp line per invocation, whatever the surface reached it (MCP or a
@@ -84,9 +63,9 @@ def _stamp_code_pack_use() -> None:
         pass
 
 
-@tool(CodePackArgs, cls="composed")
-def silica_code_pack(target: str, budget_chars: int = 24000,
-                     sections: list[str] | None = None) -> dict:
+@tool(cls="composed")
+def silica_code_pack(target: Annotated[str, Field(description="Repo-relative source path, optionally narrowed with '#Class' or '#Class.member'")], budget_chars: Annotated[int, Field(description='Character budget for the whole pack. The target is always served, sections fill what is left.')] = 24000,
+                     sections: Annotated[list[str] | None, Field(description="Which sections to emit besides the target: any of 'hierarchy', 'neighborhood', 'external', 'importers'. Empty = all. Pass ['importers'] on a second pack in the same package so the neighbourhood outline is not repaid.")] = None) -> dict:
     """Deterministic context pack for one source file inside a character
     budget: the target plus its supertypes, extenders, the visible signatures
     it actually names, external dependencies, and importers. A closure, not a
@@ -117,21 +96,11 @@ def silica_code_pack(target: str, budget_chars: int = 24000,
     return {"status": "ok", **pack}
 
 
-class ImpactArgs(BaseModel):
-    range_spec: str = Field(
-        default="",
-        description=(
-            "Git range or ref (e.g. 'HEAD~3..HEAD', 'main..HEAD', one SHA = "
-            "that ref vs the working tree). Empty = uncommitted changes vs HEAD."
-        ),
-    )
-
-
 _IMPACT_CAP = 100  # entries; a diff wider than this is a rewrite, not a change
 
 
-@tool(ImpactArgs, cls="composed")
-def silica_impact(range_spec: str = "") -> dict:
+@tool(cls="composed")
+def silica_impact(range_spec: Annotated[str, Field(description="Git range or ref (e.g. 'HEAD~3..HEAD', 'main..HEAD', one SHA = that ref vs the working tree). Empty = uncommitted changes vs HEAD.")] = "") -> dict:
     """Which notes a code change touches: changed source files (working tree
     vs HEAD by default, or a git range) classified cosmetic/structural, each
     with the notes documenting it and the notes of its 1-hop import

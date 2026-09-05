@@ -11,13 +11,15 @@ with the system floor stamped and a checkpoint pushed for /undo.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 import datetime as dt
 import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from silica.driver import DRIVER
 from silica.tools import tool
@@ -38,18 +40,9 @@ def _vault() -> Path:
     return Path(CONFIG.vault_path)
 
 
-class EventCreateArgs(BaseModel):
-    title: str = Field(description="Event title")
-    start: str = Field(description="'YYYY-MM-DD HH:MM', or 'YYYY-MM-DD' = all-day")
-    end: str = Field(default="", description="Optional end; all-day end date is inclusive")
-    rrule: str = Field(default="", description="iCal RRULE, e.g. 'FREQ=WEEKLY;BYDAY=WE'")
-    reminder: str = Field(default="", description="Lead before each occurrence: <N>m|h|d")
-    body: str = Field(default="", description="Optional markdown body")
-
-
-@tool(EventCreateArgs, cls="composed", collapse="eager")
-def silica_event_create(title: str, start: str, end: str = "", rrule: str = "",
-                        reminder: str = "", body: str = "") -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_event_create(title: Annotated[str, Field(description='Event title')], start: Annotated[str, Field(description="'YYYY-MM-DD HH:MM', or 'YYYY-MM-DD' = all-day")], end: Annotated[str, Field(description='Optional end; all-day end date is inclusive')] = "", rrule: Annotated[str, Field(description="iCal RRULE, e.g. 'FREQ=WEEKLY;BYDAY=WE'")] = "",
+                        reminder: Annotated[str, Field(description='Lead before each occurrence: <N>m|h|d')] = "", body: Annotated[str, Field(description='Optional markdown body')] = "") -> dict[str, Any]:
     """Create a user event (appointment, deadline) as a calendar note.
     Revertible with /undo."""
     from silica.kernel.calendar.model import validate_event
@@ -121,18 +114,9 @@ def silica_event_create(title: str, start: str, end: str = "", rrule: str = "",
             "checkpoint_depth": checkpoint_depth, "checkpoint_ok": checkpoint_ok}
 
 
-class EventUpdateArgs(BaseModel):
-    note: str = Field(description="Event note stem or path")
-    start: str = Field(default="", description="New start (empty = keep)")
-    end: str = Field(default="", description="New end")
-    rrule: str = Field(default="", description="New RRULE")
-    reminder: str = Field(default="", description="New lead (<N>m|h|d)")
-    status: str = Field(default="", description="done|cancelled closes the series")
-
-
-@tool(EventUpdateArgs, cls="composed", collapse="eager")
-def silica_event_update(note: str, start: str = "", end: str = "", rrule: str = "",
-                        reminder: str = "", status: str = "") -> dict[str, Any]:
+@tool(cls="composed", collapse="eager")
+def silica_event_update(note: Annotated[str, Field(description='Event note stem or path')], start: Annotated[str, Field(description='New start (empty = keep)')] = "", end: Annotated[str, Field(description='New end')] = "", rrule: Annotated[str, Field(description='New RRULE')] = "",
+                        reminder: Annotated[str, Field(description='New lead (<N>m|h|d)')] = "", status: Annotated[str, Field(description='done|cancelled closes the series')] = "") -> dict[str, Any]:
     """Update an event note: only the passed fields change; the merged set
     is re-validated first. status=done|cancelled closes the series."""
     from silica.kernel.calendar import reminders as rem
@@ -194,13 +178,8 @@ def silica_event_update(note: str, start: str = "", end: str = "", rrule: str = 
             "changed": sorted(changes), "checkpoint_ok": checkpoint_ok}
 
 
-class AgendaArgs(BaseModel):
-    start: str = Field(default="today", description="Window start: 'today' or 'YYYY-MM-DD'")
-    days: int = Field(default=7, ge=1, le=90, description="Window length in days")
-
-
-@tool(AgendaArgs, cls="composed")
-def silica_agenda(start: str = "today", days: int = 7) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_agenda(start: Annotated[str, Field(description="Window start: 'today' or 'YYYY-MM-DD'")] = "today", days: Annotated[int, Field(ge=1, le=90, description='Window length in days')] = 7) -> dict[str, Any]:
     """Per-day agenda: event occurrences, dated notes, agent activity, and
     review-due (today only)."""
     from silica.kernel.calendar.agenda import agenda

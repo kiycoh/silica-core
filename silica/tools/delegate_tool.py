@@ -12,7 +12,9 @@ summary.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Annotated
+
+from pydantic import Field
 
 from silica.tools import tool
 from silica.kernel.workqueue import WorkItem
@@ -23,16 +25,8 @@ import silica.capabilities  # noqa: F401  (registers capabilities incl. worker p
 _MAX_WORKERS = 10  # historical delegate() fan-out cap
 
 
-class DelegateArgs(BaseModel):
-    profile: str = Field(description="WorkerProfile name, e.g. 'reader' or 'router'")
-    tasks: list[dict] = Field(
-        description="List of {goal: str, inputs: dict} task specs for the workers"
-    )
-    max_workers: int = Field(default=7, description="Parallel workers (cap 10)")
-
-
-@tool(DelegateArgs, cls="composed")
-def silica_delegate(profile: str, tasks: list[dict], max_workers: int = 7) -> dict:
+@tool(cls="composed")
+def silica_delegate(profile: Annotated[str, Field(description="WorkerProfile name, e.g. 'reader' or 'router'")], tasks: Annotated[list[dict], Field(description='List of {goal: str, inputs: dict} task specs for the workers')], max_workers: Annotated[int, Field(description='Parallel workers (cap 10)')] = 7) -> dict:
     """Fan a list of worker tasks out to parallel workers; return aggregated results.
 
     Each task is {goal, inputs}. An unknown profile yields status='skipped' per

@@ -8,6 +8,8 @@ inspection, and the dedup/refine/enrich sub-agent passes.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -15,29 +17,26 @@ if TYPE_CHECKING:
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from silica.driver import DRIVER
 from silica.tools import tool
 from silica.tools.graph import _in_folder
 
 
-class RunInjectorArgs(BaseModel):
-    inbox_file: str = Field(default="", description="Path to a single inbox file (legacy; use inbox_files for multiple files)")
-    inbox_files: list[str] = Field(default_factory=list, description="Paths to one or more inbox files to nucleate in a single run")
-    target_dir: str = Field(description="Destination directory for the extracted concepts")
-    hub: str = Field(default="", description="Optional reference hub note")
-    resume_run_id: str = Field(default="", description="Run ID to resume (re-processes only failed chunks, skips done ones)")
-    keep_sources: bool = Field(default=True, description="Write the verbatim source leaf in sources/ beside the notes (default on; pass false to skip)")
-
-@tool(RunInjectorArgs, cls="composed", collapse="eager")
+@tool(cls="composed", collapse="eager")
 def silica_run_injector(
-    inbox_file: str = "",
-    inbox_files: list[str] | None = None,
-    target_dir: str = "",
-    hub: str = "",
-    resume_run_id: str = "",
-    keep_sources: bool = True,
+    inbox_file: Annotated[str, Field(description='Path to a single inbox file (legacy; use inbox_files for multiple files)')] = "",
+    inbox_files: Annotated[list[str] | None, Field(description='Paths to one or more inbox files to nucleate in a single run')] = None,
+    # Required, and keyword-only so the rest of the signature keeps its order:
+    # the guard below rejects an empty target anyway, and a schema that let the
+    # model omit it turned that rejection into a wasted turn instead of a
+    # missing argument the caller can see before dispatch.
+    *,
+    target_dir: Annotated[str, Field(description='Destination directory for the extracted concepts')],
+    hub: Annotated[str, Field(description='Optional reference hub note')] = "",
+    resume_run_id: Annotated[str, Field(description='Run ID to resume (re-processes only failed chunks, skips done ones)')] = "",
+    keep_sources: Annotated[bool, Field(description='Write the verbatim source leaf in sources/ beside the notes (default on; pass false to skip)')] = True,
     cancel_token: Any = None,
 ) -> dict[str, Any]:
     """Nucleate inbox files into the vault — THE tool for "nucleate/inject
@@ -156,11 +155,8 @@ def silica_run_injector(
     return projected
 
 
-class LedgerDigestArgs(BaseModel):
-    run_id: str = Field(default="", description="Run ID to inspect (latest saved run if empty)")
-
-@tool(LedgerDigestArgs, cls="composed")
-def silica_ledger_digest(run_id: str = "") -> dict[str, Any]:
+@tool(cls="composed")
+def silica_ledger_digest(run_id: Annotated[str, Field(description='Run ID to inspect (latest saved run if empty)')] = "") -> dict[str, Any]:
     """Compact summary of a run's plan and progress (< 500 tokens).
 
     Use to inspect an nucleate/audit run before advancing it with
@@ -321,11 +317,8 @@ def _pairs_to_items(pairs: list[dict]) -> list["WorkItem"]:
     return items
 
 
-class DedupPairsArgs(BaseModel):
-    pairs: list[dict] = Field(description="List of duplicate pairs to merge. Each dict must have 'source' and 'target' keys.")
-
-@tool(DedupPairsArgs, cls="composed")
-def silica_dedup_pairs(pairs: list[dict]) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_dedup_pairs(pairs: Annotated[list[dict], Field(description="List of duplicate pairs to merge. Each dict must have 'source' and 'target' keys.")]) -> dict[str, Any]:
     """Merge an ALREADY-KNOWN list of duplicate note pairs (e.g. from a ledger task).
 
     The smaller note's genuinely-new info is appended to the larger note as a
@@ -345,12 +338,8 @@ def silica_dedup_pairs(pairs: list[dict]) -> dict[str, Any]:
     return res
 
 
-class DedupFolderArgs(BaseModel):
-    folder: str = Field(default="", description="Vault folder to scan for near-duplicate notes (empty = whole vault)")
-
-
-@tool(DedupFolderArgs, cls="composed")
-def silica_dedup(folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_dedup(folder: Annotated[str, Field(description='Vault folder to scan for near-duplicate notes (empty = whole vault)')] = "", cancel_token: Any = None) -> dict[str, Any]:
     """SCAN a folder (or the vault) for near-duplicate pairs and merge each
     smaller note into its larger twin: only genuinely-new info is appended
     (one patch) — never rewrites, deletes, or creates. Requires the embedding
@@ -371,11 +360,8 @@ def silica_dedup(folder: str = "", cancel_token: Any = None) -> dict[str, Any]:
     return res
 
 
-class RefineBatchArgs(BaseModel):
-    note_paths: list[str] = Field(description="List of vault-relative paths to stylistically refine.")
-
-@tool(RefineBatchArgs, cls="composed")
-def silica_refine_batch(note_paths: list[str], cancel_token: Any = None) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_refine_batch(note_paths: Annotated[list[str], Field(description='List of vault-relative paths to stylistically refine.')], cancel_token: Any = None) -> dict[str, Any]:
     """Stylistically refine a batch of notes: reformat for clarity and Obsidian
     style WITHOUT adding or losing information.
 
@@ -393,11 +379,8 @@ def silica_refine_batch(note_paths: list[str], cancel_token: Any = None) -> dict
     return res
 
 
-class EnrichBatchArgs(BaseModel):
-    note_paths: list[str] = Field(description="List of vault-relative paths to semantically enrich.")
-
-@tool(EnrichBatchArgs, cls="composed")
-def silica_enrich_batch(note_paths: list[str], cancel_token: Any = None) -> dict[str, Any]:
+@tool(cls="composed")
+def silica_enrich_batch(note_paths: Annotated[list[str], Field(description='List of vault-relative paths to semantically enrich.')], cancel_token: Any = None) -> dict[str, Any]:
     """Semantically enrich a batch of lean or empty notes: adds substantive
     content. To only fix style/formatting without changing content, use
     silica_refine_batch instead."""
@@ -413,30 +396,9 @@ def silica_enrich_batch(note_paths: list[str], cancel_token: Any = None) -> dict
     return res
 
 
-class GenerateTaxonomyArgs(BaseModel):
-    user_intent: str = Field(description="Natural-language description of how the user wants to organize their vault")
-    scope: str = Field(
-        default="",
-        description="Vault-relative subfolder to restrict taxonomy generation and scanning to",
-    )
-    save_path: str = Field(
-        default="",
-        description=(
-            "Vault-relative path where the taxonomy YAML should be written. "
-            "Defaults to 'taxonomy.yaml' inside the configured vault."
-        ),
-    )
-    merge: bool = Field(
-        default=False,
-        description=(
-            "If True, feed the existing taxonomy to the LLM as standing rules and "
-            "update it incrementally instead of regenerating it from scratch."
-        ),
-    )
-
-@tool(GenerateTaxonomyArgs, cls="composed")
+@tool(cls="composed")
 def silica_generate_taxonomy(
-    user_intent: str, scope: str = "", save_path: str = "", merge: bool = False
+    user_intent: Annotated[str, Field(description='Natural-language description of how the user wants to organize their vault')], scope: Annotated[str, Field(description='Vault-relative subfolder to restrict taxonomy generation and scanning to')] = "", save_path: Annotated[str, Field(description="Vault-relative path where the taxonomy YAML should be written. Defaults to 'taxonomy.yaml' inside the configured vault.")] = "", merge: Annotated[bool, Field(description='If True, feed the existing taxonomy to the LLM as standing rules and update it incrementally instead of regenerating it from scratch.')] = False
 ) -> dict[str, Any]:
     """Generate a taxonomy YAML from a natural-language organization intent
     and write it to taxonomy.yaml (or save_path). merge=True treats the
@@ -559,41 +521,13 @@ def silica_generate_taxonomy(
     }
 
 
-class RunOrganizerArgs(BaseModel):
-    taxonomy_path: str = Field(
-        default="",
-        description="Path to the taxonomy YAML file. Defaults to 'taxonomy.yaml' in the vault.",
-    )
-    scope: str = Field(
-        default="",
-        description="Vault-relative subfolder to restrict organization to (empty = vault-wide)",
-    )
-    dry_run: bool = Field(
-        default=True,
-        description=(
-            "If True (default), compute and return the move plan without executing any moves. "
-            "Set to False to actually move notes."
-        ),
-    )
-    llm_arbiter: bool = Field(
-        default=True,
-        description="If True, use the LLM to classify borderline notes (ambiguous band)",
-    )
-    move_uncategorized: bool = Field(
-        default=False,
-        description=(
-            "If True, notes matching no taxonomy rule are moved to the uncategorized "
-            "folder. Default False: unmatched notes stay where they are."
-        ),
-    )
-
-@tool(RunOrganizerArgs, cls="composed")
+@tool(cls="composed")
 def silica_run_organizer(
-    taxonomy_path: str = "",
-    scope: str = "",
-    dry_run: bool = True,
-    llm_arbiter: bool = True,
-    move_uncategorized: bool = False,
+    taxonomy_path: Annotated[str, Field(description="Path to the taxonomy YAML file. Defaults to 'taxonomy.yaml' in the vault.")] = "",
+    scope: Annotated[str, Field(description='Vault-relative subfolder to restrict organization to (empty = vault-wide)')] = "",
+    dry_run: Annotated[bool, Field(description='If True (default), compute and return the move plan without executing any moves. Set to False to actually move notes.')] = True,
+    llm_arbiter: Annotated[bool, Field(description='If True, use the LLM to classify borderline notes (ambiguous band)')] = True,
+    move_uncategorized: Annotated[bool, Field(description='If True, notes matching no taxonomy rule are moved to the uncategorized folder. Default False: unmatched notes stay where they are.')] = False,
 ) -> dict[str, Any]:
     """Classify notes against the taxonomy (silica_generate_taxonomy first)
     and move them into its folders. dry_run=True (default) returns the plan;

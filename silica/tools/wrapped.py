@@ -20,11 +20,13 @@ discoverability only — the FSM bypasses it.
 """
 from __future__ import annotations
 
+from typing import Annotated
+
 import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from silica.driver import DRIVER
 from silica.driver.base import NoteRef, Txn
@@ -39,12 +41,8 @@ logger = logging.getLogger(__name__)
 # silica_move
 # ---------------------------------------------------------------------------
 
-class MoveArgs(BaseModel):
-    ref: str = Field(description="Name or path of the note to move")
-    to: str = Field(description="Destination path")
-
-@tool(MoveArgs, cls="wrapped", collapse="eager")
-def silica_move(ref: str, to: str) -> dict[str, Any]:
+@tool(cls="wrapped", collapse="eager")
+def silica_move(ref: Annotated[str, Field(description='Name or path of the note to move')], to: Annotated[str, Field(description='Destination path')]) -> dict[str, Any]:
     """Move/rename a note safely. Obsidian updates all wikilinks (graph-safe)."""
     try:
         DRIVER.move(ref, to)
@@ -57,12 +55,8 @@ def silica_move(ref: str, to: str) -> dict[str, Any]:
 # silica_delete
 # ---------------------------------------------------------------------------
 
-class DeleteArgs(BaseModel):
-    ref: str = Field(description="Name or path of the note to delete")
-    confirm: bool = Field(default=False, description="Explicit confirmation for density loss")
-
-@tool(DeleteArgs, cls="wrapped", collapse="eager")
-def silica_delete(ref: str, confirm: bool = False) -> dict[str, Any]:
+@tool(cls="wrapped", collapse="eager")
+def silica_delete(ref: Annotated[str, Field(description='Name or path of the note to delete')], confirm: Annotated[bool, Field(description='Explicit confirmation for density loss')] = False) -> dict[str, Any]:
     """Delete a note. Requires confirmation if density is lost."""
     if not confirm:
         return {"error": "Anti-deletion policy: must pass confirm=True to acknowledge no density is lost."}
@@ -199,11 +193,8 @@ def build_txn(ops_data: list[Op] | list[dict]) -> Txn:
 # silica_snapshot
 # ---------------------------------------------------------------------------
 
-class SnapshotArgs(BaseModel):
-    ops_json_path: str = Field(description="Path to validated operations JSON to snapshot before writing")
-
-@tool(SnapshotArgs, cls="wrapped", collapse="eager", internal=True)
-def silica_snapshot(ops_json_path: str) -> dict[str, Any]:
+@tool(cls="wrapped", collapse="eager", internal=True)
+def silica_snapshot(ops_json_path: Annotated[str, Field(description='Path to validated operations JSON to snapshot before writing')]) -> dict[str, Any]:
     """Snapshot the current state of notes before they are modified.
 
     Builds InverseOp entries (C3):
@@ -237,12 +228,8 @@ def silica_snapshot(ops_json_path: str) -> dict[str, Any]:
 # silica_restore (real tool, usable by YAML recipe engine at S3.3)
 # ---------------------------------------------------------------------------
 
-class RestoreArgs(BaseModel):
-    txn_id: str = Field(description="Transaction ID to restore (for audit log only)")
-    inverses: list[dict] = Field(description="InverseOp list from silica_snapshot result")
-
-@tool(RestoreArgs, cls="wrapped", collapse="eager", internal=True)
-def silica_restore(txn_id: str, inverses: list[dict]) -> dict[str, Any]:
+@tool(cls="wrapped", collapse="eager", internal=True)
+def silica_restore(txn_id: Annotated[str, Field(description='Transaction ID to restore (for audit log only)')], inverses: Annotated[list[dict], Field(description='InverseOp list from silica_snapshot result')]) -> dict[str, Any]:
     """Apply InverseOp list to rollback a transaction.
 
     Accepts the 'inverses' list produced by silica_snapshot — fully
@@ -315,12 +302,8 @@ def silica_restore(txn_id: str, inverses: list[dict]) -> dict[str, Any]:
 # silica_cleanup (real tool for S3.3 YAML recipe)
 # ---------------------------------------------------------------------------
 
-class CleanupArgs(BaseModel):
-    inbox_file: str = Field(description="Vault-relative path of the inbox file to archive")
-    done_dir: str = Field(default="", description="Destination folder; empty resolves this vault's archive root")
-
-@tool(CleanupArgs, cls="wrapped", collapse="eager", internal=True)
-def silica_cleanup(inbox_file: str, done_dir: str = "") -> dict[str, Any]:
+@tool(cls="wrapped", collapse="eager", internal=True)
+def silica_cleanup(inbox_file: Annotated[str, Field(description='Vault-relative path of the inbox file to archive')], done_dir: Annotated[str, Field(description="Destination folder; empty resolves this vault's archive root")] = "") -> dict[str, Any]:
     """Archive the inbox file under Done/ after successful pipeline completion.
 
     C5: Only callable from DONE state — the orchestrator enforces this.
