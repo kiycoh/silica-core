@@ -550,13 +550,17 @@ body.dragging #drop-hint {
   height: 100%;
   display: flex;
   flex-direction: column;
-  /* Chrome glass, not the blurring kind, and measured rather than assumed: the
-     drawer never overlays the transcript, because body.note-open insets
-     #view-chat by exactly its width. What sits behind it is the page wash, a
-     smooth gradient, and blurring a smooth gradient returns the gradient. So it
-     takes the translucent fill (which does show the wash travel across it) and
-     skips the filter that would cost a composited layer for nothing. */
-  background: var(--chrome-glass);
+  /* The overlay glass, the same material as the surfaces it sits beside on
+     explore - #legend and the #dock cards - so a note opened next to the legend
+     does not read as a second kind of pane. It carried --chrome-glass and no
+     filter before, on the measurement that every view insets itself by the
+     drawer's width (chat, metrics and calendar by padding, explore by resizing
+     its frame), so nothing actually scrolls behind it and the blur has only the
+     page wash to work on. That is still true: the filter here buys consistency
+     of material, not a visible distortion, and one composited layer for the one
+     panel is what that costs. */
+  background: var(--glass);
+  backdrop-filter: var(--glass-blur);
   border-left: 1px solid var(--line-2);
   box-shadow: -18px 0 40px -20px rgb(var(--shadow-rgb) / .8), var(--glass-edge);
   transform: translateX(100%);
