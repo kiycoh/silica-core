@@ -851,19 +851,31 @@ def _dc_map(args: list[str], **_) -> bool:
 
 
 def _dc_find(args: list[str], *, raw_input: str = "", **_) -> bool:
-    """/find <query> [--k=N] — semantic search, printed in the terminal."""
+    """/find <query> [--k=N] [--min-trust=T] [--lifecycle=L] — semantic search,
+    printed in the terminal. The two epistemic flags (spec M2) filter AFTER the
+    search, so the printed count says what they cost."""
     from silica.tools import TOOLS
 
     k = _int_flag(args, "--k=", 5)
+    min_trust = _str_flag(args, "--min-trust").strip().lower()
+    life = _str_flag(args, "--lifecycle").strip().lower()
     # original case preserved — raw_input, not the lowered cmd
     query = " ".join(_positional(args))
     if not query:
-        CONSOLE.print("  Usage: /find <query> [--k=N]")
+        CONSOLE.print("  Usage: /find <query> [--k=N] [--min-trust=human|grounded|distilled|kept] "
+                      "[--lifecycle=active|review|contested|superseded]")
         return True
     result = TOOLS["silica_semantic_search"].run(query=query, k=k)
     try:
         parsed = json.loads(result)
         results = parsed.get("results", [])
+        if results and (min_trust or life):
+            results, dropped = _epistemic_filter(results, min_trust, life)
+            if dropped:
+                CONSOLE.print(f"  [dim]{dropped} result(s) filtered by "
+                              f"{'--min-trust=' + min_trust if min_trust else ''}"
+                              f"{' ' if min_trust and life else ''}"
+                              f"{'--lifecycle=' + life if life else ''}[/]")
         if results:
             CONSOLE.print(f"  Results for [bold]{query}[/] (top {len(results)}):")
             for r in results:
@@ -879,15 +891,136 @@ def _dc_find(args: list[str], *, raw_input: str = "", **_) -> bool:
     return True
 
 
-def _dc_stale(args: list[str], **_) -> bool:
-    """/stale [folder] — code notes whose source moved on."""
+def _epistemic_filter(results: list[dict], min_trust: str, life: str) -> tuple[list[dict], int]:
+    """`(kept, dropped)` of search rows under a trust floor and/or a lifecycle,
+    read off each note's frontmatter (contested.trust / .lifecycle). A row
+    whose note cannot be read is dropped: an unreadable note has no trust."""
+    from silica.driver import DRIVER
+    from silica.kernel.write import frontmatter
+    from silica.kernel.write.contested import TRUST_ORDER, lifecycle, trust
+
+    floor = TRUST_ORDER.get(min_trust, 0)
+    kept: list[dict] = []
+    for r in results:
+        ref = r.get("path") or r.get("name") or ""
+        try:
+            content = DRIVER.read_note(ref if ref.endswith(".md") else ref + ".md").content or ""
+        except Exception:
+            continue
+        data, _raw, _body = frontmatter.split(content)
+        if TRUST_ORDER.get(trust(content), 0) < floor:
+            continue
+        if life and lifecycle(data) != life:
+            continue
+        kept.append(r)
+    return kept, len(results) - len(kept)
+
+
+def _dc_verify(args: list[str], **_) -> bool:
+    """/verify <note> [--clear] — a person vouches for a note (OKF §5.2), bound
+    to the body as it is now; --clear withdraws every human entry. The only
+    writer of a `human:` attestation: the MCP tools refuse the key (spec M4)."""
+    import datetime
+    import getpass
+
+    from silica.driver import DRIVER
+    from silica.kernel.write.checkpoints import get_checkpoint_store
+    from silica.kernel.write.notetype import clear_verified, stamp_verified
+
+    name = " ".join(_positional(args))
+    if not name:
+        CONSOLE.print("  Usage: /verify <note> [--clear]")
+        return True
+    try:
+        nc = DRIVER.read_note(name)
+    except Exception as e:
+        CONSOLE.print(f"  [yellow]Cannot read '{name}': {e}[/]")
+        return True
+    path, prior = nc.ref.path or name, nc.content or ""
+    who, today = f"human:{getpass.getuser()}", datetime.date.today().isoformat()
+    try:
+        new = clear_verified(prior) if "--clear" in args else stamp_verified(prior, who, today)
+    except ValueError as e:
+        CONSOLE.print(f"  [yellow]{e}[/]")
+        return True
+    if new == prior:
+        CONSOLE.print(f"  {path}: nothing to change.")
+        return True
+    DRIVER.overwrite(path, new)
+    get_checkpoint_store().push(path, prior, new)  # /undo reaches it; the edited lane knows it
+    if "--clear" in args:
+        CONSOLE.print(f"  {path}: human attestations cleared.")
+    else:
+        CONSOLE.print(f"  {path}: verified by {who} at {today}.")
+    return True
+
+
+def _epistemic_lanes(vault: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """(attested notes whose body moved on, gate-written notes edited outside
+    Silica) for `/stale` (spec M4). Same walk rules as the OKF census: hidden
+    folders skipped."""
     from pathlib import Path
-    from silica.kernel.code import codedocs
+
+    from silica.kernel.write.notetype import attestation_drift
+    from silica.kernel.write.undo_journal import edited_since_write
+
+    root = Path(vault)
+    drifted: list[tuple[str, str]] = []
+    for f in sorted(root.rglob("*.md")):
+        rel = f.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        try:
+            at = attestation_drift(f.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        if at:
+            drifted.append((rel.as_posix(), at))
+    try:
+        edited = edited_since_write(vault)
+    except Exception as e:  # a corrupt or locked journal must not hide the code lane
+        logger.warning("/stale: edited-since-write lane skipped: %s", e)
+        edited = []
+    return drifted, edited
+
+
+def _print_epistemic_lanes(vault: str) -> int:
+    """Prints the two epistemic lanes; returns how many notes they named."""
+    drifted, edited = _epistemic_lanes(vault)
+    for rel, at in drifted:
+        CONSOLE.print(f"  · [bold]{rel}[/] — attested {at}, body changed since (re-run /verify or /verify --clear)")
+    for rel in edited:
+        CONSOLE.print(f"  · [bold]{rel}[/] — edited outside Silica since the gate wrote it")
+    return len(drifted) + len(edited)
+
+
+def _dc_stale(args: list[str], **_) -> bool:
+    """/stale [--all] — code notes whose source moved on, attested notes whose
+    body moved on, gate-written notes edited by hand since.
+    /stale --stamp [--write] — derive documents:/code_ref for unbound notes (ADR-0038)."""
+    from pathlib import Path
     vault = CONFIG.vault_path
     if not vault:
         CONSOLE.print("  No vault configured; /stale needs a .silica vault in a git repo.")
         return True
-    show_all = "--all" in args
+    if "--stamp" in args:
+        folder = next((a for a in args if not a.startswith("--")), "")
+        return _stale_stamp(Path(vault), folder=folder, write="--write" in args)
+    # One all-clear for the whole command, and only when every lane is empty:
+    # a per-lane "nothing here" read as a verdict above the next lane's list.
+    shown = _stale_code_lane(Path(vault), show_all="--all" in args)
+    shown += _print_epistemic_lanes(vault)
+    if not shown:
+        CONSOLE.print("  Nothing stale: every documents: note matches its code_ref, every "
+                      "attestation matches its body, no gate-written note edited by hand.")
+    return True
+
+
+def _stale_code_lane(vault, *, show_all: bool) -> int:
+    """Prints the code lane; returns how many notes it named."""
+    from pathlib import Path
+
+    from silica.kernel.code import codedocs
     # /stale is the manual refresh valve: drop the cache, recompute, rewrite.
     codedocs.invalidate_snapshot(Path(vault))
     stale = codedocs.snapshot(Path(vault))
@@ -916,12 +1049,63 @@ def _dc_stale(args: list[str], **_) -> bool:
                 f"  No structural staleness. {hidden} note(s) have cosmetic-only "
                 "changes — use [bold]/stale --all[/] to list them."
             )
-        else:
-            CONSOLE.print("  No stale docs — every documents: note matches its code_ref.")
-        return True
+        return 0
     CONSOLE.print("  Run [bold]/nucleate <path>[/] to regenerate, or edit and re-badge.")
+    return shown
+
+
+def _stale_stamp(vault, folder: str, write: bool) -> bool:
+    """List (and with `write`, apply) derived bindings. The write is a yes
+    given per run and per folder: detection may start by itself, a stamp may
+    not (ADR-0038)."""
+    from silica.kernel.code import derive_documents as dd
+    props = dd.propose(vault, folder=folder)
+    if not props:
+        where = f" under {folder}" if folder else ""
+        CONSOLE.print(f"  Nothing to stamp{where}: every note that names source already carries documents:.")
+        return True
+    for p in props:
+        more = f" +{len(p.documents) - 4}" if len(p.documents) > 4 else ""
+        CONSOLE.print(f"  · [bold]{p.note_path}[/] ← {', '.join(p.documents[:4])}{more}"
+                      f"  @ {p.code_ref[:8]} ({'+'.join(p.lanes)})")
+    if write:
+        n = dd.apply(vault, props)
+        CONSOLE.print(f"  Stamped {n} note(s). Run [bold]/stale[/] for the drift since each code_ref.")
+    else:
+        CONSOLE.print(f"  {len(props)} proposal(s), nothing written. "
+                      "Add [bold]--write[/] to stamp them.")
     return True
 
+
+def _dc_migrate(args: list[str], **_) -> bool:
+    """/migrate [folder] [--write]: notes Silica wrote in an older shape,
+    rewritten through today's writer (ADR-0039). A list by default; the write
+    is a yes per run and per folder and lands as one revertible run."""
+    from pathlib import Path
+
+    from silica.kernel.write import migrate
+    vault = CONFIG.vault_path
+    if not vault:
+        CONSOLE.print("  No vault configured; /migrate needs one.")
+        return True
+    folder = next((a for a in args if not a.startswith("--")), "")
+    plans = migrate.propose(Path(vault), folder=folder)
+    if not plans:
+        where = f" under {folder}" if folder else ""
+        CONSOLE.print(f"  Nothing to migrate{where}: no note carries the "
+                      f"{migrate.PROVENANCE_HEADER.name} shape.")
+        return True
+    for p in plans:
+        tag = f"  skipped: {p.skip}" if p.skip else ""
+        CONSOLE.print(f"  · [bold]{p.path}[/]  {p.hits} block(s){tag}")
+    todo = sum(1 for p in plans if not p.skip)
+    if "--write" in args:
+        n, run_id = migrate.apply(Path(vault), plans)
+        CONSOLE.print(f"  Migrated {n} note(s) (run {run_id[:8]}). [bold]/revert[/] undoes it.")
+    else:
+        CONSOLE.print(f"  {todo} note(s) to rewrite, nothing written. "
+                      "Add [bold]--write[/] to migrate them.")
+    return True
 
 def _dc_impact(args: list[str], **_) -> bool:
     """/impact [<git-range>] — which notes a code change touches."""
@@ -1462,10 +1646,12 @@ _DIRECT: dict[str, Callable[..., bool]] = {
     "/map": _dc_map,
     "/find": _dc_find,
     "/stale": _dc_stale,
+    "/migrate": _dc_migrate,
     "/impact": _dc_impact,
     "/plans": _dc_plans,
     "/path": _dc_path,
     "/contested": _dc_contested,
+    "/verify": _dc_verify,
     "/agenda": _dc_agenda,
     "/episodes": _dc_episodes,
     "/changes": _dc_changes,
@@ -1497,6 +1683,7 @@ def _handle_direct_shortcut(raw_input: str, messages: list[dict]) -> bool:
         /impact [<git-range>]
         /path <noteA> <noteB>
         /contested
+        /verify <note> [--clear]
         /changes
         /undo [note-path]
     """
@@ -1633,6 +1820,28 @@ def _file_drafts(
             resolved = list(pool.map(_read_and_resolve, md_files))
     else:
         resolved = [_read_and_resolve(f) for f in md_files]
+
+    # Siblings of one folder are one kind of material, and the sniff is not
+    # stable on them: the same 14 lectures came back 6 study / 4 transcript /
+    # 4 unsure in one run and one of them "draft" in the next, which filed a
+    # lecture as-is instead of distilling it (2026-09-05). The folder votes
+    # among the sniffed verdicts; sniffed and unsure files follow the vote,
+    # stamps and a configured vault profile do not. A tie keeps each verdict.
+    if len(md_files) > 1:
+        from collections import Counter
+        votes = Counter(rr[1].form for rr in resolved if rr and rr[1].origin == "sniff" and rr[1].form)
+        top = votes.most_common(2)
+        if top and (len(top) == 1 or top[0][1] > top[1][1]):
+            folder_form = top[0][0]
+            voted = forms.Form(folder_form, forms.profile_for(folder_form), "folder vote")
+            for i, rr in enumerate(resolved):
+                if rr and rr[1].origin in ("sniff", "default") and rr[1] != voted:
+                    forms.pin_sniff(rr[0], folder_form)
+                    resolved[i] = (rr[0], voted)
+            CONSOLE.print(
+                f"  folder vote: [bold]{folder_form}[/] "
+                f"({votes[folder_form]} of {sum(votes.values())} sniffed file(s))"
+            )
 
     for f, rr in zip(md_files, resolved):
         if rr is None:

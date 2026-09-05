@@ -201,7 +201,7 @@ Every verb the registry knows, which is what `tests/test_readme_sync.py` compare
 | `/wiki [folder|path] [--overview-only] [--force]` | behavioral code wiki: ARCHITECTURE.md + one note per subsystem |
 | `/graph [out.html] [folder]` | export knowledge graph |
 | `/map <note> [--force]` | radial mind-map rooted on a note -> maps/<stem>.canvas |
-| `/find <query> [--k=N]` | semantic search |
+| `/find <query> [--k=N] [--min-trust=T] [--lifecycle=L]` | semantic search; the two epistemic flags filter after the search, so the count says what they cost |
 | `/changes` | notes this session wrote to, with added/removed line counts |
 | `/undo [note-path]` | undo the last patch on a note |
 | `/review [--flush=HASH]` | inspect the async review queue (deferred ops) |
@@ -212,11 +212,13 @@ Every verb the registry knows, which is what `tests/test_readme_sync.py` compare
 | `/aliases [folder] [--apply]` | propose frontmatter aliases for note titles (abbreviations, spellings); dry-run, --apply writes |
 | `/refine [folder]` | enrich and normalize notes (sub-agent) |
 | `/enrich [folder]` | enrich note semantics (sub-agent) |
-| `/stale [--all]` | list notes whose documents: sources changed structurally (--all includes cosmetic) |
+| `/stale [--all] \| --stamp [folder] [--write]` | notes whose documents: sources changed structurally (--all includes cosmetic), attested notes whose body moved on, gate-written notes edited by hand; --stamp derives documents:/code_ref for unbound notes, --write stamps them |
+| `/migrate [folder] [--write]` | notes Silica wrote in an older shape, rewritten through today's writer; a list until --write, then one revertible run |
 | `/impact [<git-range>]` | changed files -> affected notes (documenting + 1-hop import neighbors); no range = uncommitted changes |
 | `/plans` | list plans/ notes grouped by status: (todo\|in-progress\|blocked\|done) |
 | `/path <noteA> <noteB>` | shortest reading path between two notes (wikilinks + co-occurrence) |
 | `/contested` | list notes flagged contested: true with their unresolved contradictions |
+| `/verify <note> [--clear]` | vouch for a note as a person (OKF verified, bound to the body); --clear withdraws |
 
 **Session and settings**
 

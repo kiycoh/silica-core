@@ -305,8 +305,14 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="/stale",
         group="direct",
-        usage="[--all]",
-        summary="list notes whose documents: sources changed structurally (--all includes cosmetic)",
+        usage="[--all] | --stamp [folder] [--write]",
+        summary="list notes whose documents: sources changed structurally (--all includes cosmetic); --stamp derives documents:/code_ref for unbound notes, --write stamps them",
+    ),
+    Command(
+        name="/migrate",
+        group="direct",
+        usage="[folder] [--write]",
+        summary="notes Silica wrote in an older shape, rewritten through today's writer; a list until --write, one revertible run",
     ),
     Command(
         name="/impact",
@@ -332,6 +338,13 @@ COMMANDS: tuple[Command, ...] = (
         group="direct",
         usage="",
         summary="list notes flagged contested: true with their unresolved contradictions",
+    ),
+    Command(
+        name="/verify",
+        group="direct",
+        usage="<note> [--clear]",
+        summary="vouch for a note as a person (OKF verified, bound to the body); --clear withdraws",
+        examples=("/verify docs/adr/0038-detection-at-session-open-writes-on-command",),
     ),
     # System
     Command(

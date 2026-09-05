@@ -754,6 +754,27 @@ class TestFileDraftsParallelResolve:
             kept = cli._file_drafts(list(files), "Target", None)
         assert kept == files
 
+    def test_folder_vote_overrides_a_lone_verdict(self, monkeypatch):
+        # Run 2 of 2026-09-05: Lezione 1 sniffed "draft" among 13 lectures of
+        # the same course and was filed as-is; run 1 had sniffed the same file
+        # "transcript". Siblings of one folder are one kind of material, so
+        # the folder votes and every sniffed or unsure file follows the vote.
+        from unittest.mock import patch as _patch
+        import silica.cli as cli
+        import silica.kernel.forms as forms
+
+        verdict = {"Inbox/a.md": "study", "Inbox/b.md": "draft", "Inbox/c.md": "study",
+                   "Inbox/d.md": "", "Inbox/e.md": "transcript"}
+        forms._sniff_memo.clear()
+        with _patch.object(forms, "read_source_text", side_effect=lambda f: f), \
+             _patch.object(forms, "sniff_form", side_effect=lambda text: verdict[text]):
+            kept = cli._file_drafts(list(verdict), "Target", None)
+        assert kept == list(verdict)  # nothing filed
+        # RECON re-resolves the same text later: the pinned memo answers, no LLM call.
+        with _patch.object(forms, "call_llm", side_effect=AssertionError("re-sniffed")):
+            assert [forms.resolve(f).form for f in verdict] == ["study"] * 5
+        forms._sniff_memo.clear()
+
     def test_resolve_failure_keeps_the_file(self):
         from unittest.mock import patch as _patch
         import silica.cli as cli
