@@ -77,17 +77,29 @@ def validate_documents(entries: list[str], root: Path | str) -> tuple[list[str],
 
 
 def iter_documenting_notes(vault: Path | str):
-    """Yield (note_path, data, body) for every note carrying `documents:`."""
+    """Yield (note_path, data, body) for every note carrying `documents:`.
+
+    Same pruning as every other vault walk (hidden dirs, NOISE_DIRS,
+    `.silicaignore`): this one used rglob and entered `.silica/` and `.venv/`,
+    which on the repo vault meant 242 residue notes of a killed probe counted
+    as stale and a 17.8 s walk for 4 real notes (ADR-0038).
+    """
     vault = Path(vault)
-    for md in sorted(vault.rglob("*.md")):
-        try:
-            content = md.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        data, _, body = frontmatter.split(content)
-        if not data or not _documents_of(data):
-            continue
-        yield md.relative_to(vault).as_posix(), data, body
+    skip = paths.ignore_matcher(vault)
+    for dirpath, dirnames, filenames in os.walk(vault):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and not skip(d))
+        for fn in sorted(filenames):
+            if not fn.endswith(".md"):
+                continue
+            md = Path(dirpath) / fn
+            try:
+                content = md.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            data, _, body = frontmatter.split(content)
+            if not data or not _documents_of(data):
+                continue
+            yield md.relative_to(vault).as_posix(), data, body
 
 
 def _skeleton_of(src: str, path: str, language):
@@ -147,14 +159,17 @@ def note_verdict(docs: list[StaleDoc]) -> tuple[str, list[str]]:
     return level, [line for d in docs for line in d.details]
 
 
-def stale_docs(vault: Path | str, repo_root: Path | str | None = None) -> list[StaleDoc]:
-    """Return one StaleDoc per (note, changed path). Empty when git is absent."""
+def stale_docs(vault: Path | str, repo_root: Path | str | None = None,
+               notes: list | None = None) -> list[StaleDoc]:
+    """Return one StaleDoc per (note, changed path). Empty when git is absent.
+    `notes` lets the snapshot pass the walk it already paid for."""
     vault = Path(vault)
     root = Path(repo_root) if repo_root else paths.repo_root_for(vault)
     if root is None:
         return []
 
-    notes = list(iter_documenting_notes(vault))
+    if notes is None:
+        notes = list(iter_documenting_notes(vault))
     wanted: set[str] = set()
     by_ref: dict[str, set[str]] = {}
     for _, data, _ in notes:
@@ -274,7 +289,14 @@ def snapshot(vault: Path | str, repo_root: Path | str | None = None) -> list[Sta
             return [_doc_from_json(d) for d in raw.get("docs", [])]
     except Exception:
         pass  # missing, corrupt, or unreadable: recompute and rewrite below
-    docs = stale_docs(vault, repo_root=root)
+    notes = list(iter_documenting_notes(vault))
+    docs = stale_docs(vault, repo_root=root, notes=notes)
+    # Every documenting note, stale or not, with its binding: the join a later
+    # `git diff` needs (drift below). A cache like the rest of the file, keyed
+    # on HEAD; frontmatter stays the only store of a binding (ADR-0038).
+    documented = {note: {"documents": _documents_of(data),
+                         "code_ref": str(data.get("code_ref") or "").strip()}
+                  for note, data, _ in notes}
     try:
         cache.parent.mkdir(parents=True, exist_ok=True)
         # Per-pid temp name: two writers (e.g. the MCP server and a CLI run)
@@ -283,7 +305,8 @@ def snapshot(vault: Path | str, repo_root: Path | str | None = None) -> list[Sta
         # independently atomic; whichever finishes last simply wins cleanly.
         tmp = cache.parent / (cache.name + f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps({"head": head,
-                                   "docs": [_doc_to_json(d) for d in docs]}),
+                                   "docs": [_doc_to_json(d) for d in docs],
+                                   "documented": documented}),
                        encoding="utf-8")
         os.replace(tmp, cache)
     except Exception:
@@ -309,13 +332,69 @@ def peek(vault: Path | str, repo_root: Path | str | None = None) -> dict[str, st
         raw = json.loads(_snapshot_path(vault).read_text(encoding="utf-8"))
         if raw.get("head") != head:
             return {}
-        out: dict[str, str] = {}
-        for d in raw.get("docs", []):
-            if out.get(d["note_path"]) != CHANGE_STRUCTURAL:
-                out[d["note_path"]] = d.get("change_level", CHANGE_STRUCTURAL)
-        return out
+        return _note_levels(raw)
     except Exception:
         return {}
+
+
+def _hidden(note_path: str) -> bool:
+    """A note under a dot-directory is never a vault note. Snapshots written
+    before the walk was pruned (2026-09-04) still hold such entries, and a
+    cache is not the place to trust over the walk that now excludes them."""
+    return any(seg.startswith(".") for seg in note_path.split("/")[:-1])
+
+
+def _note_levels(raw: dict) -> dict[str, str]:
+    """note_path -> change_level from a raw snapshot; structural wins."""
+    out: dict[str, str] = {}
+    for d in raw.get("docs", []):
+        if _hidden(d["note_path"]):
+            continue
+        if out.get(d["note_path"]) != CHANGE_STRUCTURAL:
+            out[d["note_path"]] = d.get("change_level", CHANGE_STRUCTURAL)
+    return out
+
+
+def drift(vault: Path | str, repo_root: Path | str | None = None) -> dict | None:
+    """What moved since the snapshot was taken, for the session-open brief
+    (ADR-0038): the cache as it is plus one `git diff snap_head..HEAD`,
+    joined against the documented map. NEVER recomputes: a cold snapshot is
+    measured at 80 s on the repo vault and this runs inside someone else's
+    session hook. None when there is no repo, no HEAD or no snapshot yet.
+
+    Baseline is the snapshot's own HEAD, not a per-session marker: the map is
+    exact at that ref, so the diff from there is exactly what the snapshot
+    does not know, and the line repeats until `/stale` refreshes it.
+    """
+    try:
+        vault = Path(vault)
+        root = Path(repo_root) if repo_root else paths.repo_root_for(vault)
+        if root is None:
+            return None
+        head = gitstate.head_ref(root)
+        if not head:
+            return None
+        raw = json.loads(_snapshot_path(vault).read_text(encoding="utf-8"))
+        snap_head = str(raw.get("head") or "")
+        if not snap_head:
+            return None
+        by_path: dict[str, list[str]] = {}
+        for note, entry in (raw.get("documented") or {}).items():
+            if _hidden(note):
+                continue
+            for p in entry.get("documents", []):
+                by_path.setdefault(p, []).append(note)
+        moved = ([] if snap_head == head
+                 else gitstate.changed_paths(root, f"{snap_head}..{head}") or [])
+        changed = sorted(p for p in set(moved) if p in by_path)
+        affected: dict[str, list[str]] = {}
+        for p in changed:
+            for note in by_path[p]:
+                affected.setdefault(note, []).append(p)
+        return {"snap_head": snap_head, "head": head, "changed": changed,
+                "affected": affected, "stale": _note_levels(raw)}
+    except Exception:
+        return None  # a brief is an aid; any failure here is silence, like the hook
 
 
 def invalidate_snapshot(vault: Path | str) -> None:

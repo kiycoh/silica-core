@@ -35,6 +35,14 @@ dependencies = [
   # [linkify] pulls linkify-it-py: bare URLs in an answer become link tokens
   # before the note-ref pass sees them, in the web render and the TUI alike.
   "markdown-it-py[linkify]",
+  # Serializer for every derived store (co-occurrence, lexical, embed metadata,
+  # deferred ops, codegraph, run ledgers). Not a taste call, and not the stdlib:
+  # measured 2026-09-04 on the real 108 MB co-occurrence index, orjson dumps in
+  # 428 ms against 2271 ms for a byte-identical `json.dumps(ensure_ascii=False,
+  # separators=(",", ":"))`, on a path that runs at every DiskSynced flush. The
+  # stdlib port also has to get those two arguments right at 54 sites, and
+  # forgetting ensure_ascii silently changes hashed bytes (codewiki digest sig,
+  # codegraph store, workqueue dedup key). Reverted twice, see ADR-0037.
   "orjson",
   "openai",
   "numpy>=2.4.6",
@@ -116,7 +124,7 @@ rerank = ["sentence-transformers>=3.0"]
 all = ["silica-harness[gui,connect,mcp,rerank]"]
 
 [project.scripts]
-silica = "silica.cli:main"
+silica = "silica.entry:main"
 
 [project.urls]
 Homepage = "https://github.com/kiycoh/silica-harness"

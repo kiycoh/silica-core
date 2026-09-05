@@ -32,6 +32,16 @@ def test_session_start_names_only_served_tools(tmp_path):
     assert not set(re.findall(r"silica_\w+", out)) - set(CORE_TOOLS)
 
 
+def test_session_start_counts_notes_in_an_older_shape(tmp_path):
+    # ADR-0039: the count at session open, the rewrite on /migrate --write.
+    vault = _vault(tmp_path)
+    assert "/migrate" not in hook_mod.session_start(json.dumps({"cwd": str(vault)}))
+    (vault / "old.md").write_text(
+        "# old\n\n## Additional notes: old (from Lezione 1.md)\n\n- [[X]] applies this (Lezione 1): y.\n",
+        encoding="utf-8")
+    out = hook_mod.session_start(json.dumps({"cwd": str(vault)}))
+    assert "1 note" in out and "/migrate --write" in out
+
 def test_no_vault_is_silence(tmp_path):
     assert hook_mod.session_start(json.dumps({"cwd": str(tmp_path)})) == ""
 
@@ -69,3 +79,19 @@ def test_a_manifest_in_a_system_directory_is_not_a_vault(tmp_path, monkeypatch):
     sub = tmp_path / "pytest-1" / "case"
     sub.mkdir(parents=True)
     assert hook_mod.session_start(json.dumps({"cwd": str(sub)})) == ""
+
+
+def test_console_entry_runs_the_hook_without_importing_the_cli(tmp_path):
+    # `silica hook` runs inside someone else's session at every start; the
+    # CLI import alone was measured at 3.3 s (2026-09-04) for 0.2 s of work.
+    vault = _vault(tmp_path)
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.argv = ['silica', 'hook', 'SessionStart']; "
+         "import silica.entry as e; rc = e.main(); "
+         "print('CLI-IMPORTED' if 'silica.cli' in sys.modules else 'THIN'); sys.exit(rc)"],
+        input=json.dumps({"cwd": str(vault)}),
+        capture_output=True, text=True, cwd=tmp_path, timeout=120,
+    )
+    assert r.returncode == 0, r.stderr
+    assert str(vault) in r.stdout and "THIN" in r.stdout

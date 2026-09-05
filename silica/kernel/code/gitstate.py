@@ -214,6 +214,26 @@ def commits_since(root: Path | str, since_ref: str, path: str) -> list[CommitInf
     return _parse_log(proc.stdout)
 
 
+def ref_before(root: Path | str, date: str) -> str | None:
+    """Newest commit on HEAD's history at or before `date` (YYYY-MM-DD, end of
+    that day, local time); the root commit when nothing is that old, because a
+    note older than the repo has seen every change since (ADR-0038). None
+    without git, HEAD, or a well-formed date."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date or ""):
+        return None
+    proc = _run(["rev-list", "-1", f"--before={date}T23:59:59", "HEAD"], root)
+    if proc is None or proc.returncode != 0:
+        return None
+    sha = proc.stdout.strip()
+    if sha:
+        return sha
+    proc = _run(["rev-list", "--max-parents=0", "HEAD"], root)
+    if proc is None or proc.returncode != 0:
+        return None
+    roots = proc.stdout.split()
+    return roots[-1] if roots else None
+
+
 def list_files(root: Path | str) -> list[str] | None:
     """Repo-relative POSIX paths git knows about: tracked plus
     untracked-but-not-ignored (`ls-files --cached --others --exclude-standard`).
