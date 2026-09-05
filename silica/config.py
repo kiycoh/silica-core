@@ -69,7 +69,10 @@ def load_user_env(path: Path) -> None:
             # from this file, the same key served every entry point that never
             # ran the CLI bootstrap (benches, probes, `python -c`) a vault the
             # user was not in: measured 2026-09-02, an evidence dump ran
-            # against the wrong embed store. Ignored since 2026-09-03.
+            # against the wrong embed store. Ignored since 2026-09-03. An
+            # export already does what the warning asks for, so it stays quiet.
+            if os.environ.get("SILICA_VAULT", "").strip():
+                continue
             logging.getLogger(__name__).warning(
                 "SILICA_VAULT in %s is ignored: silica curates the folder it is "
                 "launched in. Delete the line, or export SILICA_VAULT to pin a vault.",
@@ -326,6 +329,18 @@ class SilicaConfig:
         default_factory=lambda: os.getenv("SILICA_WORKER_API_KEY", None)
     )
 
+    # --- Judge model (epistemic-state spec M7) ---
+    # The verdicts (residue coverage in kernel/residue.py, dedup in
+    # capabilities/dedup.py) on a model other than the writer, so a verdict is
+    # not the writer grading itself. Unset: every judge keeps the role it had
+    # (residue the router, dedup the worker), byte-identical behaviour.
+    judge_model: str | None = field(
+        default_factory=lambda: os.getenv("SILICA_JUDGE_MODEL", None)
+    )
+    judge_provider: str | None = field(
+        default_factory=lambda: os.getenv("SILICA_JUDGE_PROVIDER", None)
+    )
+
     # --- Distiller escalation model (Tier 2 cascade) ---
     # A VALIDATE rejection escalates the steer retry to this model instead of
     # re-steering the worker (UCCI-style cascade). Unset: escalation falls back
@@ -356,15 +371,6 @@ class SilicaConfig:
     # the staleness effect sits inside the pipeline's own run-to-run noise.
     distill_concurrency: int = field(
         default_factory=lambda: int(os.getenv("SILICA_DISTILL_CONCURRENCY", "3"))
-    )
-
-    # Tier 2 novelty gate (SAGE-style): a concept whose top vault candidate
-    # scores at or above this cosine leaves the payload BEFORE chunking and
-    # goes to the dedup-judge lane (deferred store + concurrent ternary judge).
-    # 0 = gate off. Flip the default to 0.93 only after the bench A/B passes
-    # (see docs spec 2026-07-18-ingest-tier2-cost-design).
-    novelty_tau: float = field(
-        default_factory=lambda: float(os.getenv("SILICA_NOVELTY_TAU", "0"))
     )
 
     # Vault path — used by the fs backend and for context.
@@ -404,44 +410,6 @@ class SilicaConfig:
     episodic_nucleation_runs: int = field(
         default_factory=lambda: int(os.getenv("SILICA_EPISODIC_NUCLEATION_RUNS", "3"))
     )
-    # Supersede gate (key-collision diagnosis 2026-08-02): minimum TEXT cosine
-    # between a same-key arrival and the live head it would bury for the
-    # supersede to proceed; below it the arrival FORKS a sibling live chain
-    # instead, so distinct facts sharing a slotty key ("event_date" holding
-    # five different events) stop erasing each other. 0 = off (always
-    # supersede, the pre-gate behavior). The probe
-    # (bench/supersede_gate_probe.json, 1081 pairs) and the mid-band hand-label
-    # (bench/supersede_gate_midband_labels.json) size the tau: genuine updates
-    # sit >= ~0.83, collisions center at 0.53, and the 0.55-0.70 band is ~56%
-    # collision with no internal separation — so if it is ever armed the tau
-    # belongs at the band's TOP, i.e. 0.70. A false fork costs one near-duplicate live fact; a
-    # missed fork fabricates a retraction, so the asymmetry picks the
-    # aggressive end. Replay evidence (bench/gate_replay.py): on
-    # conv-26 live facts go 107 → 134, rescuing 27 of 29 burials while keeping
-    # 2 real supersedes; on the worst store 20 → 190, rescuing 170 while
-    # keeping 20 genuine update chains. Known miss: event_date school→workshop
-    # scores 0.771 and still buries — the residue needs the distiller's key
-    # contract, not a lower tau. Band is qwen3-embedding-4b-relative;
-    # re-measure before trusting under another embedder. Gate abstains (legacy
-    # supersede) when either vector is unavailable.
-    # SHIPS OFF, deliberately. The answer-path A/B (bench/gate_answer_ab.py,
-    # conv-26, 199 questions, episodic block only) came back NULL: 52.8% ->
-    # 53.8%, discordant 14/12, McNemar exact p=0.845. The gate demonstrably
-    # fixes store integrity (it stops fabricated retractions) but buys nothing
-    # measurable on the product metric, so it stays behind the flag until
-    # something moves. Post-hoc and uncorrected, therefore only a hypothesis for
-    # the re-run: single-hop rose (discordant 10/2, p=0.039, the predicted
-    # direction since one buried fact is exactly what those questions need)
-    # while abstention (0/3) and open-domain (0/4) fell, consistent with more
-    # live facts giving the model more material to over-answer from.
-    # Before arming: re-run the A/B across more conversations (n=1 here against
-    # the 17 stores the collision scan covered) and watch abstention.
-    # evals/locomo/runner.py pins this to 0 regardless, so frozen baselines stay
-    # comparable even if the default moves.
-    episodic_supersede_tau: float = field(
-        default_factory=lambda: float(os.getenv("SILICA_EPISODIC_SUPERSEDE_TAU", "0"))
-    )
-
     # Relevance floor on the episodic embed leg (cosine). Without one, top-k
     # over `score > 0` ships the whole store on every query: measured on a
     # 11-fact store, "pasta recipe with tomatoes" recalled the same 10
@@ -778,6 +746,7 @@ class SilicaConfig:
     def __post_init__(self):
         self.model = ensure_prefix(self.model, self._provider)
         self.worker_model = ensure_prefix(self.worker_model, self.worker_provider)
+        self.judge_model = ensure_prefix(self.judge_model, self.judge_provider)
         self.distill_escalation_model = ensure_prefix(
             self.distill_escalation_model, self._distill_escalation_provider)
 

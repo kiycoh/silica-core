@@ -264,6 +264,25 @@ def parse_cli_args(args: list[str]) -> dict[str, Any]:
     return opts
 
 
+def client_identity(client_params, env) -> str:
+    """The name a tool write is signed with, from the initialize handshake.
+
+    `clientInfo.name` is what the client calls itself ("claude-code", "codex",
+    ...). Claude Code also exports its session id to child processes, and the
+    server is one, so two sessions of the same client stay tellable apart in
+    `agent:` and `flagged:`. No handshake at all is still an agent, hence
+    `agent:unknown` and never `user`. One line, because the value lands in
+    YAML frontmatter.
+    """
+    info = getattr(client_params, "clientInfo", None)
+    name = (getattr(info, "name", "") or "").strip().splitlines()
+    name = name[0].strip() if name else ""
+    if not name:
+        return "agent:unknown"
+    session = env.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    return f"{name}:{session}" if session else name
+
+
 def make_server(all_tools: bool = False, extended: bool = False):
     """The MCP Server with the registry slice wired in, not yet serving."""
     import anyio
@@ -271,6 +290,7 @@ def make_server(all_tools: bool = False, extended: bool = False):
     from mcp.server.lowlevel import Server
 
     from silica.config import CONFIG
+    from silica.kernel.write.notetype import set_mcp_client
 
     tools = exposed_tools(all_tools, extended)
     # The served vault, named in the handshake: with one server entry per
@@ -297,6 +317,9 @@ def make_server(all_tools: bool = False, extended: bool = False):
         t = tools.get(name)
         if t is None:
             raise ValueError(f"Unknown tool: {name}")
+        # Per call, not once at startup: the handshake has not happened when
+        # make_server runs, and request_context only exists inside a handler.
+        set_mcp_client(client_identity(server.request_context.session.client_params, os.environ))
         # Tool.run validates args via pydantic and always returns a JSON string
         # (errors included) — exactly what a text content block wants.
         out = await anyio.to_thread.run_sync(lambda: t.run(**(arguments or {})))

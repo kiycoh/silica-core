@@ -285,6 +285,33 @@ class TestLaneGate:
         vn.assert_not_called()
         assert fsm.context["file_0_residue_stats"]["skipped"] == "outline lane"
 
+    def test_check_dispatch_is_a_no_op_on_a_skipped_lane(self, monkeypatch):
+        # Live 2026-09-05: decompose never dispatched on the lane, so
+        # `_residue_decompose` was the orchestrator's None default; the WRITE
+        # seam raised on `.get` and left a "pre-dispatch failed" marker for the
+        # first file only, and every later file fell through the gate.
+        monkeypatch.setattr("silica.config.CONFIG.residue_check", "auto")
+        fsm = self._outline_fsm()
+        fsm._residue_decompose = None
+        fsm._residue_ready = None
+        with patch.object(fz, "_residue_pool") as pool:
+            real_check_dispatch(fsm)
+        pool.assert_not_called()
+        assert fsm._residue_ready is None
+
+    def test_gate_never_dispatches_late_on_a_skipped_lane(self, monkeypatch):
+        monkeypatch.setattr("silica.config.CONFIG.residue_check", "auto")
+        fsm = self._outline_fsm()
+        fsm._residue_decompose = None
+        fsm._residue_ready = None
+        fsm._residue_future = None
+        with patch.object(fz, "_verify_now") as vn, patch.object(fz, "_residue_pool") as pool:
+            fz._residue_gate(fsm, 0, "Inbox/in.md", False)
+        vn.assert_not_called()
+        pool.assert_not_called()
+        assert not getattr(fsm, "_residue_pending", [])
+        assert "declared_residue" not in fsm.context
+
     def test_decompose_receives_the_file_language(self, monkeypatch):
         # English-only prompts decomposed an Italian lecture into English
         # facts; the lexical evidence window then shared no words with the

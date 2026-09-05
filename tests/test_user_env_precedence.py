@@ -60,6 +60,20 @@ def test_vault_in_the_user_env_is_ignored_with_a_warning(tmp_path, monkeypatch, 
                for r in caplog.records)
 
 
+def test_no_vault_warning_when_the_export_already_pins(tmp_path, monkeypatch, caplog):
+    """An export is exactly what the warning asks for; nagging the user who
+    did it on every launch is noise (seen on every run of 2026-09-05)."""
+    import logging
+    env = tmp_path / ".env"
+    env.write_text("SILICA_VAULT=/from/user/env\n", encoding="utf-8")
+    monkeypatch.setattr(silica, "SHELL_ENV", frozenset())
+    monkeypatch.setenv("SILICA_VAULT", "/exported")
+    with caplog.at_level(logging.WARNING, logger="silica.config"):
+        load_user_env(env)
+    assert os.environ["SILICA_VAULT"] == "/exported"
+    assert not any("SILICA_VAULT" in r.getMessage() for r in caplog.records)
+
+
 def test_exported_vault_is_untouched_by_the_user_env(tmp_path, monkeypatch):
     env = tmp_path / ".env"
     env.write_text("SILICA_VAULT=/from/user/env\n", encoding="utf-8")

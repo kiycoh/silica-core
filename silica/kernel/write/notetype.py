@@ -17,6 +17,9 @@ closes the legacy gap once.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,6 +87,28 @@ def stamp_type(path: str, content: str) -> str:
 # a note from a pipeline re-running over it; only the former carries authority.
 HUMAN_ACTOR_PREFIX = "human:"
 
+# Who signs an agent write. Set by the MCP server from the client's own name
+# in the initialize handshake, never by the model calling a tool: an identity
+# a caller can assert about itself is not provenance. One value per process
+# because a stdio server serves exactly one client for its whole life.
+_MCP_CLIENT = ""
+
+
+def set_mcp_client(identity: str) -> None:
+    global _MCP_CLIENT
+    _MCP_CLIENT = identity.strip()
+
+
+def agent_id() -> str:
+    """The agent behind this write, or "" when a person is at the REPL.
+
+    SILICA_AGENT_ID first: a fleet operator naming its agents outranks what a
+    client calls itself. Then the handshake identity. Empty means no agent,
+    which is why callers that need a name fall back to `user` themselves
+    rather than this function guessing one.
+    """
+    return os.environ.get("SILICA_AGENT_ID", "").strip() or _MCP_CLIENT
+
 
 def verified_entries(data: dict | None) -> list[dict]:
     """The `verified` entries of a note's frontmatter, always as a list.
@@ -106,6 +131,95 @@ def is_human_verified(data: dict | None) -> bool:
         str(e.get("by") or "").strip().lower().startswith(HUMAN_ACTOR_PREFIX)
         for e in verified_entries(data)
     )
+
+
+def _is_human(entry: dict) -> bool:
+    return str(entry.get("by") or "").strip().lower().startswith(HUMAN_ACTOR_PREFIX)
+
+
+def body_sha256(content: str) -> str:
+    """The hash an attestation binds to: the body alone, stripped. Frontmatter
+    is excluded so stamping `verified` itself (or any later metadata edit)
+    cannot invalidate what a person vouched for; the strip so a driver that
+    normalises the trailing newline does not read as an edit."""
+    _data, _raw, body = frontmatter.split(content or "")
+    return hashlib.sha256((body or "").strip().encode("utf-8")).hexdigest()
+
+
+# The `verified:` key with every indented continuation line under it, in
+# either §5.2 shape (a mapping or a list of mappings). String-level like
+# `stamp_type`: the rest of the block is never re-serialised.
+_VERIFIED_BLOCK_RE = re.compile(r"^verified:[^\n]*\n(?:[ \t]+[^\n]*\n?)*", re.MULTILINE)
+
+
+def _render_verified(entries: list[dict]) -> str:
+    lines = ["verified:"]
+    for e in entries:
+        lead = "  - "
+        for k, v in e.items():
+            # Every scalar quoted: an unquoted 2026-09-04 comes back a date
+            # object and the `at` a reader compares would no longer be a str.
+            lines.append(f"{lead}{k}: {json.dumps(str(v), ensure_ascii=False)}")
+            lead = "    "
+    return "\n".join(lines) + "\n"
+
+
+def _replace_verified(content: str, entries: list[dict]) -> str:
+    """`content` with its `verified` block replaced by `entries` (dropped when
+    empty). Requires a frontmatter block; the callers guarantee one."""
+    if content.startswith("---\n---\n"):
+        fm, tail = "", content[4:]
+    else:
+        end = content.find("\n---\n", 4)
+        fm, tail = content[4:end + 1], content[end + 1:]
+    fm = _VERIFIED_BLOCK_RE.sub("", fm)
+    if fm and not fm.endswith("\n"):
+        fm += "\n"
+    if entries:
+        fm += _render_verified(entries)
+    return "---\n" + fm + tail
+
+
+def stamp_verified(content: str, by: str, at: str) -> str:
+    """Append a person's §5.2 entry, bound to the body it vouches for
+    (`body_sha256`, spec M4). Only the `/verify` command calls this, and the
+    actor prefix is enforced here as well: the MCP write tools refuse the key
+    outright, so no model-controlled path can mint a human attestation."""
+    if not by.strip().lower().startswith(HUMAN_ACTOR_PREFIX):
+        raise ValueError(f"an attestation must name a person ({HUMAN_ACTOR_PREFIX}…), got {by!r}")
+    content = content or ""
+    entry = {"by": by.strip(), "at": at, "body_sha256": body_sha256(content)}
+    if not content.startswith("---\n"):
+        return "---\n" + _render_verified([entry]) + "---\n\n" + content
+    data, raw, _body = frontmatter.split(content)
+    if data is None:
+        raise ValueError("frontmatter is not a YAML mapping; fix it before attesting")
+    return _replace_verified(content, verified_entries(data) + [entry])
+
+
+def clear_verified(content: str) -> str:
+    """Drop every human entry; machine entries stay (a pipeline's mark is not
+    a person's to withdraw)."""
+    data, _raw, _body = frontmatter.split(content or "")
+    if not data or not verified_entries(data):
+        return content
+    return _replace_verified(content, [e for e in verified_entries(data) if not _is_human(e)])
+
+
+def attestation_drift(content: str) -> str | None:
+    """The `at` of the newest human attestation whose body has changed since,
+    None when there is none or none can be checked. A hand-written entry
+    without `body_sha256` predates the binding: unknowable, never stale."""
+    data, _raw, _body = frontmatter.split(content or "")
+    if not data:
+        return None
+    bound = [e for e in verified_entries(data) if _is_human(e) and e.get("body_sha256")]
+    if not bound:
+        return None
+    newest = bound[-1]
+    if str(newest["body_sha256"]) == body_sha256(content):
+        return None
+    return str(newest.get("at") or "?")
 
 
 @dataclass(frozen=True)

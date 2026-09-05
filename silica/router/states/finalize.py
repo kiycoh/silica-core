@@ -276,6 +276,121 @@ def _log_nucleate_completion(fsm: "InjectorFSM", fi: int, source_file: str) -> N
         logger.debug("CLEANUP: log.md append skipped (non-fatal): %s", exc)
 
 
+def _drain_grounding(ctx: dict, basename: str) -> dict[str, dict]:
+    """The per-note grounding score for `basename`, summed over the validate
+    rounds DISTILL stacked in `ctx["grounding"]` (one row per accepted op: a
+    note patched three times has three rows). Rows of this source leave the
+    context so a resumed CLEANUP cannot count them twice; other sources' rows
+    stay for their own record."""
+    rows = list(ctx.get("grounding") or [])
+    keep, out = [], {}
+    for g in rows:
+        if g.get("source_basename") != basename:
+            keep.append(g)
+            continue
+        key = str(g.get("path") or "").removesuffix(".md")
+        acc = out.setdefault(key, {"spans": 0, "ungrounded": 0, "profile": g.get("profile") or "default"})
+        acc["spans"] += int(g.get("spans") or 0)
+        acc["ungrounded"] += int(g.get("ungrounded") or 0)
+    if rows and isinstance(ctx, dict):
+        ctx["grounding"] = keep
+    return out
+
+
+def _source_text_after_cleanup(source_file: str) -> str:
+    """The source's text once CLEANUP has archived it: same three candidates
+    validate's `_full_source_text` tries, "" when none reads."""
+    from silica.config import CONFIG
+    from silica.kernel.vault_manifest import active_done_dir, archive_path_for
+
+    root = CONFIG.vault_path or ""
+    for cand in (source_file, archive_path_for(source_file),
+                 f"{active_done_dir()}/{os.path.basename(source_file)}"):
+        if not cand:
+            continue
+        try:
+            return open(os.path.join(root, cand), encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+    return ""
+
+
+def _archived_source_text(basename: str) -> str:
+    """The archived text of a source the ledger knows only by basename: the
+    archive mirrors the inbox tree, so the file can sit anywhere under the
+    done root. First match wins; "" when none, and its spans then read as
+    lost, which is the pre-2026-09-04 behaviour for that one source."""
+    from silica.config import CONFIG
+    from silica.kernel.vault_manifest import active_done_dir
+
+    root = os.path.join(CONFIG.vault_path or "", active_done_dir())
+    for dirpath, _dirs, files in os.walk(root):
+        if basename in files:
+            try:
+                return open(os.path.join(dirpath, basename), encoding="utf-8",
+                            errors="replace").read()
+            except OSError:
+                return ""
+    return ""
+
+
+def _reverify_prior(fsm, basename: str, source_file: str, sha256: str,
+                    notes: list[str]) -> tuple[dict[str, dict], list[str]]:
+    """Re-check the previous version's notes against the new source text
+    (spec M6): `({note: grounding}, reverified)`. A note whose checkable
+    spans all survive is re-verified and leaves the drifted list; one that
+    lost a span stays drifted and the digest names the span. A note with
+    nothing checkable (prose on the paraphrasing profile) is neither: it
+    keeps its drift, because zero spans cannot vouch for anything (§0.5).
+    Every prior note, the ones this run patched included: the op row scores
+    only what the op proposed, and a patch can land as a relations-only
+    append while the body keeps a v1 formula the new source dropped (seen
+    2026-09-04: snippet 2/2 grounded, body still on the old constant).
+    The whole body is what a reader gets, so its score wins."""
+    from silica.driver import DRIVER
+    from silica.kernel.write import frontmatter
+    from silica.kernel.write.provenance import (
+        grounding_counts, read_records, sources_of, ungrounded_spans)
+
+    recs = read_records(basename)
+    if not recs or recs[-1].get("sha256") == sha256:
+        return {}, []
+    prior = list(recs[-1].get("notes") or [])
+    if not prior:
+        return {}, []
+    text = _source_text_after_cleanup(source_file)
+    if not text.strip():
+        return {}, []
+    ledger = getattr(fsm, "warning_ledger", None)
+    grounding: dict[str, dict] = {}
+    reverified: list[str] = []
+    other_texts: dict[str, str] = {}
+    for note in prior:
+        try:
+            content = DRIVER.read_note(note if note.endswith(".md") else note + ".md").content or ""
+        except Exception:
+            continue  # gone or unreadable: nothing to re-verify, stays as the ledger has it
+        _d, _r, body = frontmatter.split(content)
+        # A note patched from several lessons carries spans of each; against
+        # this source alone every span of the others read as lost (32% of the
+        # test vault's notes sit under 2+ sources, counted 2026-09-04). The
+        # ledger names them, their archived text is the rest of the corpus.
+        corpus = text
+        for other in sources_of(note):
+            if other != basename:
+                if other not in other_texts:
+                    other_texts[other] = _archived_source_text(other)
+                corpus += "\n" + other_texts[other]
+        checked, lost = grounding_counts(body or "", corpus)
+        grounding[note] = {"spans": checked, "ungrounded": lost, "profile": "reverify"}
+        if lost and ledger is not None:
+            ledger.add(note, "reverify_lost_span",
+                       " | ".join(sp[:60] for sp in ungrounded_spans(body or "", corpus)))
+        elif checked and not lost:
+            reverified.append(note)
+    return grounding, reverified
+
+
 def _record_provenance(fsm: "InjectorFSM", fi: int, source_file: str) -> None:
     """Append one `<vault>/provenance.json` record (spec-hermes-coherence §3).
 
@@ -310,7 +425,11 @@ def _record_provenance(fsm: "InjectorFSM", fi: int, source_file: str) -> None:
         # would swallow it silently).
         ctx = getattr(fsm, "context", None) or {}
         partial = bool(ctx.get("has_partial_failure") or ctx.get("failed_chunks"))
-        append_record(basename, sha256, fsm.progress.run_id, notes, partial=partial)
+        grounding = _drain_grounding(ctx, basename)
+        re_grounding, reverified = _reverify_prior(fsm, basename, source_file, sha256, notes)
+        grounding.update(re_grounding)  # whole-body row wins over the op row
+        append_record(basename, sha256, fsm.progress.run_id, notes, partial=partial,
+                      grounding=grounding, reverified=reverified)
     except Exception as exc:
         logger.debug("CLEANUP: provenance append skipped (non-fatal): %s", exc)
 
@@ -337,6 +456,7 @@ def _write_source_leaf(fsm: "InjectorFSM", source_file: str) -> None:
         from silica.kernel.write import frontmatter
         from silica.kernel.write.contested import append_before_superseded
         from silica.kernel.write.ops import InverseOp, InverseOpKind
+        from silica.kernel.write.templates import SUPERSEDED_MARKER, append_under
         from silica.kernel.recall.paths import SOURCES_DIR
         from silica.kernel.vault_manifest import in_write_dir
         from silica.kernel.write.provenance import (
@@ -386,13 +506,37 @@ def _write_source_leaf(fsm: "InjectorFSM", source_file: str) -> None:
             )
             leaf_exists = True
 
-        if not leaf_exists:
-            return
-
         notes = sorted({
             e.path for e in fsm.manifest.entries
             if e.source_basename == basename and is_deriving_op(e.op)
         })
+        label = footnote_label(basename)
+        marker = f"[^{label}]"
+
+        if not leaf_exists:
+            # No leaf, no `## Sources` (reliability_tier reads the marker, and
+            # a block with nothing verbatim behind it would lie). A patch may
+            # still have cited its prose with the label, and a marker without
+            # a definition renders as literal text: define it as the source's
+            # name, plain, at the end of the body.
+            for rel in notes:
+                note_path = f"{rel}.md"
+                try:
+                    prior = orch.DRIVER.read_note(note_path).content or ""
+                except Exception:
+                    continue
+                if marker not in prior or f"{marker}:" in prior:
+                    continue
+                orch.DRIVER.overwrite(
+                    note_path, append_before_superseded(prior, f"\n{marker}: {basename}\n"))
+                fsm._run_inverses.append(
+                    (note_path,
+                     InverseOp(kind=InverseOpKind.restore_version, path=note_path,
+                               prior_content=prior),
+                     None)
+                )
+            return
+
         # Keyed per-claim attribution (OKF §5.1): the leaf body is the only copy
         # of what this source actually said, and here is the one place it sits
         # beside the notes it produced. Lines that are verbatim from it get the
@@ -403,7 +547,12 @@ def _write_source_leaf(fsm: "InjectorFSM", source_file: str) -> None:
             _d, _r, leaf_body = frontmatter.split(orch.DRIVER.read_note(leaf_rel).content or "")
         except Exception:
             leaf_body = ""
-        label = footnote_label(basename)
+        # Path-qualified, never the bare stem: the outline lane writes a spine
+        # note carrying the source's own stem beside the concept notes, and a
+        # bare `[[Lezione 3]]` resolved to that sibling (same folder wins), so
+        # every block pointed at the spine and the leaf was unreachable
+        # (2026-09-04, 231 notes in one vault).
+        link = f"[[{leaf_rel.removesuffix('.md')}]]"
 
         for rel in notes:
             note_path = f"{rel}.md"  # manifest paths carry no .md
@@ -417,23 +566,32 @@ def _write_source_leaf(fsm: "InjectorFSM", source_file: str) -> None:
             # whole-file grep read those notes as "already linked": they never
             # got the block, and reliability_tier — which looks for the marker,
             # not the link — filed them as distilled. 10 of 30 notes on one
-            # paper (2026-08-18).
+            # paper (2026-08-18). A block linking the legacy bare stem counts.
             already = prior.split(_SOURCES_MARKER, 1)[1] if _SOURCES_MARKER in prior else ""
-            if f"[[{leaf_stem}]]" in already:
-                continue  # this leaf is in the block already — re-ingest no-op
+            linked = link in already or f"[[{leaf_stem}]]" in already
             attributed = attribute_lines(prior, leaf_body, label)
-            # The definition rides the Sources block and only when a line was
-            # actually marked, so a note never carries a dangling `[^id]`.
-            note = f"[^{label}]: [[{leaf_stem}]]\n" if attributed != prior else ""
-            # New block, or one more link appended below an existing block.
-            # Routed through append_before_superseded: blocks used to land at
-            # EOF by construction, which stopped being safe once a note can
-            # end with a `## Superseded` section.
-            head = f"\n{_SOURCES_MARKER}\n" if _SOURCES_MARKER not in prior else ""
-            orch.DRIVER.overwrite(
-                note_path,
-                append_before_superseded(attributed, f"{head}[[{leaf_stem}]]\n{note}"),
-            )
+            # The patch executor defined its marker as the plain source name
+            # (it cannot know a leaf will exist); now one does, so the
+            # definition is this block's and points at the leaf.
+            plain = f"{marker}: {basename}"
+            if any(l.rstrip() == plain for l in attributed.splitlines()):
+                attributed = "\n".join(
+                    l for l in attributed.splitlines() if l.rstrip() != plain
+                ) + ("\n" if attributed.endswith("\n") else "")
+            # The definition rides the Sources block and only when a line
+            # carries the marker (verbatim, marked here; or distilled, cited
+            # by the patch executor), so a note never carries a dangling
+            # `[^id]` and never a definition nothing points at.
+            cited = marker in attributed.split(_SOURCES_MARKER, 1)[0]
+            add_def = cited and f"{marker}:" not in attributed
+            if linked and not add_def and attributed == prior:
+                continue  # re-ingest no-op
+            lines = ("" if linked else f"{link}\n") + (f"{marker}: {link}\n" if add_def else "")
+            # Inside the block, not at EOF: a patch appended after the block
+            # used to push the next link under whatever section came last.
+            new = append_under(attributed, _SOURCES_MARKER, lines,
+                               above=(SUPERSEDED_MARKER,)) if lines else attributed
+            orch.DRIVER.overwrite(note_path, new)
             fsm._run_inverses.append(
                 (note_path,
                  InverseOp(kind=InverseOpKind.restore_version, path=note_path,
@@ -545,7 +703,13 @@ def maybe_dispatch_residue_check(fsm: "InjectorFSM") -> None:
             return
         if fsm.context.get(f"file_{fi}_form") == "draft":
             return
-        fut = getattr(fsm, "_residue_decompose", {}).get(fi)
+        # Same lane gate as the decompose dispatch. Without it the None
+        # default of `_residue_decompose` raised below and the except branch
+        # marked the file "pre-dispatch failed" (seen on every outline file,
+        # 2026-09-05).
+        if not residue_enabled(fsm, fi):
+            return
+        fut = (getattr(fsm, "_residue_decompose", None) or {}).get(fi)
         if fut is None or not fut.done():
             return
         facts = fut.result()
@@ -618,7 +782,7 @@ def _verify_now(fsm: "InjectorFSM", fi: int, inbox_file: str) -> dict:
     from silica.driver import DRIVER
 
     source = DRIVER.read_note(inbox_file).content or ""
-    dfut = getattr(fsm, "_residue_decompose", {}).get(fi)
+    dfut = (getattr(fsm, "_residue_decompose", None) or {}).get(fi)
     pre = dfut.result() if dfut is not None and dfut.done() else None
     return _residue.verify_missing(
         source,
@@ -719,7 +883,10 @@ def _residue_gate(
             os.path.basename(inbox_file),
         )
         return
-    if (ready is not None and ready[0] == fi) or (
+    # A skipped lane resolves here too: residue_facts records the skip, and
+    # the late dispatch below would otherwise verify the file anyway (every
+    # outline file after the first went to _verify_now, 2026-09-05).
+    if not residue_enabled(fsm, fi) or (ready is not None and ready[0] == fi) or (
             pending is not None and pending[0] == fi):
         # Resolved (degrade marker or finished futures): declare now, cheap.
         from time import monotonic as _mono

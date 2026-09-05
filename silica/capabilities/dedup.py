@@ -645,6 +645,12 @@ def _clean_twin_bundle(ctx: dict) -> None:
         logger.debug("dedup: twin bundle cleanup failed (non-fatal): %s", e)
 
 
+def _judge_role(config: Any) -> str:
+    """The dedup verdict's role: the judge model when one is configured
+    (spec M7), else the worker it always ran on."""
+    return "judge" if getattr(config, "judge_model", None) else "worker"
+
+
 def _decide_dedup(
     config: Any,
     *,
@@ -685,7 +691,7 @@ def _decide_dedup(
         f"---\nCANDIDATE NOTE ({candidate_name}):\n{candidate_body}\n\n"
         f"---\nINCOMING CONCEPT: {concept}\nEXCERPT:\n{excerpt}\n"
     )
-    provider = get_provider(config, role="worker")
+    provider = get_provider(config, role=_judge_role(config))
     response = provider.call_llm(
         messages=[{"role": "user", "content": user_message}],
         tools=None,
@@ -798,7 +804,7 @@ def _decide_dedup_batch(
         f"---\nCANDIDATE NOTE ({candidate_name}):\n{candidate_body}\n\n"
         + "\n".join(blocks)
     )
-    provider = get_provider(config, role="worker")
+    provider = get_provider(config, role=_judge_role(config))
     response = provider.call_llm(
         messages=[{"role": "user", "content": user_message}],
         tools=None,

@@ -94,6 +94,20 @@ def test_equivalence_target_dir_sibling_subfolder(tmp_vault):
     assert unaffected_by_sibling[0].path == "Corso/Alpha.md"
 
 
+def test_key_equal_title_in_a_subfolder_coerces_to_patch(tmp_vault):
+    """The user files by subtopic: "Regressione lineare" lived in
+    Corso/Apprendimento supervisionato/ and the run wrote a second one beside
+    it (2026-09-05). Key-equal in the subtree is the same note; the fuzzy near
+    band stays on the exact folder (previous test)."""
+    tmp_vault.note("Corso/Sub/Regressione lineare.md", "# Regressione lineare\n\ncorpo")
+    ops = [_write_op("Regressione Lineare", "Corso/Regressione Lineare.md")]
+    validated, rejected = validate_operations(ops, [], "Corso")
+    assert rejected == []
+    (coerced,) = [o for o in validated if o.heading == "Regressione Lineare"]
+    assert coerced.op.value == "patch"
+    assert coerced.path == "Corso/Sub/Regressione lineare.md"
+
+
 def test_target_dir_title_list_built_once_per_validate_call(tmp_vault, monkeypatch):
     """The near-title candidate list must be the SAME object across every
     write op inside one validate_operations() call — built once, not per-op."""

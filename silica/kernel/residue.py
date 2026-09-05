@@ -74,7 +74,9 @@ def _llm(prompt: str, max_tokens: int) -> tuple[str, str | None]:
     # and the 45/45 / 92/92 judge failures of run 5e88feb0). temperature=0
     # alone never fixed it: whether the model thinks is the router's call, not
     # the temperature's.
-    resp = call_llm(CONFIG.model, [{"role": "user", "content": prompt}],
+    # The judge model when one is configured (spec M7): the coverage verdict
+    # then comes from a model that did not write the notes it grades.
+    resp = call_llm(CONFIG.judge_model or CONFIG.model, [{"role": "user", "content": prompt}],
                     max_tokens=max_tokens, temperature=0, reasoning=False)
     if not resp.text:
         logger.warning("residue: empty reply (finish=%s, completion=%s tokens, "

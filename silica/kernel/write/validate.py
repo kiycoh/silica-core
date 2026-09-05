@@ -178,12 +178,19 @@ def validate_operations(
     ungrounded_out: list | None = None,
     profile: str | None = None,
     normalized_out: dict | None = None,
+    grounding_out: list | None = None,
 ) -> tuple[list[Op], list[Rejection]]:
     """Validates operations against payloads and target_dir using DRIVER.
 
     ungrounded_out (optional): collects warn-only span-grounding hits —
     write/patch ops whose math/code spans can't be located in their source
     excerpt (fabrication candidates). Never causes a rejection.
+
+    grounding_out (optional): one `{path, heading, source_basename, spans,
+    ungrounded, profile}` per ACCEPTED op that had a source excerpt to judge
+    against, whether or not anything was flagged (epistemic-state spec M1).
+    `ungrounded_out` is the warning; this is the score, and a score needs the
+    zero rows too. Ops rejected later in the same pass are dropped at return.
 
     profile (optional): the RUN's distill profile. When set it decides the
     extractive enforcement and the snippet floor instead of the process-global
@@ -377,21 +384,30 @@ def validate_operations(
     _title_gate_cache: dict[str, tuple[str, str]] | None = None  # key -> (title, path)
     _title_gate_list_cache: list[str] | None = None
 
-    def _target_dir_titles() -> dict[str, tuple[str, str]]:
+    def _target_dir_titles(subtree: bool = False) -> dict[str, tuple[str, str]]:
+        """key -> (title, path) of the target folder; `subtree=True` adds its
+        subfolders (folder entries win on a shared key). Key-EQUAL coercion
+        reads the subtree: the user files by subtopic, and the exact-folder view
+        wrote a second "Regressione lineare" beside the one in
+        Apprendimento supervisionato/ (2026-09-05). The fuzzy near band keeps
+        the exact folder, where a lookalike is a variant and not a neighbour."""
         nonlocal _title_gate_cache
         if _title_gate_cache is not None:
-            return _title_gate_cache
+            return _title_gate_cache[subtree]
         from silica.kernel.text.title import title_key
         out: dict[str, tuple[str, str]] = {}
+        deep: dict[str, tuple[str, str]] = {}
         names: dict[str, str] = {}
         try:
             norm_dir = (target_dir or "").replace("\\", "/").strip("/")
             for ref in DRIVER.list_files(norm_dir):
                 ref_dir = os.path.dirname((ref.path or "").replace("\\", "/")).strip("/")
+                key = title_key(ref.name)
+                if key and ref_dir != norm_dir:
+                    deep.setdefault(key, (ref.name, ref.path))
                 if ref_dir != norm_dir:
                     continue
                 names[ref.name] = ref.path
-                key = title_key(ref.name)
                 if key:
                     out[key] = (ref.name, ref.path)
         except Exception as e:
@@ -413,8 +429,8 @@ def validate_operations(
                         out[key] = (str(alias), path)
         except Exception as e:
             logger.debug("validate: alias index unavailable (gate sees filenames only): %s", e)
-        _title_gate_cache = out
-        return out
+        _title_gate_cache = (out, {**deep, **out})
+        return _title_gate_cache[subtree]
 
     def _target_dir_title_list() -> list[str]:
         nonlocal _title_gate_list_cache
@@ -447,7 +463,7 @@ def validate_operations(
             from silica.kernel.text.title import title_key
             stem = os.path.splitext(os.path.basename(op.path))[0]
             from silica.kernel.text.title import numbers_differ
-            match = _target_dir_titles().get(title_key(stem))
+            match = _target_dir_titles(subtree=True).get(title_key(stem))
             if match and numbers_differ(stem, match[0]):
                 match = None  # "Lezione 12" is not "Lezione 11": numbers are identity
             if match is not None:
@@ -585,6 +601,19 @@ def validate_operations(
                     "source_basename": op.source_basename,
                     "spans": spans,
                 })
+        if grounding_out is not None:
+            from silica.kernel.write.provenance import grounding_counts
+            # Denominator against the excerpt (what the gate judged); the
+            # numerator is what survived the whole-document second look.
+            checked, _first_look = grounding_counts(body, source_text)
+            grounding_out.append({
+                "path": op.path,
+                "heading": op.heading,
+                "source_basename": op.source_basename,
+                "spans": checked,
+                "ungrounded": len(spans),
+                "profile": _profile,
+            })
 
     from silica.kernel.prep_delegation import active_distill_profile
 
@@ -1092,4 +1121,10 @@ def validate_operations(
         prospective_valid.append(op)
     validated_ops = prospective_valid
 
+    if grounding_out is not None and rejected_ops:
+        # _check_grounding runs before the extractive/shape rejections that
+        # follow it, so a rejected op has a row here; a score for a note that
+        # never landed is a score for nothing.
+        gone = {(r.op.path, r.op.heading) for r in rejected_ops}
+        grounding_out[:] = [g for g in grounding_out if (g["path"], g["heading"]) not in gone]
     return validated_ops, rejected_ops

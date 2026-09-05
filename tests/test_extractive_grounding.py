@@ -188,6 +188,38 @@ def test_fenced_code_is_never_marked():
     assert attribute_lines(note, src, "session_1") == note
 
 
+def test_display_math_is_never_marked():
+    """`[^id]` inside `$$` reaches MathJax as LaTeX: `^` superscripts the
+    label and the equation renders as garbage (97 lines in one vault,
+    2026-09-05)."""
+    from silica.kernel.write.provenance import attribute_lines
+
+    src = "gamma_r = min_{x_i in T} |d_e(x_i, r)| is the geometric margin"
+    note = "# Margin\n\n$$\ngamma_r = min_{x_i in T} |d_e(x_i, r)|\n$$\n"
+    assert attribute_lines(note, src, "session_1") == note
+
+
+def test_table_rows_are_never_marked():
+    """A marker after the closing pipe is a fifth cell; on the delimiter row
+    it is not dashes, so the whole table dissolves into a paragraph (GFM,
+    verified against GitHub's renderer 2026-09-05)."""
+    from silica.kernel.write.provenance import attribute_lines
+
+    src = "Model Complexity Total Error Variance Bias --- Low High Low High"
+    note = "# Bias\n\n| Model Complexity | Total Error | Variance | Bias |\n| --- | --- | --- | --- |\n| Low | High | Low | High |\n"
+    assert attribute_lines(note, src, "session_1") == note
+
+
+def test_a_line_ending_in_a_url_is_never_marked():
+    """A bare URL autolink swallows what follows it: `https://x/y[^id]` links
+    to `x/y[^id]` and no footnote exists."""
+    from silica.kernel.write.provenance import attribute_lines
+
+    src = "the reference implementation lives at https://example.com/impl"
+    note = "# Ref\n\nthe reference implementation lives at https://example.com/impl\n"
+    assert attribute_lines(note, src, "session_1") == note
+
+
 def test_quoted_verbatim_span_passes():
     """A selected span wrapped in quotation marks is still a selected span.
 

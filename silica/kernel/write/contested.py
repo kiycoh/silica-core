@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 
 from silica.kernel.write import frontmatter
-from silica.kernel.write.notetype import is_human_verified
+from silica.kernel.write.notetype import HUMAN_ACTOR_PREFIX, is_human_verified
 
 CONTESTED_KEY = "contested"
 CONTRADICTIONS_KEY = "contradictions"
@@ -278,6 +278,70 @@ def reliability_tier(content: str, *, has_source_leaf: bool | None = None) -> in
         from silica.kernel.recall.paths import SOURCES_MARKER
         has_source_leaf = SOURCES_MARKER in (content or "")
     return TIER_GROUNDED if has_source_leaf else TIER_DISTILLED
+
+
+# The two epistemic axes a reader can ask for (epistemic-state spec §2, M2).
+# Both are FUNCTIONS of frontmatter the writers above already maintain, never
+# fields of their own: a fifth field would drift from the four it summarises
+# at the first hand edit, a function cannot. `trust` says who wrote it and
+# from what; `lifecycle` says what state the body is in. They are never
+# combined, so "grounded but contested" stays askable.
+TRUST_ORDER = {"kept": 0, "distilled": 1, "grounded": 2, "human": 3}
+_TIER_NAMES = {TIER_HUMAN: "human", TIER_GROUNDED: "grounded", TIER_DISTILLED: "distilled"}
+# `source:` values the web lanes stamp (web_research._build_note). A kept
+# answer is zero-trust ingress (ADR-0009) with a Sources block, which the tier
+# alone would read as grounded, or as human when the AI stamp is missing.
+_KEPT_SOURCES = frozenset({"web", "web-research"})
+LIFECYCLES = ("active", "review", "contested", "superseded")
+
+
+# `silica_flag_note` writes "flagged: <reason> (by <who>, <date>)" with `who` =
+# SILICA_AGENT_ID or "user"; a judge writes the source ref instead. ponytail:
+# an MCP agent running without SILICA_AGENT_ID signs as "user" too; the
+# upgrade is the MCP entry point setting its own id, not a smarter regex.
+_FLAG_BY_RE = re.compile(r"^flagged:.*\(by ([^,()]+), \d{4}-\d{2}-\d{2}\)\s*$")
+
+
+def contested_by_agents_only(refs: list[str]) -> bool:
+    """True when every contradiction ref is an agent's own flag: no person
+    (`user`, `human:*`) and no judge (a source ref) behind it. Such a contest
+    is shown but never decides (spec M3): counting it would hand the model a
+    veto over its own memory."""
+    if not refs:
+        return False
+    for ref in refs:
+        m = _FLAG_BY_RE.match(str(ref).strip())
+        if not m:
+            return False
+        who = m.group(1).strip()
+        if who == "user" or who.startswith(HUMAN_ACTOR_PREFIX):
+            return False
+    return True
+
+
+def trust(content: str, *, has_source_leaf: bool | None = None) -> str:
+    """`human | grounded | distilled | kept`: `reliability_tier` spelled out,
+    plus `kept` for a web answer saved with /keep. A person's `verified`
+    entry wins over the kept marker, as it wins over the AI stamp."""
+    data, _raw, _body = frontmatter.split(content or "")
+    if data and str(data.get("source") or "").strip().lower() in _KEPT_SOURCES \
+            and not is_human_verified(data):
+        return "kept"
+    return _TIER_NAMES[reliability_tier(content, has_source_leaf=has_source_leaf)]
+
+
+def lifecycle(data: dict | None) -> str:
+    """`superseded | contested | review | active`, in that precedence: a
+    superseded note's contest belongs to its winner, and a contest outranks
+    the gate's soft flag because a person raised it."""
+    d = data or {}
+    if d.get(SUPERSEDED_BY_KEY):
+        return "superseded"
+    if d.get(CONTESTED_KEY):
+        return "contested"
+    if str(d.get("review") or "").strip():
+        return "review"
+    return "active"
 
 
 def merge_rank(content: str) -> tuple[int, int]:

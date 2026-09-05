@@ -256,6 +256,53 @@ def _content_hash(text: str | None) -> str:
     return _hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
+def edited_since_write(vault: str, *, store: UndoJournalStore | None = None,
+                       checkpoints=None) -> list[str]:
+    """Notes the gate wrote into `vault` whose current body matches neither
+    the journal's post-write hash nor any version a Silica tool checkpointed
+    since (spec M4). Unknown to both stores means a hand edit. No ordering
+    across the two stores is needed: a note is Silica's if ANY store knows its
+    current bytes. Reverted runs are ignored (their notes are the user's
+    again); a missing note is not an edit. Reads through DRIVER, so `vault`
+    must be the active one, which is how `/stale` calls it."""
+    from silica.kernel.write.checkpoints import get_checkpoint_store
+
+    store = store or get_undo_journal()
+    cp = checkpoints or get_checkpoint_store()
+    conn = store._conn()
+    want = Path(vault).resolve()
+    run_ids = [r["run_id"] for r in conn.execute(
+        "SELECT run_id, vault FROM runs WHERE reverted_at IS NULL AND vault IS NOT NULL"
+    ).fetchall() if _same_vault(r["vault"], want)]
+    if not run_ids:
+        return []
+    marks = ",".join("?" * len(run_ids))
+    latest: dict[str, str | None] = {}
+    for r in conn.execute(
+        f"SELECT path, post_hash FROM inverses WHERE run_id IN ({marks}) ORDER BY id", run_ids
+    ).fetchall():
+        latest[r["path"]] = r["post_hash"]
+    edited: list[str] = []
+    for path, post_hash in latest.items():
+        if not post_hash:
+            continue
+        try:
+            current = _content_hash(DRIVER.read_note(path).content)
+        except Exception:
+            continue
+        if current == post_hash or current in cp.hashes_for(path):
+            continue
+        edited.append(path)
+    return sorted(edited)
+
+
+def _same_vault(recorded: str | None, want: Path) -> bool:
+    try:
+        return bool(recorded) and Path(recorded).resolve() == want
+    except OSError:
+        return False
+
+
 def revert_run(run_id: str, *, store: UndoJournalStore | None = None,
                only_paths: set[str] | None = None) -> dict:
     """Replay a run's inverses LIFO, refusing notes modified since the inject.

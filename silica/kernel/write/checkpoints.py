@@ -86,6 +86,16 @@ class CheckpointStore:
         ).fetchone()
         return int(row["n"]) if row else 0
 
+    def hashes_for(self, path: str) -> set[str]:
+        """sha256 of every version this store holds for ``path``: the set of
+        bodies Silica itself wrote or restored, which is what separates a hand
+        edit from a tool write (undo_journal.edited_since_write)."""
+        import hashlib
+        rows = self._conn.execute(
+            "SELECT content FROM checkpoints WHERE path = ?", (path,)
+        ).fetchall()
+        return {hashlib.sha256((r["content"] or "").encode("utf-8")).hexdigest() for r in rows}
+
     def most_recent_path(self) -> str | None:
         """Vault path of the most recently pushed checkpoint, or None if empty.
 

@@ -601,6 +601,7 @@ def get_provider(config: Any, role: str = "router") -> Provider:
     role="worker"            → uses config.worker_provider / config.worker_model so
                                leashed sub-agents can run on a separate small model.
     role="escalation"        → uses config.distill_escalation_provider / _model for escalated steer retries.
+    role="judge"             → uses config.judge_provider / config.judge_model (spec M7); router when unset.
 
     When the worker role specifies an explicit worker_api_key it wins over the
     preset; the endpoint always comes from the worker_provider preset.
@@ -612,6 +613,13 @@ def get_provider(config: Any, role: str = "router") -> Provider:
     if role == "escalation":
         provider_name = getattr(config, "distill_escalation_provider", "") or ""
         model_name = getattr(config, "distill_escalation_model", "") or ""
+        if not provider_name or not model_name:
+            provider_name = getattr(config, "provider", "lmstudio") or ""
+            model_name = getattr(config, "model", "") or ""
+            role = "router"
+    elif role == "judge":
+        provider_name = getattr(config, "judge_provider", "") or ""
+        model_name = getattr(config, "judge_model", "") or ""
         if not provider_name or not model_name:
             provider_name = getattr(config, "provider", "lmstudio") or ""
             model_name = getattr(config, "model", "") or ""

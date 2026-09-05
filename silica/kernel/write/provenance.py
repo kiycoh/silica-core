@@ -213,8 +213,20 @@ def append_record(
     vault_path: str | None = None,
     date: str | None = None,
     partial: bool = False,
+    grounding: dict[str, dict] | None = None,
+    reverified: list[str] | None = None,
 ) -> AppendOutcome:
     """Append one record for `source` and report what is on disk afterwards.
+
+    `grounding`: per-note `{spans, ungrounded, profile}` the gate computed
+    for this run (epistemic-state spec M1). It lives here and not in the
+    note's frontmatter for the same reason the sha does: user-facing noise,
+    and a hand edit of the body would silently keep a stale number.
+
+    `reverified`: notes of the PREVIOUS version of this source that this run
+    did not touch and whose every checkable span is still in the new text
+    (spec M6). Kept apart from `notes`: they derive from the old sha, and
+    `/revert --source` must never take them as this run's writes.
 
     `partial`: the run lost a chunk. The record still lists what landed (those
     notes derive from this version), but it must not read as "this version is
@@ -243,6 +255,8 @@ def append_record(
         "date": date or datetime.now().strftime("%Y-%m-%d"),
         "notes": list(notes),
         **({"partial": True} if partial else {}),
+        **({"grounding": dict(grounding)} if grounding else {}),
+        **({"reverified": list(reverified)} if reverified else {}),
     }
 
     try:
@@ -268,7 +282,11 @@ def append_record(
             if idx is not None:
                 prior = list(existing[idx].get("notes") or [])
                 merged = list(dict.fromkeys(prior + list(notes)))
-                if merged == prior:
+                prior_g = dict(existing[idx].get("grounding") or {})
+                merged_g = {**prior_g, **(grounding or {})}
+                prior_rv = list(existing[idx].get("reverified") or [])
+                merged_rv = list(dict.fromkeys(prior_rv + list(reverified or [])))
+                if merged == prior and merged_g == prior_g and merged_rv == prior_rv:
                     return "present"
                 # Replace the entry, never edit it in place: read_records copies
                 # the LIST but hands back the very dicts `_records_memo` holds,
@@ -277,7 +295,9 @@ def append_record(
                 # only vault, ENOSPC, lease dir gone) — the except swallows it
                 # and returns False while mtime/size are unchanged, leaving the
                 # memo valid and reporting notes that were never persisted.
-                existing[idx] = {**existing[idx], "notes": merged}
+                existing[idx] = {**existing[idx], "notes": merged,
+                                 **({"grounding": merged_g} if merged_g else {}),
+                                 **({"reverified": merged_rv} if merged_rv else {})}
             else:
                 existing.append(record)
             # Atomic: this ledger is authoritative (run_id/sha history is not
@@ -326,6 +346,9 @@ def drifted_notes(
         for r in recs:
             if r.get("sha256") == current_sha:
                 current_notes.update(r.get("notes") or [])
+                # Re-verified against the current text (M6): still that
+                # version's note, though written under the old sha.
+                current_notes.update(r.get("reverified") or [])
         old_recs = [r for r in recs if r.get("sha256") != current_sha]
         if not old_recs:
             continue
@@ -421,6 +444,18 @@ def sources_by_note(*, vault_path: str | None = None) -> dict[str, list[str]]:
             lst = out.setdefault(note_key(n), [])
             if src not in lst:
                 lst.append(src)
+    return out
+
+
+def grounding_by_note(*, vault_path: str | None = None) -> dict[str, dict]:
+    """`{note_key: {spans, ungrounded, profile}}`, the latest record's verdict
+    per note. Records are chronological, so a later re-nucleation or
+    re-verify (M6) of the same note simply overwrites the earlier entry."""
+    out: dict[str, dict] = {}
+    for r in read_records(vault_path=vault_path):
+        for note, g in (r.get("grounding") or {}).items():
+            if isinstance(g, dict):
+                out[note_key(note)] = g
     return out
 
 
@@ -553,7 +588,9 @@ MIN_GROUNDABLE_CHARS = 12  # normalized; shorter spans ($x$, \top) match anywher
 GROUNDING_FLOOR = 0.85     # matched-char fraction under LOCAL difflib alignment
 LOCALITY_WINDOW = 2        # matched blocks must fit in a window of N * len(span)
 
-_NUMERAL_RE = re.compile(r"\d+(?:[.,]\d+)?")
+# The sign is part of the token: `10^{-6}` and `10^{-8}` differ only there,
+# and a lone digit is too common in any text to be checked on its own.
+_NUMERAL_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
 
 
 def _norm_ws(s: str) -> str:
@@ -647,6 +684,24 @@ def ungrounded_spans(body: str, source: str) -> list[str]:
       is the sharpest fabrication signal (altered 0.01→0.1, invented ε=10⁻⁸);
     - fuzzy match must be LOCAL (see _local_match_fraction).
     """
+    return [span for span, ok in _span_verdicts(body, source) if not ok]
+
+
+def grounding_counts(body: str, source: str) -> tuple[int, int]:
+    """`(checked, ungrounded)` over the gateable spans of *body*.
+
+    The denominator is what the gate actually judged, not what the body
+    contains: spans under MIN_GROUNDABLE_CHARS match anywhere and are never
+    checked, so counting them would inflate the score. (0, 0) means nothing
+    was checkable, which a reader must render as unmeasured, never as 100%
+    (epistemic-state spec §0.5).
+    """
+    verdicts = _span_verdicts(body, source)
+    return len(verdicts), sum(1 for _s, ok in verdicts if not ok)
+
+
+def _span_verdicts(body: str, source: str) -> list[tuple[str, bool]]:
+    """`(normalized span, grounded)` for every span the gate checks."""
     # (span, normalizer) — each class is compared against a source normalized
     # the same way, so a code fence keeps its whitespace and math loses it.
     spans: list[tuple[str, Callable[[str], str]]] = []
@@ -662,17 +717,25 @@ def ungrounded_spans(body: str, source: str) -> list[str]:
     # objects mypy infers from the literal, since `norm` below is either one.
     sources: dict[Callable[[str], str], str] = {
         _norm_ws: _norm_ws(source), _norm_math: _norm_math(source)}
-    out: list[str] = []
+    # Numerals compare as whole tokens: as substrings, `0.99` was grounded by
+    # a source saying `0.999` and `2012` by `12012` (manual pass 2026-09-04).
+    numerals_in: dict[Callable[[str], str], set[str]] = {
+        norm: set(_NUMERAL_RE.findall(text)) for norm, text in sources.items()}
+    out: list[tuple[str, bool]] = []
     for span, norm in spans:
         s, src = norm(span), sources[norm]
-        if len(s) < MIN_GROUNDABLE_CHARS or s in src:
+        if len(s) < MIN_GROUNDABLE_CHARS:
             continue
+        # Numerals before the substring shortcut: `beta_2=0.99` IS a substring
+        # of `beta_2=0.999`, and that is the one case a constant check exists for.
         numerals = [n for n in _NUMERAL_RE.findall(s) if len(n) >= 2]
-        if any(n not in src for n in numerals):
-            out.append(_norm_ws(span))
+        if any(n not in numerals_in[norm] for n in numerals):
+            out.append((_norm_ws(span), False))
             continue
-        if _local_match_fraction(s, src) < GROUNDING_FLOOR:
-            out.append(_norm_ws(span))
+        if s in src:
+            out.append((_norm_ws(span), True))
+            continue
+        out.append((_norm_ws(span), _local_match_fraction(s, src) >= GROUNDING_FLOOR))
     return out
 
 
@@ -779,7 +842,14 @@ def nonextractive_lines(body: str, source: str) -> list[str]:
 # and the label is the join key rather than the position: agents reorder lists,
 # and a positional reference would silently re-point.
 _FOOTNOTE_LABEL_RE = re.compile(r"[^A-Za-z0-9_-]+")
+_TRAILING_URL_RE = re.compile(r"https?://\S+\s*$")
 _SECTION_STOP_RE = re.compile(r"^#{1,6}\s+(Sources|Superseded)\b", re.IGNORECASE)
+# A line that is only an image embed or a one-line display formula: a picture
+# or a formula is not a claim a reader checks against the leaf, and on the
+# embed the marker rendered as a superscript glued to the image (live
+# 2026-09-04, `![[img.jpg]][^Lezione-6]`). Multi-line `$$` blocks are the
+# `math` toggle below; this is the single-line form the toggle cannot see.
+_NOT_A_CLAIM_RE = re.compile(r"^(?:!\[\[[^\]]+\]\]|\$\$.*\$\$)$")
 
 
 def footnote_label(source_basename: str) -> str:
@@ -813,6 +883,7 @@ def attribute_lines(note: str, source: str, label: str) -> str:
     out: list[str] = []
     marked = False
     fenced = False
+    math = False
     for i, raw in enumerate(lines):
         if _SECTION_STOP_RE.match(raw):
             out.extend(lines[i:])
@@ -821,9 +892,20 @@ def attribute_lines(note: str, source: str, label: str) -> str:
             fenced = not fenced
             out.append(raw)
             continue
+        # An odd number of `$$` opens or closes display math; inside it the
+        # marker reaches MathJax as LaTeX and `^` superscripts the label
+        # (97 equations in one vault, 2026-09-05). A table row cannot carry it
+        # either: after the closing pipe it is an extra cell, and on the
+        # delimiter row that cell is not dashes, so the table dissolves into
+        # a paragraph. A trailing bare URL autolinks whatever follows it.
+        if raw.count("$$") % 2:
+            math = not math
+            out.append(raw)
+            continue
         line = _WIKILINK_RE.sub(r"\1", _LEADING_MARKER_RE.sub("", raw))
         norm = _norm_extract(line)
-        if (fenced or raw.lstrip().startswith("#") or marker in raw
+        if (fenced or math or raw.lstrip().startswith(("#", "|")) or marker in raw
+                or _TRAILING_URL_RE.search(raw) or _NOT_A_CLAIM_RE.match(raw.strip())
                 or len(norm) < _EXTRACTIVE_MIN_CHARS or norm not in src):
             out.append(raw)
             continue
