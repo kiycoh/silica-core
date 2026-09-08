@@ -43,9 +43,6 @@ dependencies = [
   "mammoth>=1.9",
   "striprtf>=0.0.29",
   "xlrd>=2.0",
-  # The tabular tools (--extended): DuckDB over CSV/XLSX/…, one wheel.
-  "duckdb>=1.5.5",
-  "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -122,12 +119,12 @@ module = [
     # since 2.0 dropped .xlsx, which is exactly why it is safe to depend on).
     "xlrd", "striprtf.*",
     # No stubs and no py.typed: the NLP pair (stop-words, snowballstemmer)
-    # plus three that DO have stub packages on PyPI — types-python-dateutil,
-    # types-Pygments, types-openpyxl. Listed here rather than installed because
-    # each is reached from one narrow call site; add the stub package instead if
-    # any of these three ever grows a real surface.
+    # plus two that DO have stub packages on PyPI — types-python-dateutil and
+    # types-Pygments. Listed here rather than installed because each is reached
+    # from one narrow call site; add the stub package instead if either ever
+    # grows a real surface.
     "stop_words", "snowballstemmer",
-    "dateutil.*", "pygments", "pygments.*", "openpyxl", "openpyxl.*",
+    "dateutil.*", "pygments", "pygments.*",
     # The [rerank] extra's cross-encoder. Listed for the same reason the PDF
     # providers are: ci.yml deliberately syncs without it (3.8 GB of torch to
     # run tests that skip), so mypy would fail on a package the gate is not

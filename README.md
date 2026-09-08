@@ -88,7 +88,7 @@ silica files --status unconverted              # what the index could not read
 silica import papers/lsm-trees.pdf             # writes papers/lsm-trees.md beside the PDF (which then wins over the text layer)
 silica write-note notes/decision.md --body-file - < decision.md
 silica code-pack src/search/index.py --budget 12000
-silica mcp --extended                          # also serve the tables and link tools
+silica mcp --extended                          # also serve the wikilink tools
 ```
 
 ## How search says no
@@ -136,10 +136,14 @@ id at any other endpoint. `silica mcp` never needs any of this.
 
 ## Extended tools
 
-`silica mcp --extended` adds the tabular census (`silica_tables`,
-`silica_query_table`: DuckDB over CSV, XLSX and friends, schema in every
-reply) and the wikilink tools (`silica_links`, `silica_backlinks`,
-`silica_orphans`, `silica_unresolved`) over the same root.
+`silica mcp --extended` adds the wikilink tools (`silica_links`,
+`silica_backlinks`, `silica_orphans`, `silica_unresolved`) over the same
+root.
+
+There is no SQL tool and no data-file converter. A `.csv` stays a file:
+`silica_files` lists it as `excluded` with the reason, and `silica_read`
+serves its lines by number. Search does not index it. Anything past that is
+a query engine, which is a different product from located evidence.
 
 ## Obsidian
 
@@ -151,8 +155,9 @@ directly.
 ## Not included, on purpose
 
 No LLM client, no memory lane, no session capture, no hook that injects
-text into a prompt, no summaries, no undo journal. Undo is git. The
-private product this core is cut from keeps those lanes.
+text into a prompt, no summaries, no undo journal, no SQL over your data
+files. Undo is git. The private product this core is cut from keeps those
+lanes.
 
 ## Development
 

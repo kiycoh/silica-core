@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 import re
 
+from silica.kernel.text.payload import extract_section, find_heading
+
 # ---------------------------------------------------------------------------
 # Regex patterns
 # ---------------------------------------------------------------------------
@@ -122,8 +124,6 @@ def images_for_section(source: str, concept: str) -> list[str]:
     → no images (concepts pulled from windows have no well-defined section).
     Embeds are returned as deduped, in-order ``![[basename.ext]]``.
     """
-    from silica.kernel.text.payload import find_heading, extract_section  # lazy: avoid cycle
-
     h = find_heading(source, concept)
     if not h:
         return []

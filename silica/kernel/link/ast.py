@@ -21,9 +21,9 @@ NON_MD_EXTENSIONS = (
     '.png', '.jpg', '.jpeg', '.pdf', '.webp', '.svg', '.gif', '.bmp',
     '.tif', '.tiff', '.avif', '.mp4', '.mov', '.avi', '.mkv',
     '.zip', '.html', '.css', '.ipynb',
-    # Tabular data (convert.py TABULAR_EXTS): a profile note names its source
-    # file, and as note targets these were the same phantom dangling links the
-    # 2026-08-27 batch fixed for notebooks.
+    # Tabular data: a note that links its source file was resolving that link
+    # as a note target, the same phantom dangling link the 2026-08-27 batch
+    # fixed for notebooks.
     '.csv', '.tsv', '.parquet',
 )
 

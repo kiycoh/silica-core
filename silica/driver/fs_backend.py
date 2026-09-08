@@ -23,7 +23,13 @@ from pathlib import Path
 from collections.abc import Sequence
 from typing import Any
 import networkx as nx
-from silica.kernel.link.ast import ADR_REF_RE, NON_MD_EXTENSIONS, extract_refs_typed, resolve_relative
+from silica.kernel.link.ast import (
+    ADR_REF_RE,
+    NON_MD_EXTENSIONS,
+    extract_refs_typed,
+    parse_headings,
+    resolve_relative,
+)
 
 from silica.driver.base import (
     GraphIndexMixin,
@@ -36,7 +42,6 @@ from silica.driver.base import (
     Txn,
 )
 from silica.kernel.write import frontmatter as fm
-from silica.kernel.link import ofm
 from silica.kernel.recall.paths import is_vault_artifact
 from silica.kernel.recall.paths import (
     atomic_write_bytes,
@@ -805,7 +810,7 @@ class ObsidianFSBackend(GraphIndexMixin):
         """Get the heading tree of a note."""
         try:
             nc = self.read_note(ref)
-            raw_headings = ofm.parse_headings(nc.content)
+            raw_headings = parse_headings(nc.content)
             return [
                 Heading(
                     level=h["level"],

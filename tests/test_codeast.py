@@ -574,7 +574,7 @@ import os
 from silica.kernel.write import frontmatter
 
 if TYPE_CHECKING:
-    from silica.kernel.write.ops import Op
+    from silica.kernel.write.ops import InverseOp
 
 
 def commit():
@@ -595,7 +595,7 @@ def test_deferred_imports_are_captured_apart_from_top_level():
     assert sk.imports == ["os", "silica.kernel.write.frontmatter"]
     assert "silica.kernel.workqueue.path_lease" in sk.deferred_imports
     assert "silica.kernel.code.codeast.python" in sk.deferred_imports
-    assert "silica.kernel.write.ops.Op" in sk.deferred_imports   # TYPE_CHECKING guard
+    assert "silica.kernel.write.ops.InverseOp" in sk.deferred_imports   # TYPE_CHECKING guard
     # top-level ones never leak into the deferred bucket
     assert not any(m in sk.deferred_imports for m in ("os", "silica.kernel.write.frontmatter"))
 

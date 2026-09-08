@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -31,80 +31,17 @@ SAFE_WRITE_DIR = "silica"
 
 
 @dataclass(frozen=True)
-class VaultConventions:
-    """Per-vault authoring conventions — single source for prompt + linter.
-
-    Consumed by `prep_delegation.render_prompt` ({LANGUAGE}/{MAX_TAGS}
-    placeholders) and `ofm.ofm_lint` (LIMITS/CALLOUT_TYPES resolution).
-    max_tags/extra_callouts/max_lines/max_chars default to today's hardcoded
-    values, so a vault without a `conventions:` block behaves bit-identically
-    to before this existed for those fields.
-
-    `language: None` (the default) means "follow the source document's
-    language" — resolved per-note downstream via `kernel.language.detect`.
-    A declared non-empty string means "force/translate everything into this
-    language" — an explicit declaration is translation intent.
-
-    `reply_language` is a *different* axis: the language Silica speaks in chat
-    (button/slash-command turns included), independent of note content. None
-    ⇒ the call site falls back to `language`, then to follow-the-user.
-    """
-
-    language: str | None = None
-    reply_language: str | None = None
-    max_tags: int = 3
-    extra_callouts: tuple[str, ...] = ()
-    # ADR-0021 F1b: free-form authoring rules injected into the distiller prompt
-    # ({CAPTURE_RULES} placeholder). "" ⇒ placeholder renders empty, bit-identical
-    # to before. This is where a vault declares spatial/format capture conventions
-    # (F3), e.g. "Record every measurement in metric with the imperial in parens".
-    capture_rules: str = ""
-    # Distill profile: named lens (rubric/quality/examples fragments) spliced
-    # into the distiller prompt contract. "" ⇒ "default", which renders
-    # bit-identically to the pre-split prompt. SILICA_DISTILL_PROFILE env
-    # overrides this for eval A/Bs.
-    distill_profile: str = ""
-    wiki_dir: str = ""  # landing dir for /wiki notes; "" ⇒ vault root
-    # Frontmatter templates (2026-07-17 spec): None ⇒ built-in template_spoke
-    # layout — a vault with no config behaves bit-identically to before.
-    default_template: str | None = None
-    templates_dir: str = "templates"
-    # ADR-0021: None ⇒ no episodic key enforcement (bit-identical to today).
-    # Only meaningful on the MEMORY vault's manifest; other vaults ignore it.
-    episodic_keys: "EpisodicKeySchema | None" = None
-
-
-@dataclass(frozen=True)
-class EpisodicKeySchema:
-    """Declared grammar of episodic keys (ADR-0021).
-
-    Owned by the MEMORY vault's manifest (the episodic store's home), never
-    by the vault active at capture: one store, one schema. Enforcement is
-    structural and write-time (see `episodic.enforce_key_schema`).
-    """
-
-    prefixes: tuple[str, ...] = ("user", "assistant")
-    default_prefix: str = "user"
-    max_depth: int = 3
-
-
-DEFAULT_CONVENTIONS = VaultConventions()
-
-
-@dataclass(frozen=True)
 class VaultManifest:
     sources: tuple[str, ...]
     cooccurrence_lang: str | None = None
-    conventions: VaultConventions = DEFAULT_CONVENTIONS
     # Write boundary: the only subtree of the vault Silica may create, patch,
     # move or delete notes in. "" ⇒ the vault root (in place, today's Obsidian
     # behaviour and the default for a vault with no manifest). A relative subdir
     # ⇒ reads stay vault-wide, writes are confined there, so everything outside
-    # is read-only context. Top-level rather than under `conventions:` on
-    # purpose: this is a boundary the framework enforces against the model, and
-    # a malformed sibling block must never widen it (`_parse_conventions` folds
-    # the whole block to defaults). None ⇒ declared but unresolvable; the
-    # activation seam refuses the vault instead of silently writing everywhere.
+    # is read-only context. Top-level and parsed on its own: this is a boundary
+    # the framework enforces against the model, and no malformed sibling key may
+    # widen it. None ⇒ declared but unresolvable; the activation seam refuses the
+    # vault instead of silently writing everywhere.
     write_dir: str | None = ""
 
 
@@ -165,106 +102,6 @@ def default_sources(vault: str | Path) -> tuple[str, ...]:
     return tuple(out)
 
 
-def _parse_conventions(raw: dict) -> VaultConventions:
-    """Parse the optional `conventions:` block; malformed/missing ⇒ defaults (soft)."""
-    conv_raw = raw.get("conventions")
-    if conv_raw is None:
-        return DEFAULT_CONVENTIONS
-    if not isinstance(conv_raw, dict):
-        logger.warning("vault.yaml: `conventions` must be a mapping — using defaults")
-        return DEFAULT_CONVENTIONS
-
-    # Absent/malformed (non-string, empty or whitespace-only) -> None ("follow
-    # the source"). A declared non-blank string passes through unchanged
-    # (translation intent) — {LANGUAGE} must always get a concrete name.
-    language = conv_raw.get("language")
-    if isinstance(language, str) and language.strip():
-        language = language.strip()
-    else:
-        language = None
-
-    reply_language = conv_raw.get("reply_language")
-    if isinstance(reply_language, str) and reply_language.strip():
-        reply_language = reply_language.strip()
-    else:
-        reply_language = None
-
-    max_tags = conv_raw.get("max_tags")
-    if not (isinstance(max_tags, int) and not isinstance(max_tags, bool) and max_tags > 0):
-        max_tags = DEFAULT_CONVENTIONS.max_tags
-
-    capture_rules = conv_raw.get("capture_rules")
-    capture_rules = capture_rules.strip() if isinstance(capture_rules, str) else ""
-
-    distill_profile = conv_raw.get("distill_profile")
-    distill_profile = distill_profile.strip() if isinstance(distill_profile, str) else ""
-
-    extra_callouts = conv_raw.get("extra_callouts")
-    if isinstance(extra_callouts, list) and all(isinstance(c, str) for c in extra_callouts):
-        extra_callouts = tuple(c.lower() for c in extra_callouts)
-    else:
-        extra_callouts = DEFAULT_CONVENTIONS.extra_callouts
-
-    wiki_dir = _safe_rel_dir(conv_raw.get("wiki_dir")) if "wiki_dir" in conv_raw else ""
-    if wiki_dir is None:
-        logger.warning("vault.yaml: conventions.wiki_dir must be a relative "
-                       "path inside the vault — ignoring %r", conv_raw.get("wiki_dir"))
-        wiki_dir = ""
-
-    default_template = conv_raw.get("default_template")
-    if isinstance(default_template, str) and default_template.strip():
-        default_template = default_template.strip()
-    else:
-        default_template = None
-
-    templates_dir = (
-        _safe_rel_dir(conv_raw.get("templates_dir")) if "templates_dir" in conv_raw else ""
-    )
-    if templates_dir is None:
-        logger.warning("vault.yaml: conventions.templates_dir must be a relative "
-                       "path inside the vault — ignoring %r", conv_raw.get("templates_dir"))
-        templates_dir = ""
-    if not templates_dir:
-        templates_dir = "templates"
-
-    episodic_keys = None
-    ek_raw = conv_raw.get("episodic_keys")
-    if isinstance(ek_raw, dict):
-        defaults = EpisodicKeySchema()
-        prefixes = ek_raw.get("prefixes")
-        if not (isinstance(prefixes, list) and prefixes
-                and all(isinstance(p, str) and p.strip() for p in prefixes)):
-            prefixes = list(defaults.prefixes)
-        default_prefix = ek_raw.get("default_prefix")
-        if not (isinstance(default_prefix, str) and default_prefix.strip()):
-            default_prefix = defaults.default_prefix
-        max_depth = ek_raw.get("max_depth")
-        if not (isinstance(max_depth, int) and not isinstance(max_depth, bool)
-                and max_depth > 0):
-            max_depth = defaults.max_depth
-        episodic_keys = EpisodicKeySchema(
-            prefixes=tuple(p.strip() for p in prefixes),
-            default_prefix=default_prefix.strip(),
-            max_depth=max_depth,
-        )
-    elif ek_raw is not None:
-        logger.warning("vault.yaml: `episodic_keys` must be a mapping — "
-                       "no key schema (enforcement off)")
-
-    return VaultConventions(
-        language=language,
-        reply_language=reply_language,
-        max_tags=max_tags,
-        extra_callouts=extra_callouts,
-        capture_rules=capture_rules,
-        distill_profile=distill_profile,
-        wiki_dir=wiki_dir,
-        default_template=default_template,
-        templates_dir=templates_dir,
-        episodic_keys=episodic_keys,
-    )
-
-
 def load_manifest(vault: str | Path) -> VaultManifest:
     """Parse <vault>/vault.yaml; absent or malformed ⇒ defaults (soft)."""
     defaults = VaultManifest(sources=default_sources(vault))
@@ -303,26 +140,9 @@ def load_manifest(vault: str | Path) -> VaultManifest:
             raw.get("write_dir"),
         )
 
-    conventions = _parse_conventions(raw)
-    if write_dir and not conventions.wiki_dir:
-        # `/wiki` writes through commit_derived, which bypasses the validate gate.
-        # Defaulting its landing dir to the boundary (instead of the vault root)
-        # is what keeps derived notes inside it without a second check.
-        conventions = replace(conventions, wiki_dir=write_dir)
-    elif write_dir and not within(conventions.wiki_dir, write_dir):
-        # wiki_dir is a landing dir for writes, so it cannot sit outside the
-        # write boundary. Collapse rather than reject: /wiki still works, just
-        # inside the declared subtree.
-        logger.warning(
-            "vault.yaml: conventions.wiki_dir %r is outside write_dir %r — using %r",
-            conventions.wiki_dir, write_dir, write_dir,
-        )
-        conventions = replace(conventions, wiki_dir=write_dir)
-
     return VaultManifest(
         sources=src,
         cooccurrence_lang=lang if isinstance(lang, str) and lang else None,
-        conventions=conventions,
         write_dir=write_dir,
     )
 
@@ -362,33 +182,6 @@ def set_write_dir(vault: str | Path, value: str) -> Path:
         out.append(line)
 
     atomic_write_bytes(path, "".join(out).encode("utf-8"))
-    reset_manifest_cache()
-    return path
-
-
-def set_distill_profile(vault: str | Path, profile: str) -> Path:
-    """Declare `conventions.distill_profile` in `<vault>/vault.yaml`.
-
-    A nested key, so unlike set_write_dir this is a yaml round-trip (same
-    trade as the /settings writer): hand-written comments do not survive.
-    The wizard only calls it with explicit user consent.
-    """
-    import yaml
-
-    from silica.kernel.recall.paths import atomic_write_bytes
-
-    path = Path(vault) / MANIFEST_REL
-    data = {}
-    if path.is_file():
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            data = loaded
-    conv = data.get("conventions")
-    if not isinstance(conv, dict):
-        conv = {}
-    conv["distill_profile"] = profile
-    data["conventions"] = conv
-    atomic_write_bytes(path, yaml.safe_dump(data, sort_keys=False).encode("utf-8"))
     reset_manifest_cache()
     return path
 
@@ -477,84 +270,6 @@ def active_inbox_dir() -> str:
     )
 
 
-DONE_DIR = "Done"
-
-
-def resolve_done_dir(vault_root: str | Path, write_dir: str) -> str:
-    """Where the archive IS, given a declared boundary.
-
-    `resolve_inbox_dir` for the archive, plus the one axis it has no reason to
-    carry: the folder was named `done` until 2026-08-23, and an archive that
-    already exists keeps whatever casing it has. Renaming it under the user
-    forks the archive in two on a case-sensitive filesystem and strands every
-    path already filed there.
-
-    The match is by casefold rather than by `is_dir`, because a case-insensitive
-    filesystem answers `is_dir()` for `done` in a vault whose folder is really
-    `Done` — probing alone would keep writing the wrong name forever. Both roots
-    are probed for the same reason `resolve_inbox_dir` probes two: a vault that
-    archived before the write boundary existed keeps its `done/` at the root.
-    """
-    target = resolve_inbox_dir(vault_root, write_dir, DONE_DIR)
-    if not vault_root:
-        return target
-    root = Path(vault_root)
-    for rel in (target, resolve_inbox_dir(vault_root, write_dir, DONE_DIR.lower())):
-        if not rel:
-            continue
-        parent, _, name = rel.rpartition("/")
-        base = root / parent if parent else root
-        try:
-            found = next((c.name for c in base.iterdir()
-                          if c.is_dir() and c.name.casefold() == name.casefold()), "")
-        except OSError:
-            continue
-        if found:
-            return f"{parent}/{found}" if parent else found
-    return target
-
-
-def active_done_dir() -> str:
-    """Vault-relative archive root for the active vault.
-
-    The `active_inbox_dir` of the archive: composed here, never read off a bare
-    constant, so it lands inside the write boundary like everything else Silica
-    creates.
-    """
-    from silica.config import CONFIG
-
-    return resolve_done_dir(
-        getattr(CONFIG, "vault_path", "") or "",
-        active_write_dir(),
-    )
-
-
-def archive_path_for(inbox_file: str, done_dir: str = "") -> str:
-    """Where `inbox_file` lands once archived: the archive root + its inbox tree.
-
-    The archive MIRRORS the inbox rather than flattening onto a basename. This
-    move is the one write of a run that `/revert` cannot undo — it records no
-    `InverseOpKind.move_back`, unlike every move `/organize` makes — so the
-    preserved structure IS the undo: the user drags `Done/<folder>/` back into
-    the inbox and is exactly where they started. Flattening also collided every
-    `notes.md` of every source folder onto one name in one directory.
-
-    Named here rather than inlined at CLEANUP because validate.py has to find a
-    source AFTER the move (RETRY/steer validates post-archive) and would
-    otherwise carry a second, drifting copy of the same rule.
-
-    A source reached by an absolute path or filed outside the inbox has no tree
-    to preserve and keeps its bare name: echoing its full path would rebuild
-    the vault under the archive.
-    """
-    root = in_write_dir(done_dir) if done_dir else active_done_dir()
-    rel = (inbox_file or "").replace("\\", "/").strip("/")
-    inbox = active_inbox_dir()
-    under = rel[len(inbox) + 1:] if inbox and within(rel, inbox) else ""
-    rel = under or rel.rsplit("/", 1)[-1]
-    return f"{root}/{rel}" if root else rel
-
-
 def in_write_dir(rel_path: str) -> str:
     """`rel_path` composed into the write boundary; unchanged when already inside.
 
@@ -569,46 +284,6 @@ def in_write_dir(rel_path: str) -> str:
     if not write_dir or not rel or within(rel, write_dir):
         return rel
     return f"{write_dir}/{rel}"
-
-
-def seed_mirror_copy(path: str) -> None:
-    """Safe mode: copy the vault original into the mirror before it is enriched.
-
-    Every seam that ENRICHES an existing note (patch, hub MOC, parent MOC) works
-    on `silica/<same path>`; the mirror is a preview of the vault after the
-    paste, so that copy has to start as the note itself or pasting it would drop
-    everything the note already said. No-op outside safe mode, when the copy
-    already exists, or when there is no original — the caller's own read then
-    reports the miss exactly as before.
-
-    Goes through the DRIVER, not the filesystem: with the Obsidian bridge
-    attached, reads are answered by Obsidian's own vault index, and a copy
-    written straight to disk came back "file not found" to the very seam that
-    had just asked for it.
-
-    Best-effort: a copy that cannot be made leaves the read to report it.
-    """
-    from silica.driver import DRIVER
-
-    if active_write_dir() != SAFE_WRITE_DIR or not within(path, SAFE_WRITE_DIR):
-        return
-    rel = path.replace("\\", "/").strip("/")[len(SAFE_WRITE_DIR) + 1:]
-    if not rel:
-        return
-    try:
-        DRIVER.read_note(path)
-        return  # the copy is already there
-    except Exception:
-        pass
-    try:
-        original = DRIVER.read_note(rel).content
-    except Exception:
-        return  # nothing to mirror — the caller's own read reports the miss
-    try:
-        DRIVER.create(path, original)
-        logger.debug("mirror: seeded '%s' from '%s'", path, rel)
-    except Exception as e:
-        logger.warning("mirror: could not seed '%s': %s", path, e)
 
 
 def apply_manifest_to_config() -> None:

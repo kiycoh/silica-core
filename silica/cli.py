@@ -84,7 +84,7 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("repl", help="the optional agent loop over the same tools (needs SILICA_MODEL)")
 
     s = sub.add_parser("mcp", help="serve the tools over stdio MCP")
-    s.add_argument("--extended", action="store_true", help="also serve tables and link tools")
+    s.add_argument("--extended", action="store_true", help="also serve the wikilink tools")
 
     s = sub.add_parser("doctor", help="check this install and this root")
     s.add_argument("--json", action="store_true")

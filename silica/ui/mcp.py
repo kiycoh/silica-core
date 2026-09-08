@@ -4,7 +4,7 @@
 """`silica mcp` — stdio MCP server over the tool registry.
 
 The default list is exactly the five tools of TOOLS.md. `--extended` adds
-the tabular census and the link tools. stdout is the protocol channel:
+the wikilink tools. stdout is the protocol channel:
 nothing here may print to it. Only stdlib at import time; the `mcp` SDK is
 imported inside run_mcp so the module loads without the [mcp] extra.
 """
@@ -24,8 +24,6 @@ CORE_TOOLS = (
 )
 
 EXTENDED_TOOLS = (
-    "silica_tables",
-    "silica_query_table",
     "silica_links",
     "silica_backlinks",
     "silica_orphans",
@@ -46,7 +44,6 @@ def exposed_tools(extended: bool = False) -> dict[str, Any]:
     """The registry slice served over MCP, keyed by name. default ⊂ --extended."""
     import silica.core  # noqa: F401 — registration side effect
     import silica.tools.atomic  # noqa: F401
-    import silica.tools.tabular  # noqa: F401
     from silica.tools import TOOLS
 
     out: dict[str, Any] = {}
