@@ -109,6 +109,13 @@ Measured on 254 converted papers (22 MB): the answered questions scored
 0.44. No boolean is derivable from lexical signals alone, so Silica exposes
 the numbers and the harness decides to stop, read, or rephrase.
 
+`dominance` does not substitute for `coverage`, and the same corpus shows
+why: the question it cannot answer scored the *highest* dominance of the
+set, 1.29 against 1.07 to 1.16 on the answered ones. A query the corpus does
+not cover still has one clear top — that is what a ranked list does.
+Coverage says whether to trust the pool; dominance says whether one hit out
+of it is enough.
+
 Ranking is BM25 over documents, then over the heading sections of the top
 documents, at most two sections per document, with each hit's densest
 window. The index is one JSON file per root under `~/.silica/index`, built

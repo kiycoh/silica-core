@@ -20,10 +20,27 @@ def test_iso_datetime_is_one_token():
     assert "2026-09-08t14:30" in _tokens("at 2026-09-08T14:30 exactly")
 
 
-def test_version_is_one_token():
+def test_version_needs_its_v():
     assert "v0.4.0" in _tokens("pinned to v0.4.0 today")
-    assert "1.2.3" in _tokens("bumped to 1.2.3")
     assert "v0.4.0-rc1" in _tokens("shipped v0.4.0-rc1")
+    assert "v1.2" in _tokens("still on v1.2")
+
+
+def test_a_bare_decimal_is_not_a_version():
+    """Measured on the 254 bench papers: `\\d+\\.\\d+` made every section
+    number and every results-table decimal a term — 84% of all atoms, at
+    near-zero idf — and the inflated document lengths moved the right paper
+    off the top of two acceptance questions. A version carries its `v`."""
+    assert "3.1" not in _tokens("see section 3.1 above")
+    assert "0.025" not in _tokens("p = 0.025 overall")
+    assert "1.2.3" not in _tokens("bumped to 1.2.3")
+
+
+def test_hex_runs_are_not_shredded_into_units():
+    """`\\d+[A-Za-z]{1,4}` with no left guard chopped MinerU asset hashes into
+    dozens of fake atoms (`00923b`, `4834be`, `49cc`)."""
+    t = _tokens("images/e00923b4834be49cc9b8f397da9823d0.jpg")
+    assert not any(a in t for a in ("00923b", "4834be", "49cc")), t
 
 
 def test_number_with_unit_stays_glued():

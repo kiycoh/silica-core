@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Alessandro Carosia
 
-"""Accents fold and identifiers split, so prose reaches names.
+"""Accents fold, so an Italian query and an English corpus meet.
 
 The vault is mixed Italian/English: `references` and `références` must be one
-term, and the query "state machine" must reach `OrderStateMachine`, which
-`[^\\W_]+` hands over as the single token `orderstatemachine`.
+term. Identifier segmentation was measured on the bench corpus and left out;
+see `test_camel_case_is_not_segmented`.
 """
 from silica.kernel.recall.lexical import STOPWORDS, STOPWORDS_FOLDED, _fold, _tokens
 
@@ -28,28 +28,13 @@ def test_folded_stopword_set_covers_the_raw_one():
     assert "perche" in STOPWORDS_FOLDED and "piu" in STOPWORDS_FOLDED
 
 
-def test_camel_case_yields_segments_and_the_whole_token():
-    t = _tokens("the OrderStateMachine broke")
-    assert "orderstatemachine" in t, "the whole name must still match verbatim"
-    assert {"order", "state", "machine"} <= set(t), t
-
-
-def test_acronym_run_splits_before_the_last_capital():
-    assert {"html", "parser"} <= set(_tokens("HTMLParser"))
-
-
-def test_digits_stay_glued_to_their_word():
-    t = _tokens("base64Encode")
-    assert "base64" in t and "encode" in t, t
-
-
-def test_a_plain_word_contributes_no_segments():
-    assert _tokens("machine") == ["machine"]
-
-
-def test_single_char_segments_are_dropped():
-    """`aB` splits into `a`/`B`; both are below the two-character floor."""
-    assert _tokens("aB") == ["ab"]
+def test_camel_case_is_not_segmented():
+    """Measured, not an oversight. Segments let a prose query reach a name,
+    which is right in a code vault; on the 254-paper bench corpus abstracts
+    and introductions name every concept, so segments inflated the front
+    matter and pushed the answering section out of a `per_doc` of 2."""
+    assert _tokens("the OrderStateMachine broke") == ["orderstatemachine", "broke"]
+    assert _tokens("HTMLParser") == ["htmlparser"]
 
 
 def test_atoms_still_work():

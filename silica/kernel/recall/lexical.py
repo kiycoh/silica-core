@@ -93,19 +93,34 @@ _WORD = re.compile(r"[^\W_]+")
 # A two-segment slash pair only counts as a path when it carries an
 # extension, and every segment needs two characters, so the prose `and/or`,
 # `w/o` and `b/c` stay prose.
+#
+# Both shapes are narrow on purpose, measured on the 254 bench papers. A
+# version needs a leading `v` or three components: `\d+\.\d+` alone made
+# every section number (3.1, 4.2) and every decimal in a results table
+# (0.025) a term, 84% of all atoms, near-zero idf, and the inflated document
+# lengths moved the right paper off the top of two acceptance questions.
+# Path segments cap at 32 characters: converted papers carry MinerU asset
+# names like `images/<64 hex>.jpg`, unique per document and therefore
+# maximally rare — the worst kind of noise a lexical index can hold.
 _ATOM = re.compile(r"""
-      \d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2})?)?             # 2026-09-08, 2026-09-08T14:30
-    | v?\d+\.\d+(?:\.\d+)*(?:-[A-Za-z0-9.]+)?                       # 1.2.3, v0.4.0-rc1
-    | \d+(?:\.\d+)?[A-Za-z]{1,4}(?![A-Za-z])                        # 100ms, 5GB, 0.3s
-    | [A-Za-z0-9_-]{2,}(?:/[A-Za-z0-9._-]+){2,}                     # docs/research/papers
-    | [A-Za-z0-9_-]{2,}/[A-Za-z0-9_-]+\.[A-Za-z]{1,5}(?![A-Za-z])   # docs/file.md
+    (?<![A-Za-z0-9._/-])(?:                                             # never mid-token
+      \d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2})?)?                 # 2026-09-08, 2026-09-08T14:30
+    | v\d+(?:\.\d+)+(?:-[A-Za-z0-9.]+)?                                 # v0.4.0-rc1, v1.2
+    | \d+(?:\.\d+)?[A-Za-z]{1,4}(?![A-Za-z0-9])                         # 100ms, 5GB, 0.3s
+    | [A-Za-z0-9_-]{2,32}(?:/[A-Za-z0-9._-]{1,32}){2,}                  # docs/research/papers
+    | [A-Za-z0-9_-]{2,32}/[A-Za-z0-9_-]{1,32}\.[A-Za-z]{1,5}(?![A-Za-z])  # docs/file.md
+    )
 """, re.X)
-# camelCase / PascalCase humps: split before an upper that follows a lower or
-# a digit, and before the last upper of an acronym run ("HTMLParser" -> HTML |
-# Parser). snake_case needs no rule — `_` is already outside `[^\W_]`, so
-# those arrive pre-split.
-_HUMP = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-_MAX_SEGMENTS = 12  # a minified name or a hash carries no prose signal
+# No camelCase segmentation here, and the omission is measured, not an
+# oversight. Splitting `OrderStateMachine` into order/state/machine lets a
+# prose query reach a name, which is the right trade in a code vault. On the
+# 254-paper bench corpus it is the wrong one: an abstract and an
+# introduction name every concept in the paper, so segments inflate the
+# front matter above the section that answers. With `per_doc` at 2, Abstract
+# and Introduction filled the quota and the granularity question lost the
+# section titled "How Does Granularity Influence Performance" — a hit at
+# coverage 0.97 that says less than the one at 0.65 it displaced. Bring it
+# back per-vault, if at all.
 
 
 def _tokens(text: str) -> list[str]:
@@ -114,23 +129,15 @@ def _tokens(text: str) -> list[str]:
     stemming: proper nouns and dates match verbatim; no language detection:
     nothing here depends on it.
 
-    Two shapes are emitted in addition to the plain token, never instead of
-    it: structured atoms (`_ATOM`), so `2026-09-08` is both one rare term and
-    the year it contains, and the segments of a camel-humped name, so the
-    query "state machine" reaches `OrderStateMachine` while
-    `OrderStateMachine` still matches itself.
+    Structured shapes (`_ATOM`) are emitted whole in addition to the
+    fragments `_WORD` finds inside them, so `2026-09-08` is both one rare
+    term and the year it contains.
     """
     out = [m.group(0).lower() for m in _ATOM.finditer(text)]
     for m in _WORD.finditer(text):
-        raw = m.group(0)
-        word = _fold(raw.lower())
+        word = _fold(m.group(0).lower())
         if len(word) >= 2 and word not in STOPWORDS_FOLDED:
             out.append(word)
-        if _HUMP.search(raw):
-            for part in _HUMP.split(raw)[:_MAX_SEGMENTS]:
-                seg = _fold(part.lower())
-                if len(seg) >= 2 and seg not in STOPWORDS_FOLDED:
-                    out.append(seg)
     return out
 
 
