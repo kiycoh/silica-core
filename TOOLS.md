@@ -43,7 +43,7 @@ exactly one `status`:
 | `changed` | on disk it differs from what the index holds |
 | `excluded` | not read by the index: an ignore rule, a hidden folder, a type the index does not read, or a source already converted to a `.md` beside it (`reason` says which) |
 | `failed` | read or conversion failed; `reason` says why |
-| `unconverted` | a binary source (PDF, DOCX) with no extracted text yet |
+| `unconverted` | a PDF whose text layer the index could not read (a scan, an encrypted or broken file), or another binary source with no extracted text yet; `reason` says which |
 
 Reply: `{root, total, files: [{path, bytes, mtime, status, reason?}],
 counts: {indexed, changed, excluded, failed, unconverted}, truncated,
@@ -52,6 +52,12 @@ next_cursor, index}`.
 `status=` filters to one class, which is how a harness asks "what did the
 index miss" before trusting a search. `total` counts files on disk even when
 the index is cold.
+
+A PDF is indexed from its own text layer, one section per page, with no
+conversion step and no file written beside it. A `.md` sitting next to the
+PDF overrides that: the sidecar is the note, the PDF reads as `excluded:
+converted`. A PDF the index has not read yet is `changed`, not
+`unconverted` — the second status is a verdict, and it needs the read.
 
 ## 2. `silica_search` — ranked passages with an honest zero
 
@@ -112,14 +118,28 @@ one section by heading title (exact or unique prefix), or the whole file when
 it fits. The outline always comes along; it is cheap and removes a tool.
 
 Reply: `{path, version, start, end, text, truncated, next_start,
-outline: [{level, title, line}], source?, page_map?}`.
+outline: [{level, title, line}], source?, pages?, page_map?, extract_path?}`.
 
 - `expect_version` that does not match the file returns `error.changed` with
   the current `version`. A stale citation never silently opens different
   text.
-- A binary source with an extracted sidecar is served from the sidecar,
-  `source` names the original, and `page_map` is present only when the
-  converter preserved page boundaries. Without a sidecar: `error.unconverted`.
+- A PDF is served from its own text layer, page by page: `section="p. 8"`
+  serves one page, `pages` counts them, and `outline` is empty — an extracted
+  layer has no headings to trust, and scanning it for `#` would read a paper's
+  own markdown examples as structure. `page_map` names only the pages the
+  served slice covers (the page it opens on, plus every page starting inside
+  it), so a 500-page book costs no page table per read.
+- `extract_path` is that text on disk. Hand it to the harness's own reader:
+  `grep -n` there returns a line number `silica_read(path, start=…)` serves
+  verbatim. It is a cache — rebuilt when the PDF changes, under no `version`
+  guard — so a citation still goes through the tool.
+- A binary source with an extracted `.md` beside it is served from that
+  sidecar instead, and then `pages`, `page_map` and `extract_path` are null.
+  Either way `source` names the original. A PDF with no readable text layer,
+  or another binary source with no sidecar: `error.unconverted`.
+- The text layer is what PDFium hands over: no OCR, no column reordering, no
+  table reconstruction. `silica import` (mineru, docling) stays the upgrade
+  path, and its sidecar wins wherever it exists.
 
 ## 4. `silica_code_pack` — unchanged
 

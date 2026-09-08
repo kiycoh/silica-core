@@ -19,7 +19,7 @@ summarises, plans or remembers for you. The harness owns the loop.
 |---|---|
 | `silica_files` | the inventory and what the index did with each file: `indexed`, `changed`, `excluded`, `failed`, `unconverted` |
 | `silica_search` | ranked passages: path, section, line, raw BM25, matched terms, `coverage`, and the query terms absent from the corpus |
-| `silica_read` | a slice by lines or by heading, the outline, and a `version` to carry forward |
+| `silica_read` | a slice by lines or by heading (a page, in a PDF), the outline, and a `version` to carry forward |
 | `silica_code_pack` | an AST context pack for one source file inside a character budget |
 | `silica_write_note` | one atomic write, linted for structure and unresolved wikilinks |
 
@@ -43,8 +43,16 @@ another root, pass `--vault DIR` in the server entry, or export
 `SILICA_VAULT` in the client's `env` block; a `.env` file is not enough on
 purpose.
 
+A PDF with a text layer is searched as it is: the index reads the layer
+itself, one section per page, so a hit reads `p. 7` and `silica_read` serves
+that page alone. No conversion, no `.md` written beside it. The reply also
+carries `extract_path`, the extracted text on disk, for `grep` and the
+harness's own reader — the line numbers there are the ones `silica_read`
+serves. A scan has no text layer and reads as `unconverted` until you
+convert it.
+
 Extras: `[connect]` adds the Obsidian bridge, `[all]` both. The converters
-for PDF (text layer), DOCX, EPUB, FB2, RTF, XLS and ODF need no extra.
+for PDF (headings, figures), DOCX, EPUB, FB2, RTF, XLS and ODF need no extra.
 Scanned PDFs, images, PPTX and XLSX go through [MinerU](https://github.com/opendatalab/MinerU)
 when it is on your PATH; audio and video need `ffmpeg` and a speech-to-text
 endpoint (`SILICA_STT_BASE_URL`). `silica doctor` says which lanes you have.
@@ -77,7 +85,7 @@ silica index                                   # build or refresh the index (sea
 silica search "incremental index updates" -k 5
 silica read papers/lsm-trees.md --section "3 Compaction"
 silica files --status unconverted              # what the index could not read
-silica import papers/lsm-trees.pdf             # writes papers/lsm-trees.md beside the PDF
+silica import papers/lsm-trees.pdf             # writes papers/lsm-trees.md beside the PDF (which then wins over the text layer)
 silica write-note notes/decision.md --body-file - < decision.md
 silica code-pack src/search/index.py --budget 12000
 silica mcp --extended                          # also serve the tables and link tools

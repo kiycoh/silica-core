@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -35,10 +36,12 @@ def test_files_reports_every_status(root):
     r = root.files()
     by = {f["path"]: f for f in r["files"]}
     assert r["index"]["state"] == "cold" and by["docs/lsm.md"]["status"] == "changed"
-    assert by["docs/scan.pdf"]["status"] == "unconverted"
+    assert by["docs/scan.pdf"]["status"] == "changed"  # unread by the index, not yet judged
     assert by["node_modules/"]["status"] == "excluded"
     root.build_index()
     assert root.files(status="indexed")["counts"]["indexed"] == 2
+    scan = {f["path"]: f for f in root.files()["files"]}["docs/scan.pdf"]
+    assert scan["status"] == "unconverted" and scan["reason"].startswith("unreadable")
     assert root.files(folder="../etc")["error"]["code"] == "out_of_root"
 
 
@@ -62,6 +65,38 @@ def test_read_by_section_and_version(root):
     assert root.read("docs/lsm.md", section="9 nothing")["error"]["code"] == "not_found"
 
 
+def test_pdf_is_indexed_by_page_from_its_text_layer(root, tmp_path):
+    from tests.doc_factory import pdf_bytes
+
+    (tmp_path / "docs" / "wisckey.pdf").write_bytes(pdf_bytes([
+        "WiscKey separates keys from values.",
+        "Garbage collection reclaims the value log.",
+    ]))
+    root.build_index()
+    assert root.files(status="indexed")["counts"]["indexed"] == 3
+
+    top = root.search("garbage collection value log")["hits"][0]
+    assert top["path"] == "docs/wisckey.pdf" and top["section"] == "p. 2"
+    assert "garbage" in top["matched_terms"]
+
+    r = root.read("docs/wisckey.pdf", section="p. 2")
+    assert r["path"] == "docs/wisckey.pdf" and r["source"] == "docs/wisckey.pdf"
+    assert r["text"].startswith("Garbage collection") and r["pages"] == 2 and r["outline"] == []
+    assert r["page_map"] == [{"page": 2, "line": r["start"]}]  # the slice, not the whole book
+    assert Path(r["extract_path"]).read_text(encoding="utf-8").startswith("WiscKey")
+    assert root.read("docs/wisckey.pdf")["page_map"] == [{"page": 1, "line": 1}, {"page": 2, "line": r["start"]}]
+    assert root.read("docs/wisckey.pdf", section="p. 9")["error"]["code"] == "not_found"
+    assert root.read("docs/wisckey.pdf", expect_version="0" * 12)["error"]["code"] == "changed"
+
+    # a `.md` beside the PDF is the note: the sidecar is indexed, the PDF is not
+    (tmp_path / "docs" / "wisckey.md").write_text("# WiscKey\n\nSee [[lsm]].\n", encoding="utf-8")
+    root.build_index()
+    by = {f["path"]: f for f in root.files()["files"]}
+    assert by["docs/wisckey.pdf"]["status"] == "excluded"
+    assert by["docs/wisckey.pdf"]["reason"] == "converted: docs/wisckey.md"
+    assert root.read("docs/wisckey.pdf")["path"] == "docs/wisckey.md"
+
+
 def test_write_note_is_guarded_and_linted(root, tmp_path):
     r = root.write_note("notes/decision", "# Decision\n\nSee [[lsm]] and [[ghost]].\n\n```py\nopen", frontmatter={"type": "decision"})
     assert r["created"] and (tmp_path / "notes" / "decision.md").read_text(encoding="utf-8").startswith("---\ntype: decision\n---\n")
@@ -74,8 +109,21 @@ def test_write_note_is_guarded_and_linted(root, tmp_path):
     assert root.write_note("notes/decision.md", "# v2", expect_version=r["version"])["version"] != r["version"]
 
 
+def test_write_note_decodes_a_body_escaped_twice(root, tmp_path):
+    """A model that escapes its tool arguments twice sends `\\n` and no real
+    newline; anything with one real newline is written byte for byte."""
+    root.write_note("esc/twice", "## Head\\n\\nline one\\n\\nline two\\n")
+    assert (tmp_path / "esc" / "twice.md").read_text(encoding="utf-8") == "## Head\n\nline one\n\nline two\n"
+    kept = "# Regex\n\n`split on \\n` never becomes a newline here.\n"
+    root.write_note("esc/kept", kept)
+    assert (tmp_path / "esc" / "kept.md").read_text(encoding="utf-8") == kept
+    root.write_note("esc/plain", "one line, no escapes")
+    assert (tmp_path / "esc" / "plain.md").read_text(encoding="utf-8") == "one line, no escapes"
+
+
 def test_cli_prints_the_tool_reply(root, tmp_path, capsys):
     from silica.cli import main
+    root.build_index()
     assert main(["--vault", str(tmp_path), "files", "--status", "unconverted"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert [f["path"] for f in out["files"]] == ["docs/scan.pdf"]

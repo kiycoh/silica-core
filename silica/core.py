@@ -25,6 +25,7 @@ from silica.tools import tool
 
 K1, B = 1.5, 0.75
 _HEADING = re.compile(r"(?m)^(?=#{1,4} )")
+_PAGE = re.compile(r"p\.?\s*(\d+)", re.I)
 _WIKILINK = re.compile(r"\[\[([^\]|#]+)")
 _TEXT_SUFFIXES = frozenset({".md", ".txt", ".rst", ".csv", ".json", ".yaml", ".yml", ".toml", ".xml", ".html"})
 
@@ -53,6 +54,76 @@ def _rel(path: str) -> str:
 
 def _read(full: Path) -> str:
     return full.read_text(encoding="utf-8", errors="replace")
+
+
+def _extract_cache(rel: str) -> Path:
+    return _paths.index_dir() / "extract" / f"{hashlib.sha1(rel.encode()).hexdigest()}.txt"
+
+
+def _pdf_text(rel: str, full: Path) -> tuple[str, list[dict], str]:
+    """A PDF's own text layer, the page map, and the reason the layer is empty
+    when it is. Cached beside the index (`.txt` with the text, `.json` with the
+    map) and re-extracted whenever the PDF is newer than the cache.
+
+    The page is the section: search ranks pages, `silica_read` serves one by
+    `p. N`, `page_map` carries a slice back to its pages. The map is kept
+    beside the text rather than marked inside it — a `## p. N` marker splits
+    the pages of any paper that prints markdown (olmOCR does), and a form feed
+    is a line boundary to `str.splitlines`, which would shift every line
+    number the tool reports.
+
+    ponytail: the text layer as PDFium hands it over — no OCR, no column
+    reordering, no table reconstruction. A scan carries no text layer, stays
+    `unconverted`, and `silica import` (mineru, docling) is the upgrade path.
+    """
+    cache = _extract_cache(rel)
+    pages_file = cache.with_suffix(".json")
+    try:
+        if cache.stat().st_mtime >= full.stat().st_mtime:
+            text = cache.read_text(encoding="utf-8", errors="replace")
+            return text, orjson.loads(pages_file.read_bytes()), "" if text else "no text layer"
+    except (OSError, ValueError):
+        pass
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:  # pragma: no cover - a base dependency
+        return "", [], "pypdfium2 not installed"
+    try:
+        pdf = pdfium.PdfDocument(str(full))
+        try:
+            bodies = []
+            for i in range(len(pdf)):
+                page = pdf[i]
+                textpage = page.get_textpage()
+                try:
+                    bodies.append(textpage.get_text_range().strip())
+                finally:
+                    textpage.close()
+                    page.close()
+        finally:
+            pdf.close()
+    except Exception as e:  # encrypted, truncated, not a PDF: a status, not a crash
+        return "", [], f"unreadable: {e}"
+    parts: list[str] = []
+    pages: list[dict] = []
+    line, offset = 1, 0
+    for n, body in enumerate(bodies, 1):
+        chunk = body + "\n\n"
+        pages.append({"page": n, "line": line, "offset": offset})
+        parts.append(chunk)
+        line += chunk.count("\n")
+        offset += len(chunk)
+    text = "".join(parts) if any(bodies) else ""
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    _paths.atomic_write_bytes(cache, text.encode("utf-8"))
+    _paths.atomic_write_bytes(pages_file, orjson.dumps(pages if text else []))
+    return text, (pages if text else []), "" if text else "no text layer"
+
+
+def _doc_text(rel: str) -> str:
+    """What the index reads for one document: a note's bytes, a PDF's text layer."""
+    full = _root() / rel
+    return _pdf_text(rel, full)[0] if full.suffix.lower() == ".pdf" else _read(full)
 
 
 def _is_text(full: Path) -> bool:
@@ -121,7 +192,15 @@ def _walk(base: Path | None = None):
 
 
 def _note_paths() -> list[str]:
-    return sorted(rel for rel, full in _walk() if full is not None and rel.endswith(".md"))
+    """Every document the index reads: notes, and PDFs with no extracted `.md`
+    beside them — that sidecar is the note, and indexing both would double it."""
+    out = []
+    for rel, full in _walk():
+        if full is None:
+            continue
+        if rel.endswith(".md") or (full.suffix.lower() == ".pdf" and not full.with_suffix(".md").is_file()):
+            out.append(rel)
+    return sorted(out)
 
 
 def _mtime(rel: str) -> float | None:
@@ -137,8 +216,10 @@ def index_state(meta: dict | None = None) -> dict:
     if not _paths.index_file("lexical").is_file() or not meta.get("built_at"):
         return {"state": "cold", "docs": 0, "built_at": None}
     stamps = meta.get("stamps", {})
+    skipped = meta.get("no_text", {})
     live = _note_paths()
-    stale = any(stamps.get(r) != _mtime(r) for r in live) or bool(set(stamps) - set(live))
+    stale = any(stamps.get(r) != _mtime(r) and skipped.get(r, {}).get("mtime") != _mtime(r)
+                for r in live) or bool(set(stamps) - set(live))
     return {"state": "stale" if stale else "ready", "docs": len(stamps), "built_at": meta.get("built_at")}
 
 
@@ -149,9 +230,10 @@ def build_index(rebuild: bool = False, embed: bool = False) -> dict:
     meta = _load_meta()
     rebuild = rebuild or not meta.get("built_at")
     if rebuild:
-        meta = {"built_at": None, "stamps": {}, "tokenizer": TOKENIZER_VERSION}
+        meta = {"built_at": None, "stamps": {}, "no_text": {}, "tokenizer": TOKENIZER_VERSION}
     store = get_lexical_store()
     stamps: dict[str, float] = meta["stamps"]
+    skipped: dict[str, dict] = meta.setdefault("no_text", {})
     root = _root()
     live = _note_paths()
     changed, failed = 0, {}
@@ -159,18 +241,30 @@ def build_index(rebuild: bool = False, embed: bool = False) -> dict:
         mt = _mtime(rel)
         if mt is None:
             continue
-        if not rebuild and stamps.get(rel) == mt:
+        if not rebuild and (stamps.get(rel) == mt or skipped.get(rel, {}).get("mtime") == mt):
             continue
-        try:
-            store.upsert(rel, Path(rel).stem, _read(root / rel))
-        except OSError as e:
-            failed[rel] = str(e)
-            continue
+        if rel.lower().endswith(".pdf"):
+            text, _pages, reason = _pdf_text(rel, root / rel)
+            if not text:  # a scan, or a PDF PDFium could not open: `unconverted`, never indexed
+                skipped[rel] = {"mtime": mt, "reason": reason}
+                if stamps.pop(rel, None) is not None:
+                    store.remove(rel)
+                continue
+        else:
+            try:
+                text = _read(root / rel)
+            except OSError as e:
+                failed[rel] = str(e)
+                continue
+        store.upsert(rel, Path(rel).stem, text)
         stamps[rel] = mt
+        skipped.pop(rel, None)
         changed += 1
     live_set = set(live)
-    for gone in [p for p in list(stamps) if p not in live_set]:
+    for gone in [p for p in list(stamps) + list(skipped) if p not in live_set]:
         stamps.pop(gone, None)
+        skipped.pop(gone, None)
+        _extract_cache(gone).unlink(missing_ok=True)  # a deleted PDF leaves no extraction behind
     for gone in [p for p in store.paths() if p not in live_set]:
         store.remove(gone)
     store.save()
@@ -182,7 +276,7 @@ def build_index(rebuild: bool = False, embed: bool = False) -> dict:
         from silica import embeddings
         if not embeddings.enabled():
             return _error("bad_argument", "embed needs SILICA_EMBEDDING_BASE_URL", **out)
-        notes = [(rel, stamps[rel], _read(root / rel)) for rel in live if rel in stamps]
+        notes = [(rel, stamps[rel], _doc_text(rel)) for rel in live if rel in stamps]
         try:
             out["embeddings"] = embeddings.build(notes, rebuild=rebuild)
         except Exception as e:
@@ -204,9 +298,12 @@ def silica_files(
     """Inventory of the root and what the index did with each file: `indexed`
     (in the index, matches disk), `changed` (differs from the index),
     `excluded` (an ignore rule or a type the index does not read; `reason`
-    says which), `failed` (read or conversion error), `unconverted` (a PDF or
-    office file with no extracted `.md` beside it). `index.state` is `cold`
-    when nothing was ever indexed: an empty listing there is not "no files"."""
+    says which), `failed` (read or conversion error), `unconverted` (a PDF
+    whose text layer the index could not read, or an office file with no
+    extracted `.md` beside it; `reason` says which). A PDF is indexed from
+    its own text layer, one section per page, unless a `.md` sits beside it —
+    that sidecar is indexed instead. `index.state` is `cold` when nothing was
+    ever indexed: an empty listing there is not "no files"."""
     from silica.sources.convert import DOC_EXTS, IMG_EXTS
 
     root = _root()
@@ -219,6 +316,7 @@ def silica_files(
         return _error("not_found", f"{scope or '.'} is not a folder under {root}")
     meta = _load_meta()
     stamps = meta.get("stamps", {})
+    skipped = meta.get("no_text", {})
     failed = _failures()
     entries: list[dict] = []
     for rel, full in _walk(base):
@@ -238,10 +336,18 @@ def silica_files(
             row["status"] = "indexed" if stamps.get(rel) == st.st_mtime else "changed"
         elif suffix in DOC_EXTS and suffix not in IMG_EXTS:
             sidecar = full.with_suffix(".md")
+            skip = skipped.get(rel, {})
             if sidecar.is_file():
                 row.update(status="excluded", reason=f"converted: {sidecar.relative_to(root).as_posix()}")
-            else:
+            elif suffix != ".pdf":
                 row["status"] = "unconverted"
+            elif stamps.get(rel) == st.st_mtime:
+                row["status"] = "indexed"
+            elif skip.get("mtime") == st.st_mtime:
+                # the index read this PDF and found no text to index; `reason` says why
+                row.update(status="unconverted", reason=skip.get("reason") or "no text layer")
+            else:
+                row["status"] = "changed"
         else:
             row.update(status="excluded", reason=f"not indexed: {suffix or 'no extension'}")
         entries.append(row)
@@ -264,24 +370,33 @@ def silica_files(
 # 2. search
 # ---------------------------------------------------------------------------
 
-_section_cache: dict[tuple[str, float], list[tuple[int, str, Counter, int]]] = {}
+_section_cache: dict[tuple[str, float], tuple[str, list[tuple[int, str, Counter, int, str]]]] = {}
 
 
-def _sections_of(rel: str) -> tuple[str, list[tuple[int, str, Counter, int]]]:
-    """Text and (offset, section, term counts, length) per section, cached by
-    mtime so a second query over the same top documents does not retokenize."""
+def _sections_of(rel: str) -> tuple[str, list[tuple[int, str, Counter, int, str]]]:
+    """Text and (offset, section, term counts, length, title) per section — a
+    heading section in a note, a page in a PDF — cached by mtime so a second
+    query over the same top documents does not retokenize (nor re-extract)."""
     full = _root() / rel
-    text = _read(full)
     key = (rel, full.stat().st_mtime)
     if key not in _section_cache:
+        if full.suffix.lower() == ".pdf":
+            text, pages, _reason = _pdf_text(rel, full)
+            bounds = [p["offset"] for p in pages] + [len(text)]
+            parts = [(p["offset"], text[p["offset"]:bounds[i + 1]], f"p. {p['page']}")
+                     for i, p in enumerate(pages)]
+        else:
+            text = _read(full)
+            parts = [(off, part, part.splitlines()[0].lstrip("#").strip() if part.startswith("#") else "")
+                     for off, part in _split(text)]
         secs = []
-        for off, part in _split(text):
+        for off, part, title in parts:
             tf = Counter(_tokens(part))
-            secs.append((off, part, tf, sum(tf.values())))
+            secs.append((off, part, tf, sum(tf.values()), title))
         if len(_section_cache) > 64:
             _section_cache.clear()
-        _section_cache[key] = secs
-    return text, _section_cache[key]
+        _section_cache[key] = (text, secs)
+    return _section_cache[key]
 
 
 @tool(cls="atomic")
@@ -343,36 +458,35 @@ def silica_search(
         top = [(p, lex.get(p, (0.0, set()))[0], lex.get(p, (0.0, set()))[1])
                for p, _f in sorted(fused.items(), key=lambda kv: -kv[1])][: max(k * 3, 10)]
     weights = store.query_idf(_query_terms(query))
-    secs: list[tuple[str, int, str, Counter, int]] = []
+    secs: list[tuple[str, int, str, Counter, int, str]] = []
     texts: dict[str, str] = {}
     for path, _score, _matched in top:
         try:
             texts[path], parts = _sections_of(path)
         except OSError:
             continue
-        secs.extend((path, off, part, tf, dl) for off, part, tf, dl in parts)
+        secs.extend((path, off, part, tf, dl, title) for off, part, tf, dl, title in parts)
     avg = (sum(s[4] for s in secs) / len(secs)) if secs else 1.0
     scored = []
-    for path, off, part, tf, dl in secs:
+    for path, off, part, tf, dl, title in secs:
         matched = {t for t in known if tf.get(t)}
         if not matched:
             continue
         score = sum(known[t] * (tf[t] * (K1 + 1)) / (tf[t] + K1 * (1 - B + B * dl / avg)) for t in matched)
-        scored.append((score, path, off, part, matched))
+        scored.append((score, path, off, part, matched, title))
     scored.sort(key=lambda s: (-s[0], s[1], s[2]))
     for p, cos in dense.items():
-        if p in texts and not any(sp == p for _sc, sp, _o, _pt, _m in scored):
+        if p in texts and not any(sp == p for _sc, sp, _o, _pt, _m, _t in scored):
             first = next(iter(_sections_of(p)[1]), None)
             if first is not None:
-                scored.append((0.0, p, first[0], first[1], set()))
+                scored.append((0.0, p, first[0], first[1], set(), first[4]))
     hits: list[dict] = []
     seen: dict[str, int] = {}
-    for score, path, off, part, matched in scored:
+    for score, path, off, part, matched, title in scored:
         if seen.get(path, 0) >= per_doc:
             continue
         seen[path] = seen.get(path, 0) + 1
         o, window = best_window_spans(part, query, width, 1, weights, snap=True)[0]
-        title = part.splitlines()[0].lstrip("#").strip() if part.startswith("#") else ""
         hit = {"path": path, "section": title,
                "line": texts[path].count("\n", 0, off + o) + 1,
                "score": round(score, 2), "matched_terms": sorted(matched),
@@ -406,9 +520,14 @@ def silica_read(
 ) -> dict:
     """A located slice of one file with its outline. Lines `start..end`, or
     one `section` by heading, or the whole file when it fits `max_chars`;
-    `truncated` and `next_start` say how to continue. A PDF or office file
-    is served from the `.md` extracted beside it (`source` names the
-    original); without one the reply is `error.unconverted`. Carry
+    `truncated` and `next_start` say how to continue. A PDF is served from
+    its own text layer, page by page: `section="p. 8"` serves one page,
+    `pages` counts them, `page_map` gives the pages the slice covers, and
+    `extract_path` is that text on disk, for grep and the harness's own
+    reader (a cache, rebuilt when the PDF changes, under no `version`
+    guard). A PDF or office file with a `.md` extracted beside it is served
+    from that instead. Either way `source` names the original, and a PDF
+    with no readable text layer is `error.unconverted`. Carry
     `version` forward as `expect_version` to be refused instead of reading
     different bytes under an old citation."""
     from silica.kernel.link.ast import parse_headings
@@ -421,21 +540,40 @@ def silica_read(
     full = root / rel
     if not full.is_file():
         return _error("not_found", f"{rel} is not a file under {root}")
-    source = None
-    if not _is_text(full):
+    source, paged, pages = None, False, []
+    if full.suffix.lower() != ".pdf" and _is_text(full):
+        text = _read(full)
+    else:
         sidecar = full.with_suffix(".md")
-        if not sidecar.is_file():
+        if sidecar.is_file():
+            source, full = rel, sidecar
+            rel = sidecar.relative_to(root).as_posix()
+            text = _read(full)
+        elif full.suffix.lower() == ".pdf":
+            text, pages, reason = _pdf_text(rel, full)
+            if not text:
+                return _error("unconverted", f"{reason} in {rel}; run `silica import {rel}`")
+            source, paged = rel, True
+        else:
             return _error("unconverted", f"no extracted text beside {rel}; run `silica import {rel}`")
-        source, full = rel, sidecar
-        rel = sidecar.relative_to(root).as_posix()
-    text = _read(full)
     version = _version(text)
     if expect_version and expect_version != version:
         return _error("changed", f"{rel} is now version {version}", version=version)
     lines = text.splitlines()
-    outline = [{"level": h["level"], "title": h["text"], "line": text.count("\n", 0, h["pos"]) + 1}
-               for h in parse_headings(text)]
-    if section.strip():
+    # An extracted text layer is not markdown: its pages are the structure, and
+    # scanning it for `#` would read a paper's own markdown examples as headings.
+    page_starts = [(p["page"], p["line"]) for p in pages] if paged else []
+    outline = [] if paged else [
+        {"level": h["level"], "title": h["text"], "line": text.count("\n", 0, h["pos"]) + 1}
+        for h in parse_headings(text)]
+    if section.strip() and paged:
+        m = _PAGE.fullmatch(section.strip())
+        if not m or not 1 <= int(m.group(1)) <= len(page_starts):
+            return _error("not_found", f"no page matches {section!r}", pages=len(page_starts))
+        n = int(m.group(1))
+        start = page_starts[n - 1][1]
+        end = page_starts[n][1] - 2 if n < len(page_starts) else len(lines)
+    elif section.strip():
         want = section.strip().casefold()
         idx = [i for i, h in enumerate(outline) if h["title"].casefold() == want] or \
               [i for i, h in enumerate(outline) if h["title"].casefold().startswith(want)]
@@ -460,7 +598,14 @@ def silica_read(
     return {"root": str(root), "path": rel, "version": version, "start": start, "end": served_end,
             "text": "\n".join(out), "truncated": truncated,
             "next_start": served_end + 1 if truncated else None,
-            "outline": outline, "source": source, "page_map": None}
+            "outline": outline, "source": source,
+            "pages": len(page_starts) if paged else None,
+            # the page the slice opens on, plus every page that starts inside it:
+            # a 500-page book must not spend a page table on every read
+            "page_map": [{"page": n, "line": ln} for n, ln in
+                         [pl for pl in page_starts if pl[1] <= start][-1:]
+                         + [pl for pl in page_starts if start < pl[1] <= served_end]] if paged else None,
+            "extract_path": str(_extract_cache(rel)) if paged else None}
 
 
 # ---------------------------------------------------------------------------
@@ -517,10 +662,26 @@ def _lint(rel: str, content: str) -> list[dict]:
     return out
 
 
+def _unescape(body: str) -> str:
+    r"""Decode a body the model escaped twice: no real newline anywhere and a
+    literal \n where each one belonged. Measured through `silica repl` on a
+    local gemma4:e4b, which escapes its tool arguments twice, so json.loads
+    hands over backslash-n and the note lands as a single line. A single real
+    newline means the model got it right and the body is left alone, which is
+    what keeps a fenced code block containing \n intact.
+
+    ponytail: three replaces, not codecs unicode_escape — that one also eats a
+    lone backslash and every \x and \u a note is entitled to contain.
+    """
+    if "\n" in body or "\\n" not in body:
+        return body
+    return body.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+
+
 @tool(cls="atomic")
 def silica_write_note(
     path: Annotated[str, Field(description="Root-relative path of the note (.md added when missing)")],
-    body: Annotated[str, Field(description="Markdown body, written as given")],
+    body: Annotated[str, Field(description="Markdown body, written as given; a body escaped twice (no real newline, \\n in their place) is decoded first")],
     frontmatter: Annotated[dict[str, Any] | None, Field(description="Optional YAML frontmatter, serialised on top of the body")] = None,
     expect_version: Annotated[str, Field(description="Refuse with error.changed unless the existing file has this version")] = "",
     create_only: Annotated[bool, Field(description="Refuse when the file already exists")] = False,
@@ -544,7 +705,7 @@ def silica_write_note(
         current = _version(_read(full))
         if expect_version and expect_version != current:
             return _error("changed", f"{rel} is now version {current}", version=current)
-    content = body
+    content = body = _unescape(body)
     if frontmatter:
         content = "---\n" + yaml.safe_dump(frontmatter, allow_unicode=True, sort_keys=False) + "---\n" + body
     try:

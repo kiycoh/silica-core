@@ -120,3 +120,7 @@ graph.html
 CONTEXT.md
 PRODUCT.md
 DESIGN.md
+
+# Research corpus: papers pulled for design decisions, kept out of the tree.
+# Silica still indexes them — .gitignore is deliberately not an index rule.
+docs/research/

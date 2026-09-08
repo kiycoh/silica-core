@@ -33,8 +33,13 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, opencode
    citation.
 4. **Check coverage when the task is exhaustive.** `silica_files` lists
    every file with what the index did to it; `status=unconverted` names
-   the PDFs and office files with no extracted text, `status=failed` the
-   ones that could not be read. Top-k does not certify coverage.
+   the scans and office files with no extracted text, `status=failed` the
+   ones that could not be read. Top-k does not certify coverage. A PDF with
+   a text layer is indexed as it is, one section per page: a hit in one
+   reads `p. 7`, and `silica_read` serves that page alone. Its
+   `extract_path` is the extracted text on disk — grep it with your own
+   tools, then read the page you need; do not pull a whole PDF into the
+   conversation to look for one line.
 5. **Write only when asked.** `silica_write_note(path, body)` writes one
    note as given and lints it. Nothing is captured or summarised for you;
    undo is git.
