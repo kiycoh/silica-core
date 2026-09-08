@@ -58,18 +58,41 @@ altre stesso stessa stessi stesse sono sei è siamo siete era eri eravamo erano
 essere stato stata stati state ho hai ha abbiamo avete hanno aveva avevano avere
 avuto fa fanno fare fatto può possono qui qua lì là così poi
 """.split())
-TOKENIZER_VERSION = 4  # bumped when the token stream changes; the index rebuilds
+TOKENIZER_VERSION = 5  # bumped when the token stream changes; the index rebuilds
 
 
 _WORD = re.compile(r"[^\W_]+")
+# Structured shapes `_WORD` would shred into fragments the whole corpus
+# shares: a date becomes three common numbers, a path four common words.
+# Matched on the original text and emitted lowercased ALONGSIDE those
+# fragments, never instead of them — the atom is rare and carries the idf,
+# the fragments keep the recall a bare year or filename still needs.
+# A two-segment slash pair only counts as a path when it carries an
+# extension, and every segment needs two characters, so the prose `and/or`,
+# `w/o` and `b/c` stay prose.
+_ATOM = re.compile(r"""
+      \d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2})?)?             # 2026-09-08, 2026-09-08T14:30
+    | v?\d+\.\d+(?:\.\d+)*(?:-[A-Za-z0-9.]+)?                       # 1.2.3, v0.4.0-rc1
+    | \d+(?:\.\d+)?[A-Za-z]{1,4}(?![A-Za-z])                        # 100ms, 5GB, 0.3s
+    | [A-Za-z0-9_-]{2,}(?:/[A-Za-z0-9._-]+){2,}                     # docs/research/papers
+    | [A-Za-z0-9_-]{2,}/[A-Za-z0-9_-]+\.[A-Za-z]{1,5}(?![A-Za-z])   # docs/file.md
+""", re.X)
 
 
 def _tokens(text: str) -> list[str]:
     """Lowercased words and alphanumerics ("bm25", "gpt4", "2026" stay whole),
     at least two characters, function words removed. No stemming: proper
     nouns and dates match verbatim; no language detection: nothing here
-    depends on it."""
-    return [w for w in _WORD.findall(text.lower()) if len(w) >= 2 and w not in STOPWORDS]
+    depends on it.
+
+    Structured shapes (`_ATOM`) are emitted whole in addition to the
+    fragments `_WORD` finds inside them, so `2026-09-08` is both one rare
+    term and the year it contains.
+    """
+    out = [m.group(0).lower() for m in _ATOM.finditer(text)]
+    out.extend(w for w in (m.group(0).lower() for m in _WORD.finditer(text))
+               if len(w) >= 2 and w not in STOPWORDS)
+    return out
 
 
 def dominance(scores: list[float]) -> float | None:
