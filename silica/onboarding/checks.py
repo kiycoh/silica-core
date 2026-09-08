@@ -77,7 +77,16 @@ def check_embeddings(config: Any) -> CheckResult:
                        "" if n else "run `silica index --embed`")
 
 
-CHECKS = (check_root, check_index, check_embeddings, check_extras, check_converters, check_quarantine)
+def check_model(config: Any) -> CheckResult:
+    from silica.repl import endpoint
+    model, base, key = endpoint()
+    if not model:
+        return CheckResult("model", "ok", "none (SILICA_MODEL unset); only `silica repl` needs one")
+    return CheckResult("model", "ok" if (key or "localhost" in base) else "warn", f"{model} @ {base}",
+                       "" if (key or "localhost" in base) else "no API key found for this provider")
+
+
+CHECKS = (check_root, check_index, check_embeddings, check_model, check_extras, check_converters, check_quarantine)
 
 
 def run_checks(config: Any) -> list[CheckResult]:

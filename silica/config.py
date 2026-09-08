@@ -80,6 +80,11 @@ class SilicaConfig:
     embedding_model: str = _env("SILICA_EMBEDDING_MODEL", "text-embedding-qwen3-embedding-4b")
     embedding_api_key: str = _env("SILICA_EMBEDDING_API_KEY", "lm-studio")
 
+    # the optional REPL's model: "provider/model" or a bare id served by SILICA_PROVIDER_BASE_URL
+    model: str = _env("SILICA_MODEL")
+    provider_base_url: str = _env("SILICA_PROVIDER_BASE_URL")
+    provider_api_key: str = _env("SILICA_PROVIDER_API_KEY")
+
     # Obsidian bridge
     ws_port: int = field(default_factory=lambda: int(os.getenv("SILICA_WS_PORT", "0")))
     ws_token: str = _env("SILICA_WS_TOKEN")

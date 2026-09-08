@@ -91,14 +91,14 @@ include_external_packages = true
 name = "the kernel, the driver and the converters never import a surface"
 type = "forbidden"
 source_modules = ["silica.kernel", "silica.driver", "silica.sources"]
-forbidden_modules = ["silica.core", "silica.cli", "silica.ui", "silica.onboarding"]
+forbidden_modules = ["silica.core", "silica.cli", "silica.ui", "silica.onboarding", "silica.repl"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "the core never reaches the driver or a surface"
 type = "forbidden"
 source_modules = ["silica.core"]
-forbidden_modules = ["silica.driver", "silica.cli", "silica.ui", "silica.onboarding"]
+forbidden_modules = ["silica.driver", "silica.cli", "silica.ui", "silica.onboarding", "silica.repl"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]

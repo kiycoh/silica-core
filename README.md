@@ -82,6 +82,22 @@ documents, at most two sections per document, with each hit's densest
 window. The index is one JSON file per root under `~/.silica/index`, built
 in seconds and refreshed by mtime.
 
+## The optional REPL
+
+`silica repl` is the reference harness: a plain agent loop over the same
+tools, for a folder where no coding agent is running. It is the only
+surface that needs a model, and the model is any OpenAI-compatible chat
+endpoint:
+
+```bash
+export SILICA_MODEL=openrouter/deepseek/deepseek-chat OPENROUTER_API_KEY=…   # hosted
+export SILICA_MODEL=lmstudio/qwen3-14b                                      # or local: lmstudio/…, ollama/…
+silica repl
+```
+
+`SILICA_PROVIDER_BASE_URL` and `SILICA_PROVIDER_API_KEY` point a bare model
+id at any other endpoint. `silica mcp` never needs any of this.
+
 ## Extended tools
 
 `silica mcp --extended` adds the tabular census (`silica_tables`,

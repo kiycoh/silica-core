@@ -161,6 +161,8 @@ optional REPL, converters beyond the built-in PDF text layer.
 - Python: `from silica.core import files, search, read, code_pack, write_note`
 - CLI: `silica files|search|read|code-pack|write-note ... --json`
 - MCP: `silica mcp --vault DIR` exposes exactly these five
+- `silica repl`: the optional reference harness, an agent loop over the same
+  tools with an OpenAI-compatible model; the only surface that needs a model
 
 ## Acceptance
 

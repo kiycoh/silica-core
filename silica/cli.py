@@ -81,6 +81,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--rebuild", action="store_true")
     s.add_argument("--embed", action="store_true", help="also build the document vectors (embeddings extension)")
 
+    sub.add_parser("repl", help="the optional agent loop over the same tools (needs SILICA_MODEL)")
+
     s = sub.add_parser("mcp", help="serve the tools over stdio MCP")
     s.add_argument("--extended", action="store_true", help="also serve tables and link tools")
 
@@ -135,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
                                      create_only=a.create_only))
     if a.cmd == "index":
         return _emit(core.build_index(rebuild=a.rebuild, embed=a.embed))
+    if a.cmd == "repl":
+        from silica.repl import main as repl_main
+        return repl_main()
     if a.cmd == "mcp":
         import logging
 
