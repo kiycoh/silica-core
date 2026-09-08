@@ -66,7 +66,7 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("code-pack", help="AST context pack for one source file")
     s.add_argument("target")
     s.add_argument("--budget", type=int, default=24000)
-    s.add_argument("--sections", default="", help="comma-separated: hierarchy,neighborhood,external,importers")
+    s.add_argument("--sections", default="", help="comma-separated: hierarchy,callers,neighborhood,external,importers")
 
     s = sub.add_parser("write-note", help="write one note atomically and lint it")
     s.add_argument("path")

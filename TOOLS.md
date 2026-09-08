@@ -190,6 +190,15 @@ available in this install) and `selector` (the symbol served when
 Static AST only: no runtime analysis, no test selection, no documentation
 generation.
 
+`sections` picks among `hierarchy`, `callers`, `neighborhood`, `external`
+and `importers`; the target is always served, and the budget drops sections
+from the end of that order. `callers` exists only for a symbol target: the
+call sites of that symbol the graph resolved, one `path:line in caller` per
+edge. Static and import-scoped, which is a ceiling to keep in view: a call
+through an instance, an alias the graph could not bind, or a dynamic
+dispatch is not an edge, so an empty list is not "unused". Measured on this
+repository, 1,294 of 1,303 edges carry a caller and every edge a line.
+
 ## 5. `silica_write_note` — explicit, atomic, guarded
 
 `silica_write_note(path, body, frontmatter=None, expect_version="", create_only=false)`

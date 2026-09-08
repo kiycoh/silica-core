@@ -405,8 +405,8 @@ def code_pack(vault: Path | str, target: str,
     """Context pack for `target` ("path", "path#Class", "path#Class.member" or
     "path#L<line>", the innermost symbol whose declaration spans that line).
 
-    `sections` (None = all) names which of hierarchy / neighborhood / external
-    / importers to emit; the target is always served. The tool is stateless,
+    `sections` (None = all) names which of hierarchy / callers / neighborhood
+    / external / importers to emit; the target is always served. The tool is stateless,
     so the second pack in the same package would otherwise repay the same
     neighbourhood outline (paths.py came back in every pack under
     kernel/write, 2026-09-03) with no way to say "already seen".
@@ -483,6 +483,18 @@ def code_pack(vault: Path | str, target: str,
     emitted_sections: dict[str, list[str]] = {"target": [path]}
     # one scan of the graph, not two: `fan-in` is defined as len(importers)
     importers = [(p, p) for p in (graph.importers(path) if graph is not None else [])]
+    # The call sites of the selected symbol the graph resolved, `path:line in
+    # caller`. Static and import-scoped: a call through an instance, an alias
+    # the graph could not bind, or a dynamic dispatch is not an edge, so an
+    # empty list is not "unused". Only with a symbol: a file has no callee.
+    callers: list[tuple[str, str]] = []
+    if graph is not None and mode == "symbol":
+        name = selector.rsplit(".", 1)[-1]
+        for src_path in sorted(graph.files):
+            for e in graph.files[src_path].get("calls", []):
+                if e.get("target") == path and e.get("callee", "").rsplit(".", 1)[-1] == name:
+                    where = f"{src_path}:{e['line']}" if e.get("line") else src_path
+                    callers.append((where, f"{where} in {e.get('caller') or '<module>'}"))
     # A Python stdlib import is not a dependency anyone needs to fetch, and
     # listed in `dropped` it read as a fetchable section ("external: hashlib").
     # Other languages keep their externals: no stdlib roster to check against.
@@ -492,6 +504,7 @@ def code_pack(vault: Path | str, target: str,
     stop = False
     for name, entries in (
         ("hierarchy", _hierarchy(graph, path, entry)),
+        ("callers", callers),
         ("neighborhood", _neighborhood(graph, path, entry, source)),
         ("external", external),
         ("importers", importers),
@@ -500,7 +513,8 @@ def code_pack(vault: Path | str, target: str,
             continue
         # len(entries), not len(emitted): the count is the repo-wide total even
         # when the budget trimmed the list printed underneath it.
-        header = f"## {name}" + (f" (fan-in {len(entries)})" if name == "importers" else "")
+        header = f"## {name}" + (f" (fan-in {len(entries)})" if name == "importers"
+                                 else " (static, import-scoped)" if name == "callers" else "")
         emitted: list[str] = []
         for label, block in entries:
             # a chunk costs "\n\n" + header + "\n" the first time, "\n" after

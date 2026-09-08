@@ -201,3 +201,19 @@ def test_line_selector_resolves_to_the_innermost_symbol(tmp_path, monkeypatch):
     top = codepack.code_pack(repo, "pkg/mod.py#L1")
     assert top["selector"] is None and top["target_mode"] == "verbatim"
     assert any(d.startswith("note: no symbol of pkg/mod.py contains line 1") for d in top["dropped"])
+
+
+def test_callers_section_names_the_call_sites(tmp_path, monkeypatch):
+    """A symbol target gets the call sites the graph resolved, with their
+    lines; a file target has no callee and no section."""
+    repo = tmp_path
+    _init_repo(repo)
+    _commit(repo, "pkg/util.py", "def helper():\n    pass\n", "util")
+    _commit(repo, "app.py", "from pkg.util import helper\n\n\ndef main():\n    x = 1\n    helper()\n", "app")
+    monkeypatch.setattr(codegraph, "store_path", lambda: repo / "cg.json")
+    pack = codepack.code_pack(repo, "pkg/util.py#helper")
+    assert pack["sections"]["callers"] == ["app.py:6"], pack["sections"]
+    assert "## callers (static, import-scoped)\napp.py:6 in main" in pack["text"]
+    only = codepack.code_pack(repo, "pkg/util.py#helper", sections=["callers"])
+    assert set(only["sections"]) == {"target", "callers"}
+    assert "callers" not in codepack.code_pack(repo, "pkg/util.py")["sections"]
