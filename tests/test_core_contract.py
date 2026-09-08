@@ -180,3 +180,10 @@ def test_scope_reports_what_the_search_could_see(root):
     assert r["terms_absent"] == [] and r["terms_absent_in_scope"] == ["compaction"]
     whole = root.search("compaction pages")
     assert "terms_absent_in_scope" not in whole and whole["scope"]["docs"] == 3
+
+
+def test_documents_are_the_head_of_the_ranking_with_coverage(root):
+    r = root.search("compaction memtable pages", k=1)
+    assert r["candidates"] == 2 and len(r["documents"]) == 1, r["documents"]
+    assert {h["path"] for h in r["hits"]} <= {d["path"] for d in r["documents"]}
+    assert all(0 < d["coverage"] <= 1 for d in r["documents"])

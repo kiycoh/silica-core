@@ -521,8 +521,14 @@ def silica_search(
         if len(hits) == k:
             break
     return {"root": str(_root()), "query": query, "hits": hits,
+            # the first k of the ranking plus any document a hit came from lower
+            # down: enough to tell "right paper, wrong section" from "wrong
+            # paper" without repaying the whole candidate list (43% of the reply
+            # at 15 entries, measured 2026-09-08)
             "documents": [{"path": p, "score": round(sc, 2), "matched_terms": sorted(m),
-                           **({"dense": round(dense[p], 3)} if p in dense else {})} for p, sc, m in top],
+                           "coverage": round(sum(known[t] for t in m) / mass, 2),
+                           **({"dense": round(dense[p], 3)} if p in dense else {})}
+                          for i, (p, sc, m) in enumerate(top) if i < k or p in versions],
             "candidates": len(docs),
             "terms_absent": absent,
             **({"terms_absent_in_scope": absent_in_scope} if scope else {}),

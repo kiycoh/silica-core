@@ -69,7 +69,7 @@ for each hit, the `width`-character window densest in idf-weighted query
 terms, with its line number.
 
 Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window}],
-documents: [{path, score, matched_terms}], candidates, terms_absent,
+documents: [{path, score, matched_terms, coverage}], candidates, terms_absent,
 terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
 
 - `scope` says what the search could see: the documents indexed under
@@ -108,8 +108,11 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   (0.44 there, 0.69 to 1.00 on answered questions) and `matched_terms` are
   the honest signals; the harness reads them and decides to stop or
   rephrase.
-- `documents` is the document ranking the hits were drawn from, so the
-  harness can tell "the right paper, wrong section" from "wrong paper".
+- `documents` is the head of the document ranking the hits were drawn
+  from: the first `k` documents, plus any document a hit came from lower
+  down, each with its own whole-document `coverage`. Enough to tell "the
+  right paper, wrong section" from "wrong paper"; `candidates` is the size
+  of the ranking it was cut from.
 - Sections are scored inside the top documents at query time; there is no
   second index to build or to drift.
 - No memory lane, no second vault, no synthesis, no reranker on this path.
