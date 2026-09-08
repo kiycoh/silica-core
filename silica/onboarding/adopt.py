@@ -35,18 +35,10 @@ from silica.kernel.recall.paths import (
     SILICAIGNORE_REL,
     looks_like_code,
 )
-from silica.kernel.vault_manifest import MANIFEST_REL
+from silica.kernel.vault_manifest import CODE_WRITE_DIR, MANIFEST_REL, SAFE_WRITE_DIR
 
 logger = logging.getLogger(__name__)
 
-# Where notes go in a source tree: visible and committable next to the code.
-CODE_WRITE_DIR = "docs/silica"
-# Where notes go in a prose vault: a staging folder that MIRRORS the vault tree,
-# so `silica/Projects/foo.md` becomes `Projects/foo.md` by pasting the folder's
-# contents over the root. This one name is also the switch for the mirror rules
-# (prompt wording, new-folder check) — `docs/silica` is Silica's own tree in a
-# repo, not a mirror of it, so those rules do not apply there.
-SAFE_WRITE_DIR = "silica"
 
 _SILICAIGNORE_HEADER = """\
 # .silicaignore — directory names Silica never walks when indexing this vault.

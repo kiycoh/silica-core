@@ -40,7 +40,7 @@ jobs:
       # importorskip (fastapi/uvicorn, websockets, mcp).
       # [rerank] stays out: 2 GB of torch to run tests that skip. There is no
       # [pdf] extra any more — the mineru subprocess is patched in the suite.
-      - run: uv sync --locked --extra dev --extra gui --extra connect --extra mcp
+      - run: uv sync --locked --extra dev --extra connect --extra mcp
 
       - run: uv run pytest -q
 
@@ -53,4 +53,4 @@ jobs:
       # Third of the seconds-long gates, added 2026-09-03 at 0 findings after a
       # cleanup of 158 unused imports. Narrow by config (F, E9 in pyproject):
       # it blocks dead code, it does not arbitrate style.
-      - run: uv run ruff check silica tests scripts evals
+      - run: uv run ruff check silica tests

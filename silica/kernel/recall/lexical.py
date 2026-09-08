@@ -34,7 +34,7 @@ def _tokens(text: str) -> list[str]:
     from silica.kernel.text.text import tokens
     from silica.config import CONFIG
     out: list[str] = []
-    for sentence in tokens(text, lang=CONFIG.cooccurrence_lang, stem=False):
+    for sentence in tokens(text, lang=CONFIG.lang, stem=False):
         out.extend(surface for _stem, surface in sentence)
     return out
 

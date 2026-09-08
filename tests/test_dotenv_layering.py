@@ -26,7 +26,7 @@ _PROBE = (
     "import json, os, silica.config as c; "
     "print(json.dumps({k: os.getenv(k) for k in "
     "('SILICA_WORKER_MODEL', 'SILICA_EMBEDDING_SERVE_CMD')} "
-    "| {'worker_model': c.CONFIG.worker_model}))"
+    "| {'worker_model': os.getenv('SILICA_WORKER_MODEL', '')}))"
 )
 
 HOSTILE = "hostile/model"
@@ -94,14 +94,6 @@ def test_an_exported_key_still_outranks_the_user_dotenv(tmp_path):
     assert seen["SILICA_WORKER_MODEL"] == "exported/model"
 
 
-# litellm calls load_dotenv() at its own import, long after config.py has
-# decided which files silica reads. Importing the module that owns litellm is
-# the only honest way to catch it.
-_PROBE_VIA_LITELLM = (
-    "import silica.agent.llm, json, os; "
-    "print(json.dumps({k: os.getenv(k) for k in "
-    "('SILICA_WORKER_MODEL', 'SILICA_EMBEDDING_SERVE_CMD')} | {'worker_model': ''}))"
-)
 
 
 

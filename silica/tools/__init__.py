@@ -1,18 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Alessandro Carosia
 
-"""Tool registry — the @tool decorator, TOOLS dict, and JSON-schema generation.
-
-This is the contract layer between the LLM and Silica's toolset.
-Every tool is a function decorated with @tool(ParamsModel, cls="atomic|composed|wrapped").
-The decorator auto-registers the tool in the global TOOLS dict.
-The LLM receives the JSON-schema of each tool's ParamsModel as its function definition.
-
-Design (from SILICA.md §8.4):
-  - Pydantic BaseModel for params → validates input AND generates JSON-schema
-  - Three tool classes: atomic (1:1 CLI), composed (promoted scripts), wrapped (Golden Rule enforced)
-  - TOOLS dict is the single source of truth for tool dispatch
-"""
+"""Tool registry: the @tool decorator, the TOOLS dict, and the JSON schema
+each tool's annotated signature becomes. The MCP server serves a named
+slice of TOOLS; the CLI calls the same functions directly."""
 from __future__ import annotations
 
 import inspect
@@ -161,7 +152,7 @@ def _model_from_signature(fn: Callable) -> type[BaseModel]:
             raise TypeError(f"Tool {fn.__name__} parameter {name!r} needs a type annotation")
         default = ... if param.default is inspect.Parameter.empty else param.default
         fields[name] = (annotation, default)
-    return create_model(f"{fn.__name__}Args", **fields)
+    return create_model(f"{fn.__name__}Args", **fields)  # type: ignore[call-overload]
 
 
 def tool(

@@ -68,7 +68,16 @@ def check_quarantine(config: Any) -> CheckResult:
     return CheckResult("quarantine", "ok", "none")
 
 
-CHECKS = (check_root, check_index, check_extras, check_converters, check_quarantine)
+def check_embeddings(config: Any) -> CheckResult:
+    from silica import embeddings
+    if not embeddings.enabled():
+        return CheckResult("embeddings", "ok", "off (no SILICA_EMBEDDING_BASE_URL); search is lexical")
+    n = len(embeddings.load_store().get("vectors", {}))
+    return CheckResult("embeddings", "ok" if n else "warn", f"{config.embedding_model} @ {config.embedding_base_url}, {n} vectors",
+                       "" if n else "run `silica index --embed`")
+
+
+CHECKS = (check_root, check_index, check_embeddings, check_extras, check_converters, check_quarantine)
 
 
 def run_checks(config: Any) -> list[CheckResult]:

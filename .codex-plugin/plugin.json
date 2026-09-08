@@ -1,17 +1,22 @@
 {
   "name": "silica",
   "version": "0.6.1",
-  "description": "Obsidian-vault memory for coding agents: deterministic knowledge-graph engine served over MCP (semantic + literal search, gated note writing), a skill teaching the recall/capture loop, and hooks that open the session knowing its vault and capture the transcript at the end.",
+  "description": "Retrieval tools for coding agents, no model in the loop: files, search, read, code_pack and write_note over the folder the session is opened in, served over MCP, plus a skill that teaches when to search and how to read coverage.",
   "author": {
     "name": "Alessandro Carosia"
   },
-  "keywords": ["memory", "knowledge-graph", "obsidian", "vault", "mcp"],
+  "keywords": [
+    "retrieval",
+    "search",
+    "bm25",
+    "mcp",
+    "agents"
+  ],
   "skills": "./silica/skills",
   "mcpServers": "./mcp.codex.json",
-  "hooks": "./hooks/hooks.json",
   "interface": {
     "displayName": "Silica",
-    "shortDescription": "Your Obsidian vault as the agent's memory: recall before answering, capture after learning.",
+    "shortDescription": "Located evidence from your folder: search, read, inventory, code packs. No model, no memory lane.",
     "developerName": "Alessandro Carosia"
   }
 }

@@ -12,7 +12,7 @@ fallback_version = "0.0.0"
 [project]
 name = "silica-harness"
 dynamic = ["version"]
-description = "Obsidian-native agentic CLI — vault curation with quality gates"
+description = "Retrieval tools for coding agents: files, search, read, code_pack, write_note over a folder, no model in the loop"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
@@ -24,104 +24,35 @@ classifiers = [
   "Topic :: Text Processing",
 ]
 dependencies = [
-  "litellm",
   "httpx",
   "pydantic>=2.0",
-  "prompt_toolkit>=3.0",
   "pyyaml>=6.0",
   "python-dotenv>=1.0",
-  "rich",
   "networkx>=3",
-  # [linkify] pulls linkify-it-py: bare URLs in an answer become link tokens
-  # before the note-ref pass sees them, in the web render and the TUI alike.
-  "markdown-it-py[linkify]",
-  # Serializer for every derived store (co-occurrence, lexical, embed metadata,
-  # deferred ops, codegraph, run ledgers). Not a taste call, and not the stdlib:
-  # measured 2026-09-04 on the real 108 MB co-occurrence index, orjson dumps in
-  # 428 ms against 2271 ms for a byte-identical `json.dumps(ensure_ascii=False,
-  # separators=(",", ":"))`, on a path that runs at every DiskSynced flush. The
-  # stdlib port also has to get those two arguments right at 54 sites, and
-  # forgetting ensure_ascii silently changes hashed bytes (codewiki digest sig,
-  # codegraph store, workqueue dedup key). Reverted twice, see ADR-0037.
+  "markdown-it-py",
+  # Serializer for every derived store; measured 5x faster than json on a
+  # 108 MB index at every flush (ADR-0037 in the private tree).
   "orjson",
-  "openai",
-  "numpy>=2.4.6",
   "snowballstemmer",
   "stop-words>=2025.11.4",
   "tree-sitter>=0.25",
-  # up to 1.8.x the pack shipped its own binding (method-style nodes, parse_bytes);
-  # newer ones hand back upstream py-tree-sitter objects, which is what codeast
-  # speaks. Unpinned, the mismatch parsed nothing and every code note came out empty.
   "tree-sitter-language-pack>=1.13",
-  # Default PDF text-layer reader (Google's PDFium, BSD-3/Apache-2.0, one ~3 MB
-  # wheel, no torch and no JVM). Replaced pymupdf4llm on 2026-08-31: PyMuPDF is
-  # AGPL or a paid Artifex licence, and yake (the keyphrase pool, now in-house in
-  # kernel/text/candidates.py) shipped an AGPL LICENSE too; both blocked any
-  # proprietary redistribution of the engine. Measured on 12 real papers: 1.05x
-  # the words of pymupdf4llm in 1/75 of the time; headings come from the
-  # outline or a line heuristic (sources/convert.py), images are not extracted
-  # (mineru, installed separately, does layout and figures).
+  # PDF text layer (BSD-3/Apache-2.0, one ~3 MB wheel). Scans need mineru,
+  # installed separately and called as a command.
   "pypdfium2>=5",
-  # DOCX -> HTML, BSD-2, pure python. Its HTML goes through the same
-  # HTML-to-markdown pass as EPUB chapters; its own markdown writer escapes
-  # every period. EPUB and FB2 need nothing: a ZIP of XHTML and an XML file.
   "mammoth>=1.9",
-  # Legacy office without an office suite. Both are pure python, tiny and
-  # permissive (BSD): striprtf 15 KB reads .rtf, xlrd 192 KB reads pre-2007
-  # .xls (2.x dropped .xlsx and kept exactly the format nothing else opens).
-  # ODF needs neither -- it is a ZIP the standard library reads. Together they
-  # replace a ~240 MB LibreOffice install for 5 of the 7 legacy formats.
   "striprtf>=0.0.29",
   "xlrd>=2.0",
-  # The tabular lane: `silica_tables` census, `silica_query_table` SQL and
-  # the /convert profile. One wheel, ~20 MB, no server and no ETL.
-  # Base and not an extra since 2026-08-29: behind `[bi]` the two tools
-  # registered and advertised themselves anyway (this module imports duckdb
-  # inside the call, so it always imports), and a client without the extra
-  # saw them, called them, and got an ImportError back as the answer.
+  # The tabular tools (--extended): DuckDB over CSV/XLSX/…, one wheel.
   "duckdb>=1.5.5",
-  # .xlsx/.xlsm sheets for silica_query_table: read in-process (values only)
-  # because DuckDB's own `excel` extension needs INSTALL, which the tool's
-  # sandbox blocks by design. `.xls` rides on xlrd above.
   "openpyxl>=3.1",
-  "python-dateutil>=2.9.0.post0",
 ]
 
 [project.optional-dependencies]
-# Opt-in localhost web GUI (`silica --gui`); python-multipart backs the drop-zone
-# upload, mdit-py-plugins + latex2mathml render math in the transcript. All four
-# are imported only by silica.ui.web.server, which is reachable only behind the
-# lazy `from silica.ui.web import serve`:
-gui = ["fastapi", "uvicorn", "python-multipart", "mdit-py-plugins>=0.6.1", "latex2mathml>=3.81.0"]
-# scipy is dev-only: no product code imports it (PageRank runs on numpy), but the
-# eval harness under evals/ uses scipy.stats (binomtest, spearmanr) for its gates.
-dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0", "scipy>=1.17.1", "ruff>=0.16"]
-connect = [
-    "websockets>=16.0",
-]
-# Opt-in stdio MCP server (`silica mcp`) — Silica as vault memory for MCP clients:
-# SDK 2.0 (protocol 2026-07-28) drops the @server.list_tools/@server.call_tool
-# decorators for constructor handlers, so silica/ui/mcp.py needs a rewrite before
-# the cap lifts. 1.x still negotiates fine with 2026-07-28 clients.
+dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0", "ruff>=0.16"]
+connect = ["websockets>=16.0"]
 mcp = ["mcp>=1.0,<2"]
-# Opt-in in-process cross-encoder rerank (the precision pass over fused recall).
-# Neither LM Studio nor Ollama can serve a cross-encoder, so the alternative is a
-# llama-server the user runs by hand; this extra removes that. Pulls torch, and
-# downloads ~2GB of weights on first rerank, so it stays opt-in.
-# SILICA_RERANK_BASE_URL still overrides it with a served endpoint.
-rerank = ["sentence-transformers>=3.0"]
-# There is no [pdf] extra. It was removed on 2026-09-02: it installed the mineru
-# CLI, which nothing here imports — sources/convert.py shells out to it, exactly
-# as it shells out to soffice, ffmpeg and whisper-cli, none of which we install
-# either. Owning it as a dependency bought a version pin we could not honour
-# (mineru 3.x drifts its default backend) and a `six` line patching a packaging
-# bug that is not ours, in exchange for 3.8 GB of torch on an opt-in path. Who
-# wants OCR runs `pip install 'mineru[pipeline]'`; the doctor's converters row
-# says whether it is on PATH. See SILICA_PDF_PROVIDER and ADR-0011.
-# Everything except [dev]. Self-referential extra: pip resolves it back to this
-# same project. Note it inherits [rerank], so it pulls torch and downloads
-# ~2 GB of weights on first rerank.
-all = ["silica-harness[gui,connect,mcp,rerank]"]
+all = ["silica-harness[connect,mcp]"]
 
 [project.scripts]
 silica = "silica.entry:main"
@@ -132,12 +63,8 @@ Repository = "https://github.com/kiycoh/silica-harness"
 Issues = "https://github.com/kiycoh/silica-harness/issues"
 
 [tool.setuptools]
-# Ship every git-tracked non-.py asset under the package (prompts, recipes,
-# overlays, web static, .env.example). Beats per-package data globs:
-# capabilities/prompts/** sits under the silica.capabilities package while
-# recipes/ and overlays/ are non-package subdirs of silica — include-package-data
-# attributes each file to its nearest package automatically, and new asset dirs
-# ship for free. Without this a wheel install drops them and crashes at runtime.
+# skills/ is a non-package subdir of silica (the harness skill the setup
+# command installs): include-package-data ships it with the wheel.
 include-package-data = true
 
 [tool.setuptools.packages.find]
@@ -158,146 +85,28 @@ select = ["F", "E9"]
 
 [tool.importlinter]
 root_packages = ["silica"]
-# Required so the "graph data stays offline" contract can forbid the external
-# `httpx` module (see that contract below).
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
-name = "capabilities (procedural memory) does not import the decision cycle"
+name = "the kernel, the driver and the converters never import a surface"
 type = "forbidden"
-source_modules = ["silica.capabilities"]
-forbidden_modules = ["silica.router"]
-# Direct imports only: the transitive path via agent.commit -> tools.composed
-# -> tools.runners -> router predates this contract and is a separate finding.
+source_modules = ["silica.kernel", "silica.driver", "silica.sources"]
+forbidden_modules = ["silica.core", "silica.cli", "silica.ui", "silica.onboarding"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
-name = "capabilities internals are private — consumers go through the package root"
+name = "the core never reaches the driver or a surface"
 type = "forbidden"
-source_modules = [
-  "silica.agent",
-  "silica.router",
-  "silica.tools",
-  "silica.kernel",
-  "silica.driver",
-  "silica.sources",
-  "silica.ui",
-  "silica.onboarding",
-  "silica.cli",
-  "silica.config",
-]
-forbidden_modules = [
-  "silica.capabilities._base",
-  "silica.capabilities.dedup",
-  "silica.capabilities.enrich",
-  "silica.capabilities.orphan",
-  "silica.capabilities.refine",
-  "silica.capabilities.profile",
-  "silica.capabilities.profiles_builtin",
-  "silica.capabilities.runtime",
-]
-# Direct imports only: reaching internals through the package root is the
-# sanctioned path (the root re-exports the seam).
+source_modules = ["silica.core"]
+forbidden_modules = ["silica.driver", "silica.cli", "silica.ui", "silica.onboarding"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
-name = "kernel is the lowest layer under the seam — never imports the decision cycle"
+name = "the kernel makes no network call"
 type = "forbidden"
 source_modules = ["silica.kernel"]
-forbidden_modules = ["silica.router", "silica.capabilities"]
-# This is the invariant that keeps workqueue/progress legal homes in kernel
-# (capabilities -> kernel.workqueue must never become a cycle). Note: kernel
-# is NOT pure — lazy imports into agent/ and tools/ exist (see ADR-0016 and
-# the AUDIT-COALA WATCH list); this contract codifies only what is true today.
+forbidden_modules = ["httpx", "websockets"]
 allow_indirect_imports = true
-
-[[tool.importlinter.contracts]]
-name = "capability workers are peers — they never import each other (P9)"
-type = "independence"
-modules = [
-  "silica.capabilities.dedup",
-  "silica.capabilities.enrich",
-  "silica.capabilities.orphan",
-  "silica.capabilities.refine",
-]
-# profile/runtime/_base sono infrastruttura condivisa, non peer: fuori lista.
-ignore_imports = [
-  # il control shell (subagent runner) importa il registry dei worker per
-  # dispatciarli: e' l'attivazione decisa dal coordinator (P9), non un peer import.
-  "silica.agent.subagent -> silica.capabilities",
-]
-# Residuo: catene instradate attraverso questo arco ignorato (subagent ->
-# capabilities) sono invisibili a questo contratto — copre solo import diretti
-# e peer import fuori dalla rotta di dispatch.
-
-[[tool.importlinter.contracts]]
-name = "graph structure is deterministic — structural modules never import agent (P2/DKB)"
-type = "forbidden"
-source_modules = [
-  "silica.kernel.recall.cooccurrence",
-  "silica.kernel.text.keyphrase",
-  "silica.kernel.link.ast",
-  "silica.kernel.graph_diff",
-  "silica.kernel.link.autolink",
-  "silica.kernel.report.graph_report.compute",
-  "silica.kernel.report.graph_report.cooccur_delta",
-  "silica.kernel.report.graph_report.models",
-  "silica.kernel.report.graph_report.render",
-  "silica.kernel.report.graph_report.code_signals",
-  "silica.kernel.code.codegraph",
-  # embed_signals reads stored vectors only; it stopped constructing an embedder
-  # (the call was an availability probe whose result was never used), so it no
-  # longer reaches silica.agent and the exemption it used to need is gone.
-  "silica.kernel.report.graph_report.embed_signals",
-]
-forbidden_modules = ["silica.agent"]
-# run_substrate is NOT listed: it imports get_embedder, a legitimate embedding
-# overlay. classify/prep_delegation call an LLM but do not build graph
-# structure, so they are out of scope for this contract.
-
-[[tool.importlinter.contracts]]
-name = "structural is not semantic — codegraph never enters the fusion legs"
-type = "forbidden"
-source_modules = ["silica.kernel.recall.relatedness", "silica.kernel.recall.rerank"]
-forbidden_modules = ["silica.kernel.code.codegraph"]
-# Import edges are mechanical dependency, not semantic proximity: an import
-# hub (paths.py) would flood related_notes/RRF with structurally-adjacent,
-# semantically-empty neighbors (spec-code-lane, Principio ordinatore).
-
-[[tool.importlinter.contracts]]
-name = "the /organize lane is a leaf — no kernel lane depends on the classifier"
-type = "forbidden"
-source_modules = [
-  "silica.kernel.write", "silica.kernel.recall", "silica.kernel.code",
-  "silica.kernel.report", "silica.kernel.text", "silica.kernel.link",
-]
-forbidden_modules = ["silica.kernel.organize"]
-# taxonomy + classify serve one user-facing command (/organize) and nothing
-# else. Keeping the arrow one-way is what lets the pair stay a two-file lane
-# instead of dissolving back into text/ and recall/.
-allow_indirect_imports = true
-
-[[tool.importlinter.contracts]]
-name = "text and code lanes sit low — they reach only recall and write"
-type = "forbidden"
-source_modules = ["silica.kernel.text", "silica.kernel.code"]
-forbidden_modules = [
-  "silica.kernel.report", "silica.kernel.link", "silica.kernel.organize",
-]
-# The seven lanes are mutually recursive (136 cycles between them), so there is
-# no layering to declare here. These two arrows are the exception that is
-# actually true, and freezing them keeps the two most reusable lanes from
-# acquiring dependencies on the vault-shaped ones.
-allow_indirect_imports = true
-
-[[tool.importlinter.contracts]]
-name = "graph data stays offline — the kernel viewer split leaves no network dep"
-type = "forbidden"
-source_modules = ["silica.kernel.recall.graph_export"]
-forbidden_modules = ["httpx"]
-# The viewer (render_html/export_graph) moved to silica.ui.web.graph_view and
-# now inlines a *vendored* JS bundle; the CDN fetch (httpx) is gone. This freezes
-# that: the deterministic data module must never re-acquire a network dependency.
 
 [tool.mypy]
 python_version = "3.11"

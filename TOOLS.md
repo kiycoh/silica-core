@@ -27,7 +27,7 @@ it yet; the refactor is done when it does and the acceptance checks pass.
 | `root` | absolute root every path in the reply is relative to |
 | `version` | short content hash of a file at read time. A caller that carries it forward detects change instead of citing different bytes under an old reference |
 | `truncated` | true when a cap cut the reply; the reply says how to fetch the rest |
-| `index` | `{state, docs, sections, built_at}` with `state` one of `cold` (never built), `ready`, `stale` (files changed since). An empty result under `cold` is not "no match" |
+| `index` | `{state, docs, built_at}` with `state` one of `cold` (never built), `ready`, `stale` (files changed since). An empty result under `cold` is not "no match" |
 | `error` | only on failure: `{code, hint}` with `code` one of `not_found`, `out_of_root`, `changed`, `index_cold`, `unconverted`, `bad_argument` |
 
 ## 1. `silica_files` — inventory and index state
@@ -41,7 +41,7 @@ exactly one `status`:
 |---|---|
 | `indexed` | text is in the index and matches the file on disk |
 | `changed` | on disk it differs from what the index holds |
-| `excluded` | matched an ignore rule; never read |
+| `excluded` | not read by the index: an ignore rule, a hidden folder, a type the index does not read, or a source already converted to a `.md` beside it (`reason` says which) |
 | `failed` | read or conversion failed; `reason` says why |
 | `unconverted` | a binary source (PDF, DOCX) with no extracted text yet |
 
@@ -63,7 +63,7 @@ for each hit, the `width`-character window densest in idf-weighted query
 terms, with its line number.
 
 Reply: `{query, hits: [{path, section, line, score, matched_terms, coverage, window}],
-candidates, terms_absent, index}`.
+documents: [{path, score, matched_terms}], candidates, terms_absent, index}`.
 
 - `score` is the raw BM25 of the section. It is comparable only within one
   call and is never a probability of relevance or truth.
@@ -78,6 +78,10 @@ candidates, terms_absent, index}`.
   (0.44 there, 0.69 to 1.00 on answered questions) and `matched_terms` are
   the honest signals; the harness reads them and decides to stop or
   rephrase.
+- `documents` is the document ranking the hits were drawn from, so the
+  harness can tell "the right paper, wrong section" from "wrong paper".
+- Sections are scored inside the top documents at query time; there is no
+  second index to build or to drift.
 - No memory lane, no second vault, no synthesis, no reranker on this path.
 
 Why this shape (measured 2026-09-08 on 254 papers, 22 MB): document-level
@@ -89,10 +93,15 @@ reported an honest zero in one call only because the phrase was absent; on
 a query whose words exist separately it has no signal either.
 
 Optional extension: `hybrid=true` adds a dense-embedding candidate leg for
-vocabulary mismatch (paraphrase, another language) when the embeddings
-extension is installed; otherwise the argument is refused with
-`bad_argument`. Reranking, when installed, is a separate flag with the same
-rule.
+vocabulary mismatch (paraphrase, another language) when `SILICA_EMBEDDING_BASE_URL`
+names an OpenAI-compatible `/v1/embeddings` endpoint and `silica index --embed`
+has run; otherwise the argument is refused with `bad_argument`. A document
+the dense leg adds without any lexical match arrives as a hit on its opening
+section with `coverage` 0 and a `dense` cosine, so the harness knows it is
+reading on the embedder's word alone. Exercised 2026-09-08 on the 254 papers
+with a substitute model (nomic-embed Q4, 6 s for the vectors); retrieval
+quality with the intended model is not measured yet. There is no reranker in
+the core.
 
 ## 3. `silica_read` — a located slice, never a surprise
 

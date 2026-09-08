@@ -24,9 +24,7 @@ from importlib.resources import files
 from pathlib import Path
 
 import yaml
-from rich.markup import escape
 
-from silica.ui.console import CONSOLE
 
 # Everything this module prints carries a payload full of square brackets: the
 # `[mcp]` extra, TOML table headers, a parser error quoting a `]`. rich reads a
@@ -59,6 +57,13 @@ CLIENTS = ("claude", "codex", "opencode", "dsh")
 # window is simply absent for that session, with one line in a log nobody
 # reads.
 CODEX_STARTUP_TIMEOUT_SEC = 60
+
+def escape(text: str) -> str:  # rich is gone; the name stays for the call sites
+    return text
+
+
+def _say(msg: str, **_kw) -> None:
+    print(msg)
 
 
 def skill_path() -> Path:
@@ -100,12 +105,12 @@ def _backup(path: Path) -> Path:
 
 def _report(path: Path, block: str, dry_run: bool, backup: Path | None) -> int:
     if dry_run:
-        CONSOLE.print(f"  [dim]would write to {escape(str(path))}:[/]")
-        CONSOLE.print(block, markup=False)
+        _say(f"  would write to {escape(str(path))}:")
+        _say(block, markup=False)
         return 0
-    CONSOLE.print(f"  [green]✓[/] wrote {escape(str(path))}")
+    _say(f"  ✓ wrote {escape(str(path))}")
     if backup:
-        CONSOLE.print(f"  [dim]backup: {escape(str(backup))}[/]")
+        _say(f"  backup: {escape(str(backup))}")
     return 0
 
 
@@ -133,10 +138,10 @@ def _setup_codex(path: Path, dry_run: bool) -> int:
         try:
             parsed = tomllib.loads(existing)
         except tomllib.TOMLDecodeError as e:
-            CONSOLE.print(f"  [red]✗[/] {escape(str(path))} is not valid TOML ({escape(str(e))}) — not touching it")
+            _say(f"  ✗ {escape(str(path))} is not valid TOML ({escape(str(e))}) — not touching it")
             return 1
         if "silica" in parsed.get("mcp_servers", {}):
-            CONSOLE.print(f"  [dim]silica is already configured in {escape(str(path))} — nothing to do[/]")
+            _say(f"  silica is already configured in {escape(str(path))} — nothing to do")
             return 0
     block = _codex_block()
     if dry_run:
@@ -180,14 +185,14 @@ def _setup_dsh(path: Path, dry_run: bool) -> int:
         try:
             patches = yaml.safe_load(existing) or []
         except yaml.YAMLError as e:
-            CONSOLE.print(f"  [red]✗[/] {escape(str(path))} is not valid YAML ({escape(str(e))}) — not touching it")
+            _say(f"  ✗ {escape(str(path))} is not valid YAML ({escape(str(e))}) — not touching it")
             return 1
         if not isinstance(patches, list):
-            CONSOLE.print(f"  [red]✗[/] {escape(str(path))} is not a list of patches — not touching it")
+            _say(f"  ✗ {escape(str(path))} is not a list of patches — not touching it")
             return 1
         rows = [r for p in patches if isinstance(p, dict) for r in p.get("insert") or [] if isinstance(r, dict)]
         if any(r.get("id") == "mcp-silica" for r in rows):
-            CONSOLE.print(f"  [dim]silica is already configured in {escape(str(path))} — nothing to do[/]")
+            _say(f"  silica is already configured in {escape(str(path))} — nothing to do")
             return 0
     patches.append({"insert": [_dsh_row()]})
     block = yaml.safe_dump(patches, sort_keys=False, allow_unicode=True)
@@ -206,13 +211,13 @@ def _setup_opencode(path: Path, dry_run: bool) -> int:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
-            CONSOLE.print(f"  [red]✗[/] {escape(str(path))} is not valid JSON ({escape(str(e))}) — not touching it")
+            _say(f"  ✗ {escape(str(path))} is not valid JSON ({escape(str(e))}) — not touching it")
             return 1
         if not isinstance(data, dict):
-            CONSOLE.print(f"  [red]✗[/] {escape(str(path))} is not a JSON object — not touching it")
+            _say(f"  ✗ {escape(str(path))} is not a JSON object — not touching it")
             return 1
         if "silica" in data.get("mcp", {}):
-            CONSOLE.print(f"  [dim]silica is already configured in {escape(str(path))} — nothing to do[/]")
+            _say(f"  silica is already configured in {escape(str(path))} — nothing to do")
             return 0
     entry: dict = {"type": "local", "command": MCP_COMMAND, "enabled": True}
     data.setdefault("mcp", {})["silica"] = entry
@@ -243,21 +248,21 @@ def _setup_claude(dry_run: bool) -> int:
     printable = " ".join(cmd)
     if dry_run or not shutil.which("claude"):
         if not dry_run:
-            CONSOLE.print("  [yellow]⚠[/] the `claude` CLI is not on PATH — run this yourself:")
+            _say("  ⚠ the `claude` CLI is not on PATH — run this yourself:")
         # soft_wrap so rich does not fold the line at the console width: this is
         # a command meant to be copied, and a wrap puts a real newline in the
         # middle of it, so pasting runs a fragment.
-        CONSOLE.print(f"  {printable}", markup=False, soft_wrap=True)
+        _say(f"  {printable}", markup=False, soft_wrap=True)
         return 0
     result = subprocess.run(cmd)
     if result.returncode != 0:
-        CONSOLE.print(f"  [red]✗[/] `{escape(printable)}` failed")
+        _say(f"  ✗ `{escape(printable)}` failed")
         return result.returncode
-    CONSOLE.print("  [green]✓[/] registered with Claude Code (user scope: every project, vault from its folder)")
-    CONSOLE.print(
-        "  [dim]for the skill and the session hooks too: "
+    _say("  ✓ registered with Claude Code (user scope: every project, vault from its folder)")
+    _say(
+        "  for the skill and the session hooks too: "
         "claude plugin marketplace add kiycoh/silica-harness && "
-        "claude plugin install silica@silica[/]"
+        "claude plugin install silica@silica"
     )
     return 0
 
@@ -267,7 +272,7 @@ def run_setup(args: list[str]) -> int:
     positional = [a for a in args if not a.startswith("-")]
     client = positional[0] if positional else ""
     if client not in CLIENTS:
-        CONSOLE.print(f"  Usage: silica setup <{'|'.join(CLIENTS)}> [--dry-run] [--config PATH]", markup=False)
+        _say(f"  Usage: silica setup <{'|'.join(CLIENTS)}> [--dry-run] [--config PATH]", markup=False)
         return 1
     dry_run = "--dry-run" in args
     if client == "claude":
@@ -282,5 +287,5 @@ def run_setup(args: list[str]) -> int:
     # Also on "already configured": rerunning setup is how the skill copy
     # follows a package upgrade.
     if rc == 0 and not dry_run and client in ("codex", "dsh"):
-        CONSOLE.print(f"  [green]✓[/] skill installed at {escape(str(install_skill()))}")
+        _say(f"  ✓ skill installed at {escape(str(install_skill()))}")
     return rc

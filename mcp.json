@@ -9,8 +9,7 @@
         "--extra",
         "mcp",
         "silica",
-        "mcp",
-        "--extended"
+        "mcp"
       ]
     }
   }

@@ -53,6 +53,7 @@ def _isolate_vault_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     in-test monkeypatches still win. Not created: tests assert on tmp_path."""
     import silica.config as config_mod
     monkeypatch.setattr(config_mod.CONFIG, "vault_path", str(tmp_path / "isolated_vault"))
+    monkeypatch.setattr(config_mod.CONFIG, "embedding_base_url", "")  # the extension is off unless a test turns it on
 
 
 @pytest.fixture(scope="session")

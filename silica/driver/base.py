@@ -294,31 +294,8 @@ class ObsidianDriver(Protocol):
         """Set a frontmatter property on a note."""
         ...
 
-    def move(self, ref: NoteRef | str, to: str) -> None:
-        """Move/rename a note. Updates wikilinks (graph-safe)."""
-        ...
-
     def delete(self, ref: NoteRef | str) -> None:
         """Delete a note from the vault."""
-        ...
-
-    def autolink_note(
-        self,
-        path: str,
-        candidates: list[str] | None = None,
-        title_index: list[str] | None = None,
-    ) -> list[str]:
-        """Wrap unlinked mentions of vault titles in `path` with links, in place.
-
-        Returns the list of titles linked. The CLI backend delegates skip-region
-        detection, link resolution, and link rendering to Obsidian's own engine
-        (respecting the user's link-format preference). The FS backend uses the
-        deterministic pure-Python autolink() kernel. `candidates` optionally
-        restricts which titles are considered (embedding/cluster-prioritised subset).
-        `title_index` optionally supplies a prebuilt disambiguated vault-title
-        list so callers batching many notes avoid a per-note rebuild; when
-        None the backend builds its own.
-        """
         ...
 
     def alias_index(self) -> list[tuple[str, list[str]]]:

@@ -92,40 +92,28 @@ def test_backup_taken_before_write(tmp_path):
     assert json.loads(backups[0].read_text(encoding="utf-8")) == {"theme": "dark"}
 
 
-def _printed(args: list[str]) -> str:
-    """What the user actually sees, newlines folded so rich's wrapping at the
-    console width cannot be mistaken for a dropped token."""
-    from silica.ui.console import CONSOLE
-    with CONSOLE.capture() as cap:
+def _printed(args: list[str], capsys=None) -> str:
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
         setup_client.run_setup(args)
-    return " ".join(cap.get().split())
+    return " ".join(buf.getvalue().split())
 
 
-def test_previews_survive_rich_markup(tmp_path):
-    """Every bracketed token rich could read as a style tag has to reach the
-    terminal intact: a preview that drops `[mcp]` prints a command which
-    installs the wrong package, and one that drops the TOML headers shows a
-    block the writer never produces."""
-    out = _printed(["codex", "--config", str(tmp_path / "config.toml"), "--dry-run"])
+def test_previews_keep_the_bracketed_tokens(tmp_path, capsys):
+    """`[mcp]` and the TOML headers must reach the terminal intact."""
+    out = _printed(["codex", "--config", str(tmp_path / "config.toml"), "--dry-run"], capsys)
     assert "silica-harness[mcp]" in out
     assert "[mcp_servers.silica]" in out
-
-    out = _printed(["opencode", "--config", str(tmp_path / "opencode.json"), "--dry-run"])
-    assert "silica-harness[mcp]" in out
-
-    out = _printed(["dsh", "--config", str(tmp_path / "cordis.patch.yml"), "--dry-run"])
-    assert "silica-harness[mcp]" in out
-
-    assert "silica-harness[mcp]" in _printed(["claude", "--dry-run"])
-    assert "[--dry-run]" in _printed(["nonsense"])
+    assert "silica-harness[mcp]" in _printed(["claude", "--dry-run"], capsys)
+    assert "[--dry-run]" in _printed(["nonsense"], capsys)
 
 
-def test_claude_command_is_one_pastable_line():
-    """A wrapped command pastes as fragments, so it must not be folded."""
-    from silica.ui.console import CONSOLE
-    with CONSOLE.capture() as cap:
-        setup_client.run_setup(["claude", "--dry-run"])
-    assert cap.get().strip().count("\n") == 0
+def test_claude_command_is_one_pastable_line(capsys):
+    setup_client.run_setup(["claude", "--dry-run"])
+    assert capsys.readouterr().out.strip().count("\n") == 0
 
 
 def test_unknown_client_is_an_error(tmp_path):

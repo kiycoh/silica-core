@@ -1,164 +1,53 @@
 ---
 name: silica
-description: Use the Silica vault as persistent memory over MCP: recall before answering, capture after learning. Trigger when the user asks what they know/decided/wrote about a topic ("what do I have on X", "cosa so su", "avevo deciso"), wants something saved for later ("save this to the vault", "salva nel vault", "ricordati che"), references their vault or past notes, or when the session produced a decision or insight worth keeping across sessions.
+description: Search a folder of documents or code with located evidence instead of grep. Use when the user asks what a corpus, a set of papers, the docs or a repository say about something, when a question needs a passage you can cite by path and line, or when the answer may not be in the corpus at all and you need to know that before reading.
 ---
 
-# Silica: vault memory over MCP
+# Silica: located evidence, no model
 
-Silica is a deterministic knowledge-graph engine over an Obsidian vault. This
-skill is the usage loop; the `silica` MCP server carries the mechanics
-(tools named `silica_*`; if they are deferred, load them with ToolSearch).
-If the tools are missing entirely, say so and give the user the install line:
-
-```bash
-silica setup claude       # or: setup codex, setup dsh, setup opencode
-```
-
-It registers the server at user scope (every project, each serving the vault
-of the folder it is opened in). With no `silica` on PATH, the same thing by
-hand:
+The `silica` MCP server indexes the folder the session was opened in and
+serves five tools named `silica_*`. If they are deferred, load them with
+ToolSearch. If they are missing, say so and give the install line:
 
 ```bash
-claude mcp add --scope user --transport stdio silica -- uvx --from 'silica-harness[mcp]' silica mcp
+uv tool install 'silica-harness[mcp]' && silica setup claude   # or codex, opencode, dsh
 ```
 
-## Recall: search before answering
+## The loop
 
-Any question about accumulated knowledge starts here, not with your own
-recollection.
+1. **Search with the corpus's words, not a question.** `silica_search`
+   returns ranked passages: `path`, `section`, `line`, `score` (raw BM25,
+   comparable within one call only), `matched_terms`, `coverage`, and the
+   `documents` ranking behind the hits. Prefer it to grep when you want the
+   passage and not the file, or when a whole-document ranking matters.
+2. **Read the reply before the hits.** `terms_absent` lists query words the
+   corpus never contains; `coverage` is the share of the query's rare-term
+   mass a hit carries. A discriminating term in `terms_absent`, or a top
+   `coverage` under about 0.5, means the corpus does not answer: stop or
+   rephrase, do not read the hits into an answer. `index.state = cold`
+   means nothing was indexed yet; the first search builds the index.
+3. **Read before you cite.** `silica_read(path, section=…)` or
+   `(path, start, end)` serves the slice with the outline and a `version`.
+   Cite path and line. Carry `version` into `expect_version` on a later
+   read so a changed file is refused instead of quoted under an old
+   citation.
+4. **Check coverage when the task is exhaustive.** `silica_files` lists
+   every file with what the index did to it; `status=unconverted` names
+   the PDFs and office files with no extracted text, `status=failed` the
+   ones that could not be read. Top-k does not certify coverage.
+5. **Write only when asked.** `silica_write_note(path, body)` writes one
+   note as given and lints it. Nothing is captured or summarised for you;
+   undo is git.
 
-**Start with `silica_recall {query, k?}`.** It runs the fused retrieval and
-hands back an answer-ready context: each note's query-densest window under a
-rank/evidence/date header, recalled personal facts first. Answer from
-`context`, and re-read only the notes named in `partial`, the rest arrived
-whole. One call replaces stitching the probes below together yourself. When
-the reply carries a `stale` key, those notes are flagged out of date: against
-the code they document (`cosmetic`, `structural`), or, at level `source`,
-against the source they were distilled from, which has since been
-re-nucleated at another version. Cite them with that caveat, never as current.
+## Code
 
-Refine with those when `recall` is the wrong shape:
+`silica_code_pack(target, budget_chars)` gives one source file with its
+supertypes, extenders, the signatures it names, external dependencies and
+importers inside a budget. Use it before rewriting or porting a file,
+instead of ten greps. Check `truncated` before treating the target as
+complete.
 
-- Bare ranked list by meaning: `silica_semantic_search {query, k}`.
-- Exact strings (error messages, names, quotes, code symbols):
-  `silica_search_context {query}`. In a codebase vault it also scans the
-  repo's tracked source files (`kind: "source"` hits, file and line) and says
-  so in `scanned`; an empty reply with `scanned` present is a true absence.
-- A subtree keeps taking the slots (research on other products, fixtures,
-  another project's notes in the same vault): `folder=` on `silica_recall`
-  and `silica_semantic_search` scopes the answer to that vault folder, e.g.
-  `folder: "docs/adr"` or `folder: "silica"`. `memory=false` cannot do this:
-  those notes are in the active vault.
-- A reply carrying `degraded: ["rerank"]` was ordered by first-stage fusion,
-  not by the cross-encoder: the notes are candidates, not a ranking. Say so
-  when citing, and pass the `hint` on to the user (the reranker is down).
-- A header token `documents: a.py, b.py` names the source files the note
-  documents: on a code question, open those before answering from prose.
-- Known title: `silica_search {query}`, then read it.
-- Temporal ("when", "before/after", "most recent"): `silica_timeline
-  {start?, end?, limit?}`, the chronological index of dated notes. Consult it
-  before free-text recall, then read the linked note.
+## What Silica is not
 
-**Another vault may hold the answer.** `silica_vaults {query?}` lists the
-vaults this machine knows (the active one, the personal-memory vault, every
-adopted vault served here or listed by Obsidian) and, given a query, has each
-vault's own index nominate a few notes and the cross-encoder score them. Read
-`home` first: the vaults that hold the answer, `[]` when none does, `null`
-when there is no calibrated verdict (no reranker), in which case judge by
-`top` and read `coverage` before the score: `cold` means never indexed, not
-"knows nothing". Then `silica_recall {query, vault: <path>}` answers from that
-vault without leaving this one: read-only, the session's vault and writes stay
-put. Re-read a note it lists under `partial` with
-`silica_read_note {name, vault: <the same path>}`, and a note under `memory`
-
-Never conclude "nothing in the vault" from a single miss: try at least one
-semantic and one literal probe. If retrieval keeps coming back empty, or a
-capability behaves as if switched off, call `silica_doctor` instead of
-guessing. It reports model, endpoints, vault and index state as data, so a
-missing embeddings index is a fact you read rather than an error string you
-match. While the semantic leg is down, `silica_search` and
-`silica_search_context` are grep-based and always work; tell the user that
-`/embed`, `/cooccur` and `/lexical` in the Silica REPL rebuild whichever
-index doctor reports missing.
-
-## Ground: read before citing
-
-- `silica_read_note {name}` before quoting or acting on a hit; for long notes
-  `silica_outline {name}` first, to target the right section.
-- `silica_links {name}` / `silica_props {name}` give the note's neighborhood
-  and frontmatter when you need context around a hit.
-- The graph leg answers what no search can: `silica_related {note, k?}` for a
-  note's fused shortlist of neighbors (its `distance` is wikilink hops, so a
-  high score at null distance is a missing link worth proposing),
-  `silica_concepts {term?, note?}` for the embedder-free co-occurrence view of
-  a term or a note, `silica_graph_explain {note}` for structural position
-  (cluster, bridge, orphan).
-- `silica_read_note` opens markdown only, so a PDF or a source file can fail
-  to read while being perfectly present. `silica_exists {path}` tells "I
-  cannot read it" apart from "it is not there", and `silica_files {folder}`
-  lists notes and ingestible source files alike: a folder of code is not
-  empty just because it holds no `.md`.
-- A note you find wrong or stale while using it: `silica_flag_note {name,
-  reason}` marks it `contested`, which demotes it at recall instead of hiding
-  it, edits nothing, and reverses with `clear=True`. Flagging is not fixing;
-  the human decides.
-
-## Code and data: navigate, don't grep
-
-- `silica_tables {folder?, column?}` is the census of the vault's tabular
-  files (csv/tsv/parquet, Excel): schema per file, and `column=` answers
-  "which table holds NEET?" in one call instead of head-reading every file.
-  Then `silica_query_table {path, sql}` runs one read-only SELECT over that
-  file (`SUMMARIZE t` first when columns are unknown; trust the schema its
-  replies carry, never a guess).
-- `silica_code_pack {target}` packs one source file with its real
-  dependencies inside a character budget: use it before rewriting or porting
-  a file, instead of ten greps. When `target_mode` is `outline`, the reply's
-  `verbatim_at` is the `budget_chars` that serves the file whole; on a second
-  pack in the same package pass `sections: ["importers"]` so the
-  neighbourhood outline is not repaid.
-- `silica_impact {range_spec?}` maps a code change (uncommitted by default)
-  to the notes documenting the changed files and their import neighbors,
-  classified cosmetic/structural: the blast-radius read before and after
-  editing code the vault documents.
-
-## Capture: write what deserves to outlive the session
-
-What belongs: decisions and their why, non-obvious constraints, distilled
-understanding, hard-won references. What does not: transcripts, code the repo
-already holds, anything you could regenerate. Silica's quality gates reject
-low-density notes, so write like you'd want to re-read.
-
-1. Search first (dedup). If a note on the concept exists, extend it:
-   `silica_patch_note {name, heading, snippet, source_basename}`.
-   `source_basename` is provenance (the file or conversation the snippet
-   came from).
-2. New concept → `silica_write_note {path, body, title?, tags?, related?,
-   parent?, template?}`. `body` is markdown only: frontmatter comes from the
-   structured fields, scalar extras go in `props`, and a leading YAML block
-   in `body` is stripped rather than honoured. It refuses to overwrite by
-   design: an "already exists" error means patch instead. In a codebase
-   vault, `documents` binds the note to the source files it describes,
-   validated against the repo: that binding is what later makes recall
-   report the note as `stale`.
-3. Note shape: one atomic concept per note; YAML frontmatter with tags;
-   `[[wikilinks]]` to the related notes your searches surfaced; write in the
-   vault's language (read one existing note if unsure).
-
-An appointment or a deadline is not a note: `silica_event_create {title,
-start, end?, rrule?, reminder?, body?}` files it as a calendar note,
-`silica_event_update {note, ...}` moves or closes the series, and
-`silica_agenda {start?, days?}` reads a day back.
-
-## Know the boundary
-
-The MCP surface is the fast path: search, read, single-note writes. Bulk work
-lives in the Silica REPL, run as `/nucleate`, `/report`, `/curate` inside
-`silica`: multi-file nucleation with quality gates, dedup sweeps, taxonomy,
-structural reports. When the task is bulk-shaped, say so and point there
-instead of simulating the pipeline note by note.
-
-That split belongs to the default registration, not to MCP: `silica mcp --all`
-serves 58 tools instead of the curated 21, bulk operations included. Worth
-naming if the user wants that surface in their own client, but it is their
-call to widen it, never a lever to reach for mid-task.
+It does not answer, summarise, plan or remember. It has no model and no
+key. A number of indexed documents is not a number of documents read.

@@ -114,10 +114,11 @@ def test_apply_manifest_defaults_to_auto_without_manifest(tmp_path, monkeypatch)
     """Regression: vault with no vault.yaml at all must land on the config-level
     "auto" default (per-store detection), not the dead "english" fallback."""
     monkeypatch.delenv("SILICA_COOCCURRENCE_LANG", raising=False)
+    monkeypatch.delenv("SILICA_LANG", raising=False)
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    monkeypatch.setattr(CONFIG, "cooccurrence_lang", "english")
+    monkeypatch.setattr(CONFIG, "lang", "english")
     apply_manifest_to_config()
-    assert CONFIG.cooccurrence_lang == "auto"
+    assert CONFIG.lang == "auto"
 
 
 def test_apply_manifest_defaults_to_auto_when_manifest_omits_field(tmp_path, monkeypatch):
@@ -125,20 +126,21 @@ def test_apply_manifest_defaults_to_auto_when_manifest_omits_field(tmp_path, mon
     land on "auto", not "english"."""
     (tmp_path / "vault.yaml").write_text("sources: [prose]\n", encoding="utf-8")
     monkeypatch.delenv("SILICA_COOCCURRENCE_LANG", raising=False)
+    monkeypatch.delenv("SILICA_LANG", raising=False)
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    monkeypatch.setattr(CONFIG, "cooccurrence_lang", "english")
+    monkeypatch.setattr(CONFIG, "lang", "english")
     apply_manifest_to_config()
-    assert CONFIG.cooccurrence_lang == "auto"
+    assert CONFIG.lang == "auto"
 
 
 def test_apply_manifest_env_var_wins_over_auto_default(tmp_path, monkeypatch):
     """Env var precedence must survive the bug fix: it still wins even when the
     manifest declares nothing."""
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    monkeypatch.setattr(CONFIG, "cooccurrence_lang", "french")
+    monkeypatch.setattr(CONFIG, "lang", "french")
     monkeypatch.setenv("SILICA_COOCCURRENCE_LANG", "french")
     apply_manifest_to_config()
-    assert CONFIG.cooccurrence_lang == "french"
+    assert CONFIG.lang == "french"
 
 
 def test_apply_manifest_env_wins(tmp_path, monkeypatch):
@@ -146,17 +148,18 @@ def test_apply_manifest_env_wins(tmp_path, monkeypatch):
         "cooccurrence_lang: italian\n", encoding="utf-8"
     )
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    monkeypatch.setattr(CONFIG, "cooccurrence_lang", "english")
+    monkeypatch.setattr(CONFIG, "lang", "english")
 
     monkeypatch.delenv("SILICA_COOCCURRENCE_LANG", raising=False)
+    monkeypatch.delenv("SILICA_LANG", raising=False)
     apply_manifest_to_config()
-    assert CONFIG.cooccurrence_lang == "italian"
+    assert CONFIG.lang == "italian"
 
     reset_manifest_cache()
-    monkeypatch.setattr(CONFIG, "cooccurrence_lang", "french")
+    monkeypatch.setattr(CONFIG, "lang", "french")
     monkeypatch.setenv("SILICA_COOCCURRENCE_LANG", "french")
     apply_manifest_to_config()
-    assert CONFIG.cooccurrence_lang == "french"  # env precedence
+    assert CONFIG.lang == "french"  # env precedence
 
 
 def test_apply_manifest_clears_lang_on_switch_to_plain_vault(tmp_path, monkeypatch):
@@ -166,14 +169,15 @@ def test_apply_manifest_clears_lang_on_switch_to_plain_vault(tmp_path, monkeypat
         "cooccurrence_lang: italian\n", encoding="utf-8"
     )
     monkeypatch.delenv("SILICA_COOCCURRENCE_LANG", raising=False)
+    monkeypatch.delenv("SILICA_LANG", raising=False)
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path / "a"))
-    monkeypatch.setattr(CONFIG, "cooccurrence_lang", "english")
+    monkeypatch.setattr(CONFIG, "lang", "english")
     apply_manifest_to_config()
-    assert CONFIG.cooccurrence_lang == "italian"
+    assert CONFIG.lang == "italian"
 
     monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path / "b"))
     reset_manifest_cache()
     apply_manifest_to_config()
-    assert CONFIG.cooccurrence_lang == "auto"  # not leaked from vault a; "auto" is the real default
+    assert CONFIG.lang == "auto"  # not leaked from vault a; "auto" is the real default
 
 

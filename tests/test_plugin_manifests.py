@@ -18,10 +18,6 @@ def _manifest(folder: str) -> dict:
     return json.loads((ROOT / folder / "plugin.json").read_text(encoding="utf-8"))
 
 
-def _hooks() -> dict:
-    return json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-
-
 def test_both_mcp_files_launch_a_bare_silica_mcp():
     # Two files because the dialects disagree on the wrapper key only: Claude
     # Code reads `mcpServers`, Codex reads `mcp_servers`. What they must share
@@ -72,7 +68,7 @@ def test_claude_plugin_validate_passes():
 PLUGIN_FILES = (
     ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
     ".codex-plugin/plugin.json", ".agents/plugins/marketplace.json",
-    "mcp.json", "mcp.codex.json", "hooks/hooks.json",
+    "mcp.json", "mcp.codex.json",
 )
 
 

@@ -25,6 +25,9 @@ from silica.kernel.recall import paths
 logger = logging.getLogger(__name__)
 
 MANIFEST_REL = "vault.yaml"
+# Where notes go in a source tree, and the safe-mode mirror folder of a prose vault.
+CODE_WRITE_DIR = "docs/silica"
+SAFE_WRITE_DIR = "silica"
 
 
 @dataclass(frozen=True)
@@ -586,7 +589,6 @@ def seed_mirror_copy(path: str) -> None:
     Best-effort: a copy that cannot be made leaves the read to report it.
     """
     from silica.driver import DRIVER
-    from silica.onboarding.adopt import SAFE_WRITE_DIR
 
     if active_write_dir() != SAFE_WRITE_DIR or not within(path, SAFE_WRITE_DIR):
         return
@@ -616,9 +618,9 @@ def apply_manifest_to_config() -> None:
     from silica.config import CONFIG
 
     m = get_active_manifest()
-    if os.getenv("SILICA_COOCCURRENCE_LANG") is None:
+    if os.getenv("SILICA_LANG") is None and os.getenv("SILICA_COOCCURRENCE_LANG") is None:
         # "auto" mirrors the config-level default for this field (per-store
         # detection, frozen at build — see kernel/cooccurrence.py). A vault
         # without a declared cooccurrence_lang must NOT be silently pinned to
         # english.
-        CONFIG.cooccurrence_lang = m.cooccurrence_lang or "auto"
+        CONFIG.lang = m.cooccurrence_lang or "auto"

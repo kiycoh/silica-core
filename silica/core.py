@@ -138,7 +138,7 @@ def index_state(meta: dict | None = None) -> dict:
     return {"state": "stale" if stale else "ready", "docs": len(stamps), "built_at": meta.get("built_at")}
 
 
-def build_index(rebuild: bool = False) -> dict:
+def build_index(rebuild: bool = False, embed: bool = False) -> dict:
     """Build or refresh the document index. Incremental by mtime; `rebuild`
     re-reads everything. Never raises for one unreadable file: it lands in
     `failed` and in the failures file `silica_files` reports from."""
@@ -171,7 +171,17 @@ def build_index(rebuild: bool = False) -> dict:
     meta["built_at"] = time.time()
     _paths.atomic_write_bytes(_meta_path(), orjson.dumps(meta))
     _paths.atomic_write_bytes(_paths.index_dir() / "failures.json", orjson.dumps(failed))
-    return {"docs": len(stamps), "changed": changed, "failed": failed, "index": index_state(meta)}
+    out = {"docs": len(stamps), "changed": changed, "failed": failed, "index": index_state(meta)}
+    if embed:
+        from silica import embeddings
+        if not embeddings.enabled():
+            return _error("bad_argument", "embed needs SILICA_EMBEDDING_BASE_URL", **out)
+        notes = [(rel, stamps[rel], _read(root / rel)) for rel in live if rel in stamps]
+        try:
+            out["embeddings"] = embeddings.build(notes, rebuild=rebuild)
+        except Exception as e:
+            return _error("bad_argument", f"embeddings endpoint failed: {e}", **out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +297,11 @@ def silica_search(
     corpus. No boolean "no answer" exists: read coverage and matched_terms
     and decide to stop or rephrase. Builds the index on first use."""
     if hybrid:
-        return _error("bad_argument", "the embeddings extension is not installed in this build")
+        from silica import embeddings
+        if not embeddings.enabled():
+            return _error("bad_argument", "hybrid needs SILICA_EMBEDDING_BASE_URL (an OpenAI-compatible /v1/embeddings endpoint)")
+        if not embeddings.load_store()["vectors"]:
+            return _error("index_cold", "no document vectors yet: run `silica index --embed`")
     state = index_state()
     if state["state"] != "ready":
         build_index(rebuild=state["state"] == "cold")
@@ -303,6 +317,25 @@ def silica_search(
             return _error("out_of_root", str(e))
         docs = [d for d in docs if _paths.in_folder(d[0], scope)]
     top = docs[: max(k * 3, 10)]
+    dense: dict[str, float] = {}
+    if hybrid:
+        from silica import embeddings
+        try:
+            dense = dict(embeddings.dense_candidates(query, k=max(k * 3, 10)))
+        except Exception as e:  # the endpoint is the extension's business, the reply says so
+            return _error("bad_argument", f"embeddings endpoint failed: {e}")
+        if folder.strip():
+            dense = {p: c for p, c in dense.items() if _paths.in_folder(p, scope)}
+        # reciprocal-rank fusion of the two document rankings; a dense-only
+        # document enters `top` with no matched terms and scores 0 lexically
+        fused: dict[str, float] = {}
+        for rank, (p, _s, _m) in enumerate(top):
+            fused[p] = fused.get(p, 0.0) + 1.0 / (60 + rank + 1)
+        for rank, p in enumerate(dense):
+            fused[p] = fused.get(p, 0.0) + 1.0 / (60 + rank + 1)
+        lex = {p: (sc, m) for p, sc, m in docs}
+        top = [(p, lex.get(p, (0.0, set()))[0], lex.get(p, (0.0, set()))[1])
+               for p, _f in sorted(fused.items(), key=lambda kv: -kv[1])][: max(k * 3, 10)]
     weights = store.query_idf(_query_terms(query))
     secs: list[tuple[str, int, str, Counter, int]] = []
     texts: dict[str, str] = {}
@@ -321,6 +354,11 @@ def silica_search(
         score = sum(known[t] * (tf[t] * (K1 + 1)) / (tf[t] + K1 * (1 - B + B * dl / avg)) for t in matched)
         scored.append((score, path, off, part, matched))
     scored.sort(key=lambda s: (-s[0], s[1], s[2]))
+    for p, cos in dense.items():
+        if p in texts and not any(sp == p for _sc, sp, _o, _pt, _m in scored):
+            first = next(iter(_sections_of(p)[1]), None)
+            if first is not None:
+                scored.append((0.0, p, first[0], first[1], set()))
     hits: list[dict] = []
     seen: dict[str, int] = {}
     for score, path, off, part, matched in scored:
@@ -329,15 +367,19 @@ def silica_search(
         seen[path] = seen.get(path, 0) + 1
         o, window = best_window_spans(part, query, width, 1, weights, snap=True)[0]
         title = part.splitlines()[0].lstrip("#").strip() if part.startswith("#") else ""
-        hits.append({"path": path, "section": title,
-                     "line": texts[path].count("\n", 0, off + o) + 1,
-                     "score": round(score, 2), "matched_terms": sorted(matched),
-                     "coverage": round(sum(known[t] for t in matched) / mass, 2),
-                     "window": window})
+        hit = {"path": path, "section": title,
+               "line": texts[path].count("\n", 0, off + o) + 1,
+               "score": round(score, 2), "matched_terms": sorted(matched),
+               "coverage": round(sum(known[t] for t in matched) / mass, 2),
+               "window": window}
+        if path in dense:
+            hit["dense"] = round(dense[path], 3)
+        hits.append(hit)
         if len(hits) == k:
             break
     return {"root": str(_root()), "query": query, "hits": hits,
-            "documents": [{"path": p, "score": round(sc, 2), "matched_terms": sorted(m)} for p, sc, m in top],
+            "documents": [{"path": p, "score": round(sc, 2), "matched_terms": sorted(m),
+                           **({"dense": round(dense[p], 3)} if p in dense else {})} for p, sc, m in top],
             "candidates": len(docs),
             "terms_absent": sorted(t for t, v in idf.items() if v is None),
             "index": index_state()}

@@ -23,6 +23,8 @@ def _bind_root(vault: str) -> Path:
         sys.exit(f"silica: {root} is not a folder")
     os.environ["SILICA_VAULT"] = str(root)
     CONFIG.vault_path = str(root)
+    from silica.kernel.vault_manifest import apply_manifest_to_config
+    apply_manifest_to_config()
     return root
 
 
@@ -51,6 +53,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("-k", type=int, default=5)
     s.add_argument("--per-doc", type=int, default=2)
     s.add_argument("--width", type=int, default=600)
+    s.add_argument("--hybrid", action="store_true", help="add the dense-embedding leg (SILICA_EMBEDDING_BASE_URL)")
 
     s = sub.add_parser("read", help="a located slice of one file")
     s.add_argument("path")
@@ -76,6 +79,7 @@ def _parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("index", help="build or refresh the index")
     s.add_argument("--rebuild", action="store_true")
+    s.add_argument("--embed", action="store_true", help="also build the document vectors (embeddings extension)")
 
     s = sub.add_parser("mcp", help="serve the tools over stdio MCP")
     s.add_argument("--extended", action="store_true", help="also serve tables and link tools")
@@ -106,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         p.print_help()
         return 0
     if a.cmd == "update":
-        from silica.update import run_update
+        from silica.update import update as run_update
         return run_update(check_only=a.check)
     root = _bind_root(a.vault)
     import silica.core as core
@@ -114,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "files":
         return _emit(core.files(folder=a.folder, status=a.status, limit=a.limit, cursor=a.cursor))
     if a.cmd == "search":
-        return _emit(core.search(a.query, folder=a.folder, k=a.k, per_doc=a.per_doc, width=a.width))
+        return _emit(core.search(a.query, folder=a.folder, k=a.k, per_doc=a.per_doc, width=a.width, hybrid=a.hybrid))
     if a.cmd == "read":
         return _emit(core.read(a.path, start=a.start, end=a.end, section=a.section,
                                max_chars=a.max_chars, expect_version=a.expect_version))
@@ -130,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         return _emit(core.write_note(a.path, body, frontmatter=fm, expect_version=a.expect_version,
                                      create_only=a.create_only))
     if a.cmd == "index":
-        return _emit(core.build_index(rebuild=a.rebuild))
+        return _emit(core.build_index(rebuild=a.rebuild, embed=a.embed))
     if a.cmd == "mcp":
         import logging
 
