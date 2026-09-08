@@ -31,6 +31,7 @@ EXTENDED_TOOLS = (
 )
 
 WRITE_TOOLS = frozenset({"silica_write_note"})
+ALWAYS_LOAD = frozenset({"silica_search", "silica_read"})
 
 _READ_ONLY = dict(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 _ADDITIVE = dict(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
@@ -56,7 +57,10 @@ def exposed_tools(extended: bool = False) -> dict[str, Any]:
 
 INSTRUCTIONS = (
     "Silica indexes the folder this server was started in and returns located "
-    "evidence, never answers. silica_search gives ranked passages with path, "
+    "evidence, never answers. Use silica_search first for a question about what "
+    "the files here say, and silica_code_pack before editing or explaining a "
+    "source file; grep is for an exact string or a symbol name. silica_search "
+    "gives ranked passages with path, "
     "section, line, matched_terms, coverage and terms_absent: low coverage or a "
     "discriminating term in terms_absent means the corpus does not answer in these "
     "words, so rephrase once with the corpus's own vocabulary, keeping names, "
@@ -99,9 +103,14 @@ def make_server(extended: bool = False):
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
+        # The search-then-read loop stays loaded: Claude Code defers MCP tools
+        # behind its tool search, and in the 2026-09-09 baseline Opus reached
+        # for a deferred silica_search once in 24 tasks. The other three ride
+        # behind the two (https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral).
         return [types.Tool(name=t.name, description=t.description,
                            inputSchema=t.json_schema()["function"]["parameters"],
-                           annotations=types.ToolAnnotations(**tool_annotations(t.name)))
+                           annotations=types.ToolAnnotations(**tool_annotations(t.name)),
+                           _meta={"anthropic/alwaysLoad": True} if t.name in ALWAYS_LOAD else None)  # `_meta` on the wire
                 for t in tools.values()]
 
     @server.call_tool()

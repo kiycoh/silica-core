@@ -117,3 +117,31 @@ def test_one_sigint_stops_the_server():
             proc.kill()
         for pipe in (proc.stdin, proc.stdout, proc.stderr):
             pipe.close()
+
+
+def test_search_and_read_are_marked_always_loaded_on_the_wire():
+    """Claude Code defers MCP tools behind its tool search unless a tool's
+    `_meta` carries `anthropic/alwaysLoad`; the SDK spells the field `meta`
+    and only the alias reaches the wire. In the 2026-09-09 baseline Opus
+    reached for a deferred silica_search once in 24 tasks."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import sys; from silica.ui.mcp import run_mcp; sys.exit(run_mcp())"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    try:
+        def send(o):
+            proc.stdin.write(json.dumps(o).encode() + b"\n")
+            proc.stdin.flush()
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                         "clientInfo": {"name": "test", "version": "0"}}})
+        assert proc.stdout.readline()
+        send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        send({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        tools = {t["name"]: t for t in json.loads(proc.stdout.readline())["result"]["tools"]}
+        assert tools["silica_search"]["_meta"] == {"anthropic/alwaysLoad": True}
+        assert tools["silica_read"]["_meta"] == {"anthropic/alwaysLoad": True}
+        assert "_meta" not in tools["silica_files"] and "meta" not in tools["silica_search"]
+    finally:
+        proc.kill()
+        proc.wait(timeout=10)

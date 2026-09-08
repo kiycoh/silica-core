@@ -1,6 +1,6 @@
 ---
 name: silica
-description: Search a folder of documents or code with located evidence instead of grep. Use when the user asks what a corpus, a set of papers, the docs or a repository say about something, when a question needs a passage you can cite by path and line, or when the answer may not be in the corpus at all and you need to know that before reading.
+description: Search a folder of documents or code with located evidence instead of grep. Use before grep for any question about what the files in the current folder say; use when the user asks what a corpus, a set of papers, the docs or a repository say about something, when a question needs a passage you can cite by path and line, or when the answer may not be in the corpus at all and you need to know that before reading.
 ---
 
 # Silica: located evidence, no model

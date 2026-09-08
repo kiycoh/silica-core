@@ -298,7 +298,8 @@ def silica_files(
     limit: Annotated[int, Field(description="Max entries per page")] = 200,
     cursor: Annotated[str, Field(description="`next_cursor` from the previous page")] = "",
 ) -> dict:
-    """Inventory of the root and what the index did with each file: `indexed`
+    """Ask what the index could see before trusting a search or calling
+    absence. Inventory of the root and what the index did with each file: `indexed`
     (in the index, matches disk), `changed` (differs from the index),
     `excluded` (an ignore rule or a type the index does not read; `reason`
     says which), `failed` (read or conversion error), `unconverted` (a PDF
@@ -418,9 +419,13 @@ def silica_search(
     width: Annotated[int, Field(description="Characters in each hit's window")] = 600,
     hybrid: Annotated[bool, Field(description="Add the dense-embedding leg (embeddings extension required)")] = False,
 ) -> dict:
-    """Ranked passages with an honest zero. BM25 over documents, then over
-    the heading sections of the top documents, at most `per_doc` per
-    document; each hit carries its densest `width`-char window and line.
+    """Use first for a question about what the notes, documents, papers or
+    code in this folder say, when the passage matters more than the file, or
+    when the query is a concept rather than an identifier; grep wins for an
+    exact string or a symbol name. Ranked passages with an honest zero: BM25
+    over documents, then over the heading sections of the top documents, at
+    most `per_doc` per document; each hit carries its densest `width`-char
+    window and line.
     `score` is raw BM25 (comparable within one call only). `matched_terms`
     are the query terms in the hit; `coverage` is the share of the query's
     idf mass they carry, absent terms included at the weight of a term found
@@ -556,8 +561,9 @@ def silica_read(
     max_chars: Annotated[int, Field(description="Cap on the served text")] = 16000,
     expect_version: Annotated[str, Field(description="Refuse with error.changed when the file's version differs")] = "",
 ) -> dict:
-    """A located slice of one file with its outline. Lines `start..end`, or
-    one `section` by heading, or the whole file when it fits `max_chars`;
+    """Read a located slice before citing it: lines `start..end`, one
+    `section` by heading, a PDF page, or the whole file when it fits
+    `max_chars`, always with the outline and a `version`;
     `truncated` and `next_start` say how to continue. A PDF is served from
     its own text layer, page by page: `section="p. 8"` serves one page,
     `pages` counts them, `page_map` gives the pages the slice covers, and
@@ -655,12 +661,13 @@ def silica_code_pack(
     budget_chars: Annotated[int, Field(description="Character budget for the whole pack; the target is always served")] = 24000,
     sections: Annotated[list[str] | None, Field(description="Sections besides the target: any of 'hierarchy', 'callers', 'neighborhood', 'external', 'importers'. Empty = all")] = None,
 ) -> dict:
-    """Deterministic context pack for one source file inside a character
-    budget: the target plus its supertypes, extenders, the signatures it
-    names, external dependencies and importers. Static AST only, same repo
-    state, same bytes. Check `truncated` before treating the target as
-    complete; `dropped` names what did not fit. `languages` lists the
-    parsers this install has."""
+    """Use before editing or explaining a source file, or when a traceback or
+    a diff names `file:line`: one call serves the file, a `#Class.member`, or
+    the symbol at `#L<line>`, with its supertypes, extenders, callers, the
+    signatures it names, external dependencies and importers, inside a
+    character budget. Static AST only, same repo state, same bytes. Check
+    `truncated` before treating the target as complete; `dropped` names what
+    did not fit. `languages` lists the parsers this install has."""
     from silica.kernel.code import codepack
     from silica.kernel.code.codeast import EXTENSION_MAP
 
