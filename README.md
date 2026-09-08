@@ -30,9 +30,12 @@ network.
 ## Install
 
 ```bash
-uv tool install 'silica-core[mcp]'    # or: pipx install 'silica-core[mcp]'
-silica setup claude                      # or: codex, opencode, dsh
+uv tool install 'silica-core[mcp]'   # or: pipx install 'silica-core[mcp]'
+silica setup claude                  # or: codex, opencode, dsh
 ```
+
+The package is `silica-core`, the command is `silica`, the tools are
+`silica_*`: the distribution carries the name, the code keeps the namespace.
 
 `setup` registers the MCP server in the client's own config at user scope.
 Every session then serves the folder the client was opened in. To serve
