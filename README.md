@@ -49,6 +49,24 @@ Scanned PDFs, images, PPTX and XLSX go through [MinerU](https://github.com/opend
 when it is on your PATH; audio and video need `ffmpeg` and a speech-to-text
 endpoint (`SILICA_STT_BASE_URL`). `silica doctor` says which lanes you have.
 
+### Docker
+
+No image is published. The `Dockerfile` builds one, and CI builds and smoke-tests
+it on every push, so it stays runnable:
+
+```bash
+docker build -t silica-core .
+docker run --rm -i -v /path/to/vault:/vault silica-core                 # the MCP server over stdio
+docker run --rm -v /path/to/vault:/vault silica-core search "compaction" -k 5
+```
+
+The container serves `/vault` and keeps everything it derives — index, ledger,
+checkpoints — under `/data`, which is `$HOME` inside the image: mount a volume
+there or the index is rebuilt on every run. The lanes that need a system binary
+(MinerU, ffmpeg, soffice) are deliberately not in the image; `docker run --rm
+silica-core doctor` reports them missing, and the comments in the `Dockerfile`
+say where to add the ones you use.
+
 ## From the shell
 
 Every subcommand prints the same JSON the MCP tool returns, so a harness

@@ -54,3 +54,30 @@ jobs:
       # cleanup of 158 unused imports. Narrow by config (F, E9 in pyproject):
       # it blocks dead code, it does not arbitrate style.
       - run: uv run ruff check silica tests
+
+  # The Dockerfile landed unbuilt by anything and went stale in place: the
+  # rename to silica-core walked past a build arg in .dockerignore that no job
+  # was exercising. An image nobody builds is a promise that breaks in the hand
+  # of the first person who tries it.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # .dockerignore ships .git so setuptools-scm can name the wheel; the
+          # default shallow checkout carries no tags and every image would
+          # install as pyproject's fallback_version, 0.0.0.
+          fetch-depth: 0
+
+      - run: docker build -t silica-core:ci .
+
+      # Building proves the wheel resolves; it does not prove the image runs.
+      # One vault, one file, one search covers the parts that actually rot: the
+      # [mcp] extra, the HOME=/data relocation the index writes through, the
+      # entrypoint, and the /vault working directory.
+      - name: smoke
+        run: |
+          mkdir -p vault
+          printf '# Compaction\n\nLSM trees merge sorted runs on write.\n' > vault/notes.md
+          docker run --rm -v "$PWD/vault:/vault" silica-core:ci search compaction -k 1 | tee out.json
+          grep -q notes.md out.json
