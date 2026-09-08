@@ -60,8 +60,9 @@ def exposed_tools(extended: bool = False) -> dict[str, Any]:
 INSTRUCTIONS = (
     "Silica indexes the folder this server was started in and returns located "
     "evidence, never answers. silica_search gives ranked passages with path, "
-    "section, line, matched_terms, coverage and terms_absent: low coverage or a "
-    "discriminating term in terms_absent means the corpus does not answer, so stop "
+    "section, line, matched_terms, coverage, dominance and terms_absent: low "
+    "coverage or a discriminating term in terms_absent means the corpus does not "
+    "answer, so stop "
     "or rephrase instead of reading the hits. Read a passage with silica_read "
     "before citing it and carry its version forward. silica_files says what the "
     "index skipped or could not read; an empty result under index.state=cold is "

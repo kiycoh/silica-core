@@ -69,7 +69,7 @@ for each hit, the `width`-character window densest in idf-weighted query
 terms, with its line number.
 
 Reply: `{query, hits: [{path, section, line, score, matched_terms, coverage, window}],
-documents: [{path, score, matched_terms}], candidates, terms_absent, index}`.
+documents: [{path, score, matched_terms}], dominance, candidates, terms_absent, index}`.
 
 - `score` is the raw BM25 of the section. It is comparable only within one
   call and is never a probability of relevance or truth.
@@ -78,6 +78,11 @@ documents: [{path, score, matched_terms}], candidates, terms_absent, index}`.
   terms carry, from 0 to 1. A hit that matches every rare term is near 1; a
   hit that matches only the common words is near 0.
 - `terms_absent` lists the query terms that occur nowhere in the corpus.
+- `dominance` is the top hit's score divided by the runner-up's, and `null`
+  when there is no runner-up to divide by (one hit, or a runner-up at score
+  0). It answers a different question from `coverage`: coverage says whether
+  the corpus covers the query, dominance says whether one passage covers it
+  better than the next. Near 1 the pool is flat and one hit is not enough.
 - There is no boolean "no answer". Lexical signals cannot promise one: on
   the test corpus a question about Rust's borrow checker found both words in
   unrelated papers, and its top hit matched two of five terms. `coverage`

@@ -72,6 +72,24 @@ def _tokens(text: str) -> list[str]:
     return [w for w in _WORD.findall(text.lower()) if len(w) >= 2 and w not in STOPWORDS]
 
 
+def dominance(scores: list[float]) -> float | None:
+    """Top score over runner-up: how far the best hit stands out.
+
+    The second honest signal beside `coverage`. Coverage asks whether the
+    corpus covers the query; this asks whether one passage answers it better
+    than the next. High coverage at dominance near 1.0 means many passages
+    say the same thing — read more than one.
+
+    None when no ratio exists: fewer than two scores, or a runner-up at or
+    below zero (a dense-only hit enters the pool at 0.0). Reporting infinity
+    there would read as certainty, which is the one thing this number must
+    never fake.
+    """
+    if len(scores) < 2 or scores[1] <= 0.0:
+        return None
+    return scores[0] / scores[1]
+
+
 class LexicalStore(DiskSynced):
     def __init__(self, path: Path | None = None):
         self._path = path if path is not None else _index_path()

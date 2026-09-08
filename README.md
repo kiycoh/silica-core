@@ -100,6 +100,9 @@ ranked list always has a top. What tells the two apart:
   carry. Near 1, every rare term matched; near 0, only the common words did.
 - `terms_absent`: query terms that occur nowhere in the corpus.
 - `matched_terms`: which words this hit actually contains.
+- `dominance`: the top hit's score over the runner-up's, `null` when there
+  is no runner-up. Near 1 the pool is flat and one passage is not enough;
+  high, and the top hit stands alone.
 
 Measured on 254 converted papers (22 MB): the answered questions scored
 0.69 to 1.00 on their top hit, a question the corpus does not cover scored
