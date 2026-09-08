@@ -45,9 +45,14 @@ exactly one `status`:
 | `failed` | read or conversion failed; `reason` says why |
 | `unconverted` | a PDF whose text layer the index could not read (a scan, an encrypted or broken file), or another binary source with no extracted text yet; `reason` says which |
 
-Reply: `{root, total, files: [{path, bytes, mtime, status, reason?}],
-counts: {indexed, changed, excluded, failed, unconverted}, truncated,
-next_cursor, index}`.
+Reply: `{root, total, files: [{path, bytes, status, reason?}],
+counts: {indexed, changed, excluded, failed, unconverted}, excluded_dirs,
+truncated, next_cursor, index}`.
+
+The folders the walk does not enter (hidden, or an ignore rule) are a count,
+`excluded_dirs`, in every listing and rows only under `status=excluded`;
+`counts.excluded` includes them. `status` already says whether a file
+changed since the index read it, so no timestamp rides along.
 
 `status=` filters to one class, which is how a harness asks "what did the
 index miss" before trusting a search. `total` counts files on disk even when

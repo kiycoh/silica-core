@@ -37,7 +37,10 @@ def test_files_reports_every_status(root):
     by = {f["path"]: f for f in r["files"]}
     assert r["index"]["state"] == "cold" and by["docs/lsm.md"]["status"] == "changed"
     assert by["docs/scan.pdf"]["status"] == "changed"  # unread by the index, not yet judged
-    assert by["node_modules/"]["status"] == "excluded"
+    assert "mtime" not in by["docs/lsm.md"]
+    assert "node_modules/" not in by and r["excluded_dirs"] == 1 and r["counts"]["excluded"] == 1
+    only = {f["path"]: f for f in root.files(status="excluded")["files"]}
+    assert only["node_modules/"]["reason"] == "ignore rule" and len(only) == 1
     root.build_index()
     assert root.files(status="indexed")["counts"]["indexed"] == 2
     scan = {f["path"]: f for f in root.files()["files"]}["docs/scan.pdf"]

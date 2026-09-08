@@ -331,7 +331,7 @@ def silica_files(
             st = full.stat()
         except OSError:
             continue
-        row: dict = {"path": rel, "bytes": st.st_size, "mtime": st.st_mtime}
+        row: dict = {"path": rel, "bytes": st.st_size}  # `status` says whether it changed; a float mtime said nothing more
         suffix = full.suffix.lower()
         if rel in failed:
             row.update(status="failed", reason=failed[rel])
@@ -355,8 +355,14 @@ def silica_files(
             row.update(status="excluded", reason=f"not indexed: {suffix or 'no extension'}")
         entries.append(row)
     counts = Counter(e["status"] for e in entries)
+    # The folders the walk did not enter are a count in every listing and rows
+    # only under status=excluded: thirteen hidden folders opened every listing
+    # of this repository before any file (measured 2026-09-08).
+    excluded_dirs = sum(1 for e in entries if e["path"].endswith("/"))
     if status:
         entries = [e for e in entries if e["status"] == status]
+    else:
+        entries = [e for e in entries if not e["path"].endswith("/")]
     try:
         offset = int(cursor) if cursor else 0
     except ValueError:
@@ -365,6 +371,7 @@ def silica_files(
     truncated = offset + limit < len(entries)
     return {"root": str(root), "total": len(entries), "files": page,
             "counts": {k: counts.get(k, 0) for k in ("indexed", "changed", "excluded", "failed", "unconverted")},
+            "excluded_dirs": excluded_dirs,
             "truncated": truncated, "next_cursor": str(offset + limit) if truncated else None,
             "index": index_state(meta)}
 
