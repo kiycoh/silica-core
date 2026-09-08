@@ -74,3 +74,12 @@ def test_prose_slash_pairs_are_not_paths():
 
 def test_stopwords_and_short_words_still_go():
     assert _tokens("the and of it") == []
+
+
+def test_pdfium_soft_break_marker_keeps_both_readings():
+    """PDFium writes U+FFFE where it dropped a line-end hyphen. `us￾ing`
+    is a syllable break, `open￾domain` a compound: the joined word is
+    emitted alongside the halves so either query reaches the page."""
+    t = _tokens("generated us￾ing an open￾domain corpus")
+    assert "using" in t and "us" in t and "ing" in t, t
+    assert "opendomain" in t and "open" in t and "domain" in t, t

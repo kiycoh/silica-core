@@ -81,10 +81,16 @@ def _fold(word: str) -> str:
 # set or every Italian note indexes its own function words.
 STOPWORDS_FOLDED = frozenset(_fold(w) for w in STOPWORDS)
 
-TOKENIZER_VERSION = 6  # bumped when the token stream changes; the index rebuilds
+TOKENIZER_VERSION = 7  # bumped when the token stream changes; the index rebuilds
 
 
 _WORD = re.compile(r"[^\W_]+")
+# PDFium marks a hyphen it removed at a line break with U+FFFE, so a PDF's text
+# layer reads `us\ufffeing` (a syllable break) as often as `open\ufffedomain`
+# (a real compound): measured 25 to 198 per paper under docs/research. The
+# marker is `\W`, so `_WORD` already yields the two halves; the joined form is
+# emitted alongside them, never instead, and both readings stay searchable.
+_SOFT_BREAK = re.compile(r"([^\W_]+)\ufffe([^\W_]+)")
 # Structured shapes `_WORD` would shred into fragments the whole corpus
 # shares: a date becomes three common numbers, a path four common words.
 # Matched on the original text and emitted lowercased ALONGSIDE those
@@ -134,6 +140,7 @@ def _tokens(text: str) -> list[str]:
     term and the year it contains.
     """
     out = [m.group(0).lower() for m in _ATOM.finditer(text)]
+    out.extend(_fold((m.group(1) + m.group(2)).lower()) for m in _SOFT_BREAK.finditer(text))
     for m in _WORD.finditer(text):
         word = _fold(m.group(0).lower())
         if len(word) >= 2 and word not in STOPWORDS_FOLDED:

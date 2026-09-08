@@ -396,3 +396,24 @@ def test_ts_reexport_resolves_to_its_source(tmp_path):
     assert entry["imports"] == ["codec.ts"]
     assert {(r["name"], r["from"]) for r in entry["reexports"]} == {
         ("parse", "codec.ts"), ("fmt", "codec.ts")}
+
+
+def test_structureless_graph_is_never_persisted_and_never_served(tmp_path, monkeypatch):
+    """tree-sitter failing in one process must not poison the store for the
+    next: a graph with parse errors and no symbols is served but not saved,
+    and one already on disk is rebuilt instead of trusted."""
+    _init_repo(tmp_path)
+    _seed_mini_repo(tmp_path)
+    store = tmp_path / "cg.json"
+    monkeypatch.setattr(codegraph, "store_path", lambda: store)
+    good = codegraph.load_codegraph(tmp_path)
+    assert store.exists() and any(e.get("symbols") for e in good.files.values())
+    broken = {p: {**e, "symbols": [], "parse_error": True} for p, e in good.files.items()}
+    store.write_bytes(codegraph._serialize(codegraph.CodeGraph(head_ref=good.head_ref, files=broken)))
+    healed = codegraph.load_codegraph(tmp_path)
+    assert any(e.get("symbols") for e in healed.files.values())  # rebuilt, not served from the poisoned store
+    monkeypatch.setattr(codegraph, "build_codegraph",
+                        lambda root: codegraph.CodeGraph(head_ref=good.head_ref, files=broken))
+    store.unlink()
+    assert codegraph.load_codegraph(tmp_path) is not None
+    assert not store.exists()  # a structureless build is served, never written

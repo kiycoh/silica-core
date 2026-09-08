@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from silica.kernel.code import codeast, codepack, gitstate
+from silica.kernel.code import codeast, codegraph, codepack, gitstate
 
 
 def _init_repo(path: Path) -> None:
@@ -167,3 +167,19 @@ def test_real_refs_still_work(tmp_path):
 # codewiki: the digest's budget never writes into the store
 # ---------------------------------------------------------------------------
 
+
+
+def test_code_pack_names_a_parse_error_instead_of_emitting_nothing(tmp_path, monkeypatch):
+    """An entry with parse_error yields no outline and no neighbourhood; the
+    pack must say so in `dropped`, or the caller reads a silent degrade as
+    "this file has no structure"."""
+    repo = tmp_path
+    _init_repo(repo)
+    _commit(repo, "pkg/mod.py", "import os\n\ndef f():\n    return os.sep\n", "seed")
+    monkeypatch.setattr(codegraph, "store_path", lambda: repo / "cg.json")
+    graph = codegraph.load_codegraph(repo)
+    broken = {p: {**e, "symbols": [], "parse_error": True} for p, e in graph.files.items()}
+    monkeypatch.setattr(codegraph, "load_codegraph",
+                        lambda vault: codegraph.CodeGraph(head_ref=graph.head_ref, files=broken))
+    pack = codepack.code_pack(repo, "pkg/mod.py")
+    assert any(d.startswith("note: pkg/mod.py did not parse") for d in pack["dropped"]), pack["dropped"]

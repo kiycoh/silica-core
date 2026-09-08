@@ -452,6 +452,10 @@ def code_pack(vault: Path | str, target: str,
         entry = graph.files.get(path, {})
         if not entry:
             dropped.append(f"note: {path} is not in the code graph")
+        elif entry.get("parse_error"):
+            # base.py: consumers must not read "empty" as "no structure"
+            dropped.append(f"note: {path} did not parse (tree-sitter unavailable or the file is unparseable); "
+                           "outline, hierarchy, neighborhood and external are unavailable")
 
     # `_target_block` only sees the body, so the header line and the pack's own
     # trailing newline have to come out of its budget too, or a larger budget

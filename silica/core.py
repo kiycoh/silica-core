@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import orjson
+import yaml
 from pydantic import Field
 
 from silica.config import CONFIG
+from silica.kernel.link.ast import parse_headings
 from silica.kernel.recall import paths as _paths
 from silica.kernel.recall.lexical import TOKENIZER_VERSION, _tokens, get_lexical_store
 from silica.kernel.recall.rerank import _query_terms, best_window_spans
@@ -530,8 +532,6 @@ def silica_read(
     with no readable text layer is `error.unconverted`. Carry
     `version` forward as `expect_version` to be refused instead of reading
     different bytes under an old citation."""
-    from silica.kernel.link.ast import parse_headings
-
     root = _root()
     try:
         rel = _rel(path)
@@ -691,8 +691,6 @@ def silica_write_note(
     structural violations and unresolved wikilinks. Refuses to overwrite
     when `expect_version` does not match or when `create_only` is set and
     the file exists. Undo is git; the core keeps no journal."""
-    import yaml
-
     root = _root()
     try:
         rel = _rel(path if path.lower().endswith(".md") else path + ".md")
