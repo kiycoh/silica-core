@@ -64,7 +64,8 @@ jobs:
       - name: Verify the wheel ships the skill
         # Guards the package-data config: `silica setup` copies SKILL.md out of
         # the installed package, and a wheel that drops it fails at runtime.
-        run: unzip -l dist/*.whl | grep -q "silica/skills/silica/SKILL.md" || { echo "MISSING from wheel: SKILL.md"; exit 1; }
+        run: |
+          unzip -l dist/*.whl | grep -q "silica/skills/silica/SKILL.md" || { echo "MISSING from wheel: SKILL.md"; exit 1; }
 
       - name: Publish to PyPI
         # Trusted Publishing via OIDC — the PyPI project must have this repo +
