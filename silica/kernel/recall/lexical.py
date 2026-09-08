@@ -13,6 +13,7 @@ from __future__ import annotations
 import math
 import re
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,13 @@ def _index_path() -> Path:
 # "system", "number" and "first" from the index; Lucene's 33 keep "does",
 # "over" and "versus", which BM25 then matches in every paper. Neither is
 # the right size for a corpus index.
+#
+# One list serves both languages, so it may hold only what is a function word
+# in BOTH. `state` and `era` are Italian verb forms and English nouns; keeping
+# them cost 2487 occurrences of "state" across 214 of the 254 bench papers —
+# a core term of this literature, deleted from the index to save a participle.
+# They stay out. `come` stays in: a function word in Italian and a near-empty
+# verb in English, so dropping it loses nothing either way.
 STOPWORDS = frozenset("""
 i me my myself we our ours ourselves you your yours yourself yourselves he him
 his himself she her hers herself it its itself they them their theirs themselves
@@ -54,11 +62,26 @@ dello della dei degli delle al allo alla ai agli alle dal dallo dalla dai dagli
 dalle nel nello nella nei negli nelle sul sullo sulla sui sugli sulle e ed o ma
 se anche non né come dove quando perché mentre oppure sia ancora già più meno
 molto poco tutto tutti tutta tutte ogni qualche alcuni alcune altro altra altri
-altre stesso stessa stessi stesse sono sei è siamo siete era eri eravamo erano
-essere stato stata stati state ho hai ha abbiamo avete hanno aveva avevano avere
+altre stesso stessa stessi stesse sono sei è siamo siete eri eravamo erano
+essere stato stata stati ho hai ha abbiamo avete hanno aveva avevano avere
 avuto fa fanno fare fatto può possono qui qua lì là così poi
 """.split())
-TOKENIZER_VERSION = 5  # bumped when the token stream changes; the index rebuilds
+def _fold(word: str) -> str:
+    """Drop combining marks: `références` and `references` become one term.
+
+    Applied symmetrically at index and query time, so folding never creates a
+    term one side can produce and the other cannot.
+    """
+    return "".join(c for c in unicodedata.normalize("NFD", word)
+                   if not unicodedata.combining(c))
+
+
+# STOPWORDS holds its Italian function words accented (`perché`, `più`, `né`).
+# Tokens arrive folded, so the membership test must run against the folded
+# set or every Italian note indexes its own function words.
+STOPWORDS_FOLDED = frozenset(_fold(w) for w in STOPWORDS)
+
+TOKENIZER_VERSION = 6  # bumped when the token stream changes; the index rebuilds
 
 
 _WORD = re.compile(r"[^\W_]+")
@@ -77,21 +100,37 @@ _ATOM = re.compile(r"""
     | [A-Za-z0-9_-]{2,}(?:/[A-Za-z0-9._-]+){2,}                     # docs/research/papers
     | [A-Za-z0-9_-]{2,}/[A-Za-z0-9_-]+\.[A-Za-z]{1,5}(?![A-Za-z])   # docs/file.md
 """, re.X)
+# camelCase / PascalCase humps: split before an upper that follows a lower or
+# a digit, and before the last upper of an acronym run ("HTMLParser" -> HTML |
+# Parser). snake_case needs no rule — `_` is already outside `[^\W_]`, so
+# those arrive pre-split.
+_HUMP = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_MAX_SEGMENTS = 12  # a minified name or a hash carries no prose signal
 
 
 def _tokens(text: str) -> list[str]:
-    """Lowercased words and alphanumerics ("bm25", "gpt4", "2026" stay whole),
-    at least two characters, function words removed. No stemming: proper
-    nouns and dates match verbatim; no language detection: nothing here
-    depends on it.
+    """Lowercased, accent-folded words and alphanumerics ("bm25", "gpt4",
+    "2026" stay whole), at least two characters, function words removed. No
+    stemming: proper nouns and dates match verbatim; no language detection:
+    nothing here depends on it.
 
-    Structured shapes (`_ATOM`) are emitted whole in addition to the
-    fragments `_WORD` finds inside them, so `2026-09-08` is both one rare
-    term and the year it contains.
+    Two shapes are emitted in addition to the plain token, never instead of
+    it: structured atoms (`_ATOM`), so `2026-09-08` is both one rare term and
+    the year it contains, and the segments of a camel-humped name, so the
+    query "state machine" reaches `OrderStateMachine` while
+    `OrderStateMachine` still matches itself.
     """
     out = [m.group(0).lower() for m in _ATOM.finditer(text)]
-    out.extend(w for w in (m.group(0).lower() for m in _WORD.finditer(text))
-               if len(w) >= 2 and w not in STOPWORDS)
+    for m in _WORD.finditer(text):
+        raw = m.group(0)
+        word = _fold(raw.lower())
+        if len(word) >= 2 and word not in STOPWORDS_FOLDED:
+            out.append(word)
+        if _HUMP.search(raw):
+            for part in _HUMP.split(raw)[:_MAX_SEGMENTS]:
+                seg = _fold(part.lower())
+                if len(seg) >= 2 and seg not in STOPWORDS_FOLDED:
+                    out.append(seg)
     return out
 
 
