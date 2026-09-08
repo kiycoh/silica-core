@@ -68,9 +68,12 @@ sections inside the top documents; at most `per_doc` sections per document;
 for each hit, the `width`-character window densest in idf-weighted query
 terms, with its line number.
 
-Reply: `{query, hits: [{path, section, line, score, matched_terms, coverage, window}],
+Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window}],
 documents: [{path, score, matched_terms}], candidates, terms_absent, index}`.
 
+- `version` is the content hash `silica_read` checks: carried into
+  `expect_version`, a file edited between the search and the read is refused
+  instead of quoted under the hit's line.
 - `score` is the raw BM25 of the section. It is comparable only within one
   call and is never a probability of relevance or truth.
 - `matched_terms` lists the distinct query terms present in that hit.

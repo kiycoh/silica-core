@@ -155,3 +155,13 @@ def test_absent_terms_weigh_on_coverage(root):
     assert r["terms_absent"] == ["giraffe", "okapi", "zebra"]
     assert r["hits"] and r["hits"][0]["matched_terms"] == ["compaction"]
     assert r["hits"][0]["coverage"] < 0.5, r["hits"][0]
+
+
+def test_hit_version_guards_the_read(root):
+    """A hit carries the hash the read checks: the file edited in between is
+    refused instead of served under the hit's line."""
+    hit = root.search("leveled compaction")["hits"][0]
+    got = root.read(hit["path"], start=hit["line"], end=hit["line"], expect_version=hit["version"])
+    assert got["version"] == hit["version"] and "compaction" in got["text"].lower()
+    (root._root() / hit["path"]).write_text("# LSM trees\n\nrewritten\n", encoding="utf-8")
+    assert root.read(hit["path"], expect_version=hit["version"])["error"]["code"] == "changed"

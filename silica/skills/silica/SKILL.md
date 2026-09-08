@@ -28,9 +28,9 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, opencode
    means nothing was indexed yet; the first search builds the index.
 3. **Read before you cite.** `silica_read(path, section=…)` or
    `(path, start, end)` serves the slice with the outline and a `version`.
-   Cite path and line. Carry `version` into `expect_version` on a later
-   read so a changed file is refused instead of quoted under an old
-   citation.
+   Cite path and line. Every hit carries the same `version`: pass it as
+   `expect_version` on the read, and again on a later read, so a file that
+   changed in between is refused instead of quoted under an old citation.
 4. **Check coverage when the task is exhaustive.** `silica_files` lists
    every file with what the index did to it; `status=unconverted` names
    the scans and office files with no extracted text, `status=failed` the

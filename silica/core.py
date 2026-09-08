@@ -492,6 +492,7 @@ def silica_search(
                 scored.append((0.0, p, first[0], first[1], set(), first[4]))
     hits: list[dict] = []
     seen: dict[str, int] = {}
+    versions: dict[str, str] = {}  # the hash silica_read checks, from the text already in hand
     for score, path, off, part, matched, title in scored:
         if seen.get(path, 0) >= per_doc:
             continue
@@ -499,6 +500,7 @@ def silica_search(
         o, window = best_window_spans(part, query, width, 1, weights, snap=True)[0]
         hit = {"path": path, "section": title,
                "line": texts[path].count("\n", 0, off + o) + 1,
+               "version": versions.setdefault(path, _version(texts[path])),
                "score": round(score, 2), "matched_terms": sorted(matched),
                "coverage": round(sum(known[t] for t in matched) / mass, 2),
                "window": window}

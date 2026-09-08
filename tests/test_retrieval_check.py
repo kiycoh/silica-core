@@ -70,6 +70,7 @@ def test_every_hit_is_locatable(corpus):
     for h in r["hits"]:
         got = corpus.read(h["path"], start=h["line"], end=h["line"] + 40)
         assert "error" not in got and h["window"].strip().splitlines()[0].strip() in got["text"], h
+        assert got["version"] == h["version"], "the hit and the read hash the same bytes"
 
 
 def test_stale_version_is_refused(corpus):
