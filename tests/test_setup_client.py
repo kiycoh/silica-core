@@ -24,10 +24,10 @@ def test_codex_appends_block(tmp_path):
     assert setup_client.run_setup(["codex", "--config", str(cfg)]) == 0
     parsed = tomllib.loads(cfg.read_text(encoding="utf-8"))
     assert parsed["model"] == "gpt-5"  # existing content survives
-    assert parsed["mcp_servers"]["silica"]["command"] == "uvx"
+    assert parsed["mcp_servers"]["silica-core"]["command"] == "uvx"
     # The [mcp] extra is the point of the block, and rich markup eats it if the
     # payload is ever printed or written through a markup-enabled path.
-    assert parsed["mcp_servers"]["silica"]["args"] == ["--from", "silica-harness[mcp]", "silica", "mcp"]
+    assert parsed["mcp_servers"]["silica-core"]["args"] == ["--from", "silica-core[mcp]", "silica", "mcp"]
 
 
 def test_no_client_gets_a_pinned_vault(tmp_path):
@@ -74,7 +74,7 @@ def test_opencode_merges_into_existing_json(tmp_path):
     data = json.loads(cfg.read_text(encoding="utf-8"))
     assert data["theme"] == "dark"
     assert "other" in data["mcp"]
-    assert data["mcp"]["silica"]["command"][0] == "uvx"
+    assert data["mcp"]["silica-core"]["command"][0] == "uvx"
 
 
 def test_dry_run_writes_nothing(tmp_path):
@@ -105,9 +105,9 @@ def _printed(args: list[str], capsys=None) -> str:
 def test_previews_keep_the_bracketed_tokens(tmp_path, capsys):
     """`[mcp]` and the TOML headers must reach the terminal intact."""
     out = _printed(["codex", "--config", str(tmp_path / "config.toml"), "--dry-run"], capsys)
-    assert "silica-harness[mcp]" in out
-    assert "[mcp_servers.silica]" in out
-    assert "silica-harness[mcp]" in _printed(["claude", "--dry-run"], capsys)
+    assert "silica-core[mcp]" in out
+    assert "[mcp_servers.silica-core]" in out
+    assert "silica-core[mcp]" in _printed(["claude", "--dry-run"], capsys)
     assert "[--dry-run]" in _printed(["nonsense"], capsys)
 
 
@@ -123,11 +123,11 @@ def test_unknown_client_is_an_error(tmp_path):
 
 def test_codex_block_outlives_a_cold_uvx(tmp_path):
     # Codex gives a stdio server 10 s to answer `initialize`; a first-run uvx
-    # resolve of silica-harness[mcp] takes longer than that on a cold cache.
+    # resolve of silica-core[mcp] takes longer than that on a cold cache.
     cfg = tmp_path / "config.toml"
     setup_client.run_setup(["codex", "--config", str(cfg)])
     parsed = tomllib.loads(cfg.read_text(encoding="utf-8"))
-    assert parsed["mcp_servers"]["silica"]["startup_timeout_sec"] == 60
+    assert parsed["mcp_servers"]["silica-core"]["startup_timeout_sec"] == 60
 
 
 def test_dsh_inserts_the_mcp_client_row(tmp_path):
@@ -135,10 +135,10 @@ def test_dsh_inserts_the_mcp_client_row(tmp_path):
     assert setup_client.run_setup(["dsh", "--config", str(cfg)]) == 0
     patches = yaml.safe_load(cfg.read_text(encoding="utf-8"))
     rows = [r for p in patches for r in p.get("insert", [])]
-    row = next(r for r in rows if r["id"] == "mcp-silica")
+    row = next(r for r in rows if r["id"] == "mcp-silica-core")
     assert row["name"] == "@deepseek-ai/dsh-mcp-client"
     c = row["config"]
-    assert (c["serverName"], c["transport"]) == ("silica", "stdio")
+    assert (c["serverName"], c["transport"]) == ("silica-core", "stdio")
     assert [c["command"], *c["args"]] == setup_client.MCP_COMMAND
 
 
@@ -184,4 +184,4 @@ def test_dry_run_installs_no_skill(tmp_path, monkeypatch):
 def test_from_spec_swaps_the_release_for_a_checkout(tmp_path, capsys):
     out = _printed(["codex", "--config", str(tmp_path / "config.toml"), "--dry-run", "--from", "/src/silica[mcp]"], capsys)
     assert '"--from", "/src/silica[mcp]", "silica", "mcp"' in out
-    assert "silica-harness[mcp]" in _printed(["codex", "--config", str(tmp_path / "c2.toml"), "--dry-run"], capsys)
+    assert "silica-core[mcp]" in _printed(["codex", "--config", str(tmp_path / "c2.toml"), "--dry-run"], capsys)

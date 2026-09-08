@@ -1,4 +1,4 @@
-# silica-agent has been renamed to silica-core
+# silica-harness has been renamed to silica-core
 
 This package exists only to redirect. Installing it installs
 [`silica-core`](https://pypi.org/project/silica-core/), which is where

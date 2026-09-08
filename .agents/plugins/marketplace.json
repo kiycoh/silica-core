@@ -1,11 +1,11 @@
 {
-  "name": "silica",
+  "name": "silica-core",
   "interface": {
-    "displayName": "Silica"
+    "displayName": "Silica Core"
   },
   "plugins": [
     {
-      "name": "silica",
+      "name": "silica-core",
       "source": {
         "source": "local",
         "path": "./"

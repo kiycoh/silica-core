@@ -10,4 +10,4 @@
 - [ ] Code, comments and UI copy are English-only
 - [ ] Conventional commits (`feat(scope): …`), one logical change each
 
-By opening this PR you accept the license and relicensing terms in [CONTRIBUTING.md](https://github.com/kiycoh/silica-harness/blob/main/CONTRIBUTING.md#license).
+By opening this PR you accept the license and relicensing terms in [CONTRIBUTING.md](https://github.com/kiycoh/silica-core/blob/main/CONTRIBUTING.md#license).

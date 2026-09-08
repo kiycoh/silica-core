@@ -95,6 +95,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("client", choices=["claude", "codex", "opencode", "dsh"])
     s.add_argument("--dry-run", action="store_true")
     s.add_argument("--from", dest="from_spec", default="", metavar="SPEC", help="what uvx installs instead of the release, e.g. '/path/to/checkout[mcp]'")
+    s.add_argument("--config", default="", help="client config file to write instead of the default (codex, opencode, dsh)")
 
     sub.add_parser("connect", help="bridge to the Obsidian desktop app")
 
@@ -166,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
                       "next": "silica setup <claude|codex|opencode|dsh> registers the MCP server"})
     if a.cmd == "setup":
         from silica.onboarding.setup_client import run_setup
-        return run_setup([a.client] + (["--dry-run"] if a.dry_run else []) + (["--from", a.from_spec] if a.from_spec else []))
+        return run_setup([a.client] + (["--dry-run"] if a.dry_run else []) + (["--from", a.from_spec] if a.from_spec else []) + (["--config", a.config] if a.config else []))
     if a.cmd == "connect":
         from silica.ui.connect import run_connect
         return run_connect()

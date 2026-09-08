@@ -29,7 +29,7 @@ def test_both_mcp_files_launch_a_bare_silica_mcp():
     for name, key in (("mcp.json", "mcpServers"), ("mcp.codex.json", "mcp_servers")):
         doc = json.loads((ROOT / name).read_text(encoding="utf-8"))
         assert set(doc) == {key}, name
-        srv = doc[key]["silica"]
+        srv = doc[key]["silica-core"]
         args = srv["args"]
         assert args[args.index("silica"):args.index("silica") + 2] == ["silica", "mcp"], name
         assert "env" not in srv  # vault = the folder the client opened, never a pin
@@ -37,7 +37,7 @@ def test_both_mcp_files_launch_a_bare_silica_mcp():
     # Codex is the install path setup_client also writes by hand, so those two
     # still have to be the same command, prefix-wise: a surface flag may follow.
     codex = json.loads((ROOT / "mcp.codex.json").read_text(encoding="utf-8"))
-    srv = codex["mcp_servers"]["silica"]
+    srv = codex["mcp_servers"]["silica-core"]
     assert [srv["command"], *srv["args"]][:len(MCP_COMMAND)] == MCP_COMMAND
 
 

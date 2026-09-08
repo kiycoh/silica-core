@@ -1,12 +1,12 @@
 {
-  "name": "silica",
+  "name": "silica-core",
   "description": "Silica for Claude Code: retrieval tools over the folder you work in, no model in the loop.",
   "owner": {
     "name": "Alessandro Carosia"
   },
   "plugins": [
     {
-      "name": "silica",
+      "name": "silica-core",
       "source": "./",
       "description": "files, search, read, code_pack, write_note over MCP; located evidence, never answers."
     }

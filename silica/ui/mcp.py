@@ -95,7 +95,7 @@ def make_server(extended: bool = False):
 
     tools = exposed_tools(extended)
     vault = str(getattr(CONFIG, "vault_path", "") or "").strip()
-    server = Server("silica", instructions=INSTRUCTIONS + (f" Root: {vault}" if vault else ""))
+    server = Server("silica-core", instructions=INSTRUCTIONS + (f" Root: {vault}" if vault else ""))
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -121,7 +121,7 @@ def run_mcp(extended: bool = False) -> int:
         import anyio
         from mcp.server.stdio import stdio_server
     except ImportError:
-        print("silica mcp needs the [mcp] extra: uv pip install 'silica-harness[mcp]'", file=sys.stderr)
+        print("silica mcp needs the [mcp] extra: uv pip install 'silica-core[mcp]'", file=sys.stderr)
         return 1
     server = make_server(extended)
     n = len(exposed_tools(extended))

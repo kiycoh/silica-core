@@ -40,7 +40,7 @@ your specific use case. It does not diminish any rights you have under the AGPL.
 
 ## Scope of coverage
 
-The commercial license covers the core Silica engine: the `silica-harness` package
+The commercial license covers the core Silica engine: the `silica-core` package
 and the contents of this repository. Third-party dependencies retain their respective
 licenses. Companion repositories (such as the Obsidian plugin) are governed by their
 own licensing terms.

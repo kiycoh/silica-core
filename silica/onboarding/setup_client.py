@@ -8,7 +8,7 @@ the shortest path from install to something useful. What stood between the two
 was hand-pasting a JSON or TOML block into a file whose location the user has to
 look up. This writes that block instead.
 
-Never clobbers: an existing silica entry is left alone (the user may have tuned
+Never clobbers: an existing silica-core entry is left alone (the user may have tuned
 it), the file is backed up before any write, and `--dry-run` prints what would
 change. A file that does not parse is refused rather than overwritten.
 """
@@ -29,13 +29,13 @@ import yaml
 # Everything this module prints carries a payload full of square brackets: the
 # `[mcp]` extra, TOML table headers, a parser error quoting a `]`. rich reads a
 # bracketed word as a style tag and drops it, which silently turned the printed
-# install command into `--from silica-harness` — a command that runs and installs
+# install command into `--from silica-core` — a command that runs and installs
 # the wrong thing. Every interpolated value goes through escape(), and the
 # config block (which has no styling of its own) prints with markup off.
 
 # What every client is told to run. uvx keeps the server at one command with no
 # install step of its own, which is the whole point of the generated block.
-MCP_COMMAND = ["uvx", "--from", "silica-harness[mcp]", "silica", "mcp"]
+MCP_COMMAND = ["uvx", "--from", "silica-core[mcp]", "silica", "mcp"]
 FROM_SPEC = MCP_COMMAND[2]  # `silica setup <client> --from SPEC` swaps the release for a checkout or a pin
 
 
@@ -57,7 +57,7 @@ def mcp_command() -> list[str]:
 CLIENTS = ("claude", "codex", "opencode", "dsh")
 
 # Codex gives a stdio server `startup_timeout_sec` (default 10) to answer
-# `initialize`. A cold `uvx` resolves and installs silica-harness[mcp] first,
+# `initialize`. A cold `uvx` resolves and installs silica-core[mcp] first,
 # which takes longer than that on a first run, and a server that misses the
 # window is simply absent for that session, with one line in a log nobody
 # reads.
@@ -123,7 +123,7 @@ def _codex_block() -> str:
     cmd = mcp_command()
     args = ", ".join(f'"{a}"' for a in cmd[1:])
     return (
-        "\n[mcp_servers.silica]\n"
+        "\n[mcp_servers.silica-core]\n"
         f'command = "{cmd[0]}"\n'
         f"args = [{args}]\n"
         f"startup_timeout_sec = {CODEX_STARTUP_TIMEOUT_SEC}\n"
@@ -146,8 +146,8 @@ def _setup_codex(path: Path, dry_run: bool) -> int:
         except tomllib.TOMLDecodeError as e:
             _say(f"  ✗ {escape(str(path))} is not valid TOML ({escape(str(e))}) — not touching it")
             return 1
-        if "silica" in parsed.get("mcp_servers", {}):
-            _say(f"  silica is already configured in {escape(str(path))} — nothing to do")
+        if "silica-core" in parsed.get("mcp_servers", {}):
+            _say(f"  silica-core is already configured in {escape(str(path))} — nothing to do")
             return 0
     block = _codex_block()
     if dry_run:
@@ -161,10 +161,10 @@ def _setup_codex(path: Path, dry_run: bool) -> int:
 
 def _dsh_row() -> dict:
     return {
-        "id": "mcp-silica",
+        "id": "mcp-silica-core",
         "name": "@deepseek-ai/dsh-mcp-client",
         "config": {
-            "serverName": "silica",
+            "serverName": "silica-core",
             "transport": "stdio",
             "command": mcp_command()[0],
             "args": mcp_command()[1:],
@@ -197,8 +197,8 @@ def _setup_dsh(path: Path, dry_run: bool) -> int:
             _say(f"  ✗ {escape(str(path))} is not a list of patches — not touching it")
             return 1
         rows = [r for p in patches if isinstance(p, dict) for r in p.get("insert") or [] if isinstance(r, dict)]
-        if any(r.get("id") == "mcp-silica" for r in rows):
-            _say(f"  silica is already configured in {escape(str(path))} — nothing to do")
+        if any(r.get("id") == "mcp-silica-core" for r in rows):
+            _say(f"  silica-core is already configured in {escape(str(path))} — nothing to do")
             return 0
     patches.append({"insert": [_dsh_row()]})
     block = yaml.safe_dump(patches, sort_keys=False, allow_unicode=True)
@@ -211,7 +211,7 @@ def _setup_dsh(path: Path, dry_run: bool) -> int:
 
 
 def _setup_opencode(path: Path, dry_run: bool) -> int:
-    """Merge the server into opencode.json under `mcp.silica`."""
+    """Merge the server into opencode.json under `mcp.silica-core`."""
     data: dict = {}
     if path.exists() and path.read_text(encoding="utf-8").strip():
         try:
@@ -222,11 +222,11 @@ def _setup_opencode(path: Path, dry_run: bool) -> int:
         if not isinstance(data, dict):
             _say(f"  ✗ {escape(str(path))} is not a JSON object — not touching it")
             return 1
-        if "silica" in data.get("mcp", {}):
-            _say(f"  silica is already configured in {escape(str(path))} — nothing to do")
+        if "silica-core" in data.get("mcp", {}):
+            _say(f"  silica-core is already configured in {escape(str(path))} — nothing to do")
             return 0
     entry: dict = {"type": "local", "command": mcp_command(), "enabled": True}
-    data.setdefault("mcp", {})["silica"] = entry
+    data.setdefault("mcp", {})["silica-core"] = entry
     block = json.dumps(data, indent=2) + "\n"
     if dry_run:
         return _report(path, block, True, None)
@@ -250,7 +250,7 @@ def _setup_claude(dry_run: bool) -> int:
     in each repo to say the same thing.
     """
     cmd = ["claude", "mcp", "add", "--scope", "user",
-           "--transport", "stdio", "silica", "--", *mcp_command()]
+           "--transport", "stdio", "silica-core", "--", *mcp_command()]
     printable = " ".join(cmd)
     if dry_run or not shutil.which("claude"):
         if not dry_run:
@@ -267,8 +267,8 @@ def _setup_claude(dry_run: bool) -> int:
     _say("  ✓ registered with Claude Code (user scope: every project, vault from its folder)")
     _say(
         "  for the skill and the session hooks too: "
-        "claude plugin marketplace add kiycoh/silica-harness && "
-        "claude plugin install silica@silica"
+        "claude plugin marketplace add kiycoh/silica-core && "
+        "claude plugin install silica-core@silica-core"
     )
     return 0
 

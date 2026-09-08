@@ -5,11 +5,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Question, or something behaving in a way you did not expect
-    url: https://github.com/kiycoh/silica-harness/discussions/categories/q-a
+    url: https://github.com/kiycoh/silica-core/discussions/categories/q-a
     about: Ask in Q&A. Faster than an issue when you are not yet sure it is a bug.
   - name: Idea, or a use case you want to talk through
-    url: https://github.com/kiycoh/silica-harness/discussions/categories/ideas
+    url: https://github.com/kiycoh/silica-core/discussions/categories/ideas
     about: For anything that is not yet a concrete feature request.
   - name: Security vulnerability
-    url: https://github.com/kiycoh/silica-harness/security/policy
+    url: https://github.com/kiycoh/silica-core/security/policy
     about: Never open a public issue for a security problem. Read the policy first.

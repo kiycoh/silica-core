@@ -45,7 +45,7 @@ def check_extras(config: Any) -> CheckResult:
     missing = [name for name, mod in (("mcp", "mcp"), ("connect", "websockets")) if importlib.util.find_spec(mod) is None]
     if missing:
         return CheckResult("extras", "warn", "not installed: " + ", ".join(missing),
-                           "pip install 'silica-harness[" + ",".join(missing) + "]'")
+                           "pip install 'silica-core[" + ",".join(missing) + "]'")
     return CheckResult("extras", "ok", "mcp, connect")
 
 

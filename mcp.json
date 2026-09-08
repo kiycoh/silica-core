@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "silica": {
+    "silica-core": {
       "command": "uv",
       "args": [
         "run",

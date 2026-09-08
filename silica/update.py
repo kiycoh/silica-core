@@ -22,7 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # repo root, or site-packages for a wheel
 
-PACKAGE = "silica-harness"  # PyPI distribution name ([project].name in pyproject.toml)
+PACKAGE = "silica-core"  # PyPI distribution name ([project].name in pyproject.toml)
 
 # behind_count()'s wheel-side cache: latest released version string, mtime =
 # last check. Lives next to the user .env so `uv tool upgrade` (which replaces

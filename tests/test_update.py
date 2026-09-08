@@ -122,22 +122,22 @@ def _wheel_root(tmp_path, monkeypatch, *parts):
 
 def test_wheel_uv_tool_names_uv_upgrade(tmp_path, monkeypatch, capsys):
     import silica
-    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-harness")
+    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-core")
     monkeypatch.setattr(silica, "__version__", "1.0.0")
     monkeypatch.setattr(upd, "_pypi_latest", lambda: "999.0.0")
     assert upd.update() == 1
     out = capsys.readouterr().out
     assert "999.0.0" in out
-    assert "uv tool upgrade silica-harness" in out
+    assert "uv tool upgrade silica-core" in out
 
 
 def test_wheel_pipx_names_pipx_upgrade(tmp_path, monkeypatch, capsys):
     import silica
-    _wheel_root(tmp_path, monkeypatch, "pipx", "venvs", "silica-harness")
+    _wheel_root(tmp_path, monkeypatch, "pipx", "venvs", "silica-core")
     monkeypatch.setattr(silica, "__version__", "1.0.0")
     monkeypatch.setattr(upd, "_pypi_latest", lambda: "999.0.0")
     assert upd.update() == 1
-    assert "pipx upgrade silica-harness" in capsys.readouterr().out
+    assert "pipx upgrade silica-core" in capsys.readouterr().out
 
 
 def test_wheel_plain_pip_names_pip_upgrade(tmp_path, monkeypatch, capsys):
@@ -146,12 +146,12 @@ def test_wheel_plain_pip_names_pip_upgrade(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(silica, "__version__", "1.0.0")
     monkeypatch.setattr(upd, "_pypi_latest", lambda: "999.0.0")
     assert upd.update() == 1
-    assert "pip install -U silica-harness" in capsys.readouterr().out
+    assert "pip install -U silica-core" in capsys.readouterr().out
 
 
 def test_wheel_up_to_date(tmp_path, monkeypatch, capsys):
     import silica
-    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-harness")
+    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-core")
     monkeypatch.setattr(silica, "__version__", "1.0.0")
     monkeypatch.setattr(upd, "_pypi_latest", lambda: "1.0.0")
     assert upd.update() == 0
@@ -160,7 +160,7 @@ def test_wheel_up_to_date(tmp_path, monkeypatch, capsys):
 
 def test_wheel_check_only_reports_without_failing(tmp_path, monkeypatch, capsys):
     import silica
-    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-harness")
+    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-core")
     monkeypatch.setattr(silica, "__version__", "1.0.0")
     monkeypatch.setattr(upd, "_pypi_latest", lambda: "999.0.0")
     assert upd.update(check_only=True) == 0
@@ -170,7 +170,7 @@ def test_wheel_check_only_reports_without_failing(tmp_path, monkeypatch, capsys)
 def test_wheel_pypi_unreachable(tmp_path, monkeypatch, capsys):
     def _boom():
         raise OSError("no network")
-    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-harness")
+    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-core")
     monkeypatch.setattr(upd, "_pypi_latest", _boom)
     assert upd.update() == 1
     assert "pypi" in capsys.readouterr().out.lower()
@@ -185,7 +185,7 @@ def test_pypi_version_compare_is_numeric():
 
 def test_behind_count_wheel_uses_cache(tmp_path, monkeypatch):
     import silica
-    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-harness")
+    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-core")
     monkeypatch.setattr(silica, "__version__", "1.0.0")
     cache = tmp_path / "pypi-latest"
     monkeypatch.setattr(upd, "CACHE", cache)
@@ -196,7 +196,7 @@ def test_behind_count_wheel_uses_cache(tmp_path, monkeypatch):
 
 
 def test_behind_count_wheel_no_cache_is_quiet(tmp_path, monkeypatch):
-    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-harness")
+    _wheel_root(tmp_path, monkeypatch, "uv", "tools", "silica-core")
     monkeypatch.setattr(upd, "CACHE", tmp_path / "absent")
     monkeypatch.setattr(upd, "_refresh_pypi_cache", lambda: None)  # no network in tests
     assert upd.behind_count() == 0

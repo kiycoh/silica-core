@@ -7,7 +7,7 @@ WORKDIR /src
 COPY . .
 # The escape hatch for a context without .git (see .dockerignore): declared
 # so setuptools-scm can read it as an env var during the wheel build.
-ARG SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SILICA_HARNESS
+ARG SETUPTOOLS_SCM_PRETEND_VERSION_FOR_SILICA_CORE
 RUN pip wheel --no-deps --no-cache-dir . -w /wheels
 
 FROM python:3.11-slim
@@ -20,10 +20,10 @@ FROM python:3.11-slim
 ENV HOME=/data \
     PYTHONUNBUFFERED=1
 COPY --from=build /wheels /wheels
-# --find-links without --no-index: the local wheel wins for silica-harness
+# --find-links without --no-index: the local wheel wins for silica-core
 # itself, every dependency still resolves from PyPI. Installing by name (rather
 # than by wheel path) is what lets the extras be named here.
-RUN pip install --no-cache-dir --find-links=/wheels "silica-harness[mcp]" \
+RUN pip install --no-cache-dir --find-links=/wheels "silica-core[mcp]" \
  && rm -rf /wheels \
  && mkdir -p /data /vault
 # Not installed: git, ffmpeg, soffice, whisper-cli, yt-dlp, mineru. Every one is

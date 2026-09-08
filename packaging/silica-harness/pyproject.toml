@@ -1,9 +1,8 @@
-# The redirect for the oldest distribution name. `silica-agent` shipped 0.4.0
-# and 0.4.1 before the project was renamed to `silica-harness` (2026-08-23),
-# and `silica-harness` shipped up to 0.6.1 before the public core was renamed
+# The redirect for the previous distribution name. `silica-harness` shipped
+# 0.5.0 to 0.6.1 before the public core was renamed
 # to `silica-core` (2026-09-08). PyPI has no forwarding: without this,
-# `pip install -U silica-agent` keeps resolving to 0.4.1 forever and never
-# says why. packaging/silica-harness is the same shim for the middle name.
+# `pip install -U silica-harness` keeps resolving to 0.6.1 forever and never
+# says why. packaging/silica-agent is the same shim for the oldest name.
 #
 # Deliberately NOT deleted from PyPI instead. Deleting frees the name for
 # anyone to register, and a package that reads the user's files is worth
@@ -11,14 +10,14 @@
 #
 # No modules of its own: the wheel is metadata plus the console script, which
 # resolves against the `silica` package that `silica-core` installs. That
-# keeps `uv tool install silica-agent` and `pipx install silica-agent` working
+# keeps `uv tool install silica-harness` and `pipx install silica-harness` working
 # rather than leaving them with a tool that has no executable.
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "silica-agent"
+name = "silica-harness"
 version = "0.7.0"
 description = "Renamed to silica-core. This package installs it."
 readme = "README.md"
@@ -33,7 +32,7 @@ classifiers = [
   "Topic :: Text Processing",
 ]
 # `>=` and not `==`: one shim release has to keep redirecting to every version
-# that follows it, so `uv tool upgrade silica-agent` re-resolves to the current
+# that follows it, so `uv tool upgrade silica-harness` re-resolves to the current
 # silica-core instead of pinning whatever was newest the day this shipped.
 # 0.6.2 is the lowest version the new name can carry (setuptools-scm counts
 # from the last silica-harness tag), whatever the first silica-core tag is.

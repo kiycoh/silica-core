@@ -10,7 +10,7 @@ version_file = "silica/_version.py"
 fallback_version = "0.0.0"
 
 [project]
-name = "silica-harness"
+name = "silica-core"
 dynamic = ["version"]
 description = "Retrieval tools for coding agents: files, search, read, code_pack, write_note over a folder, no model in the loop"
 readme = "README.md"
@@ -52,15 +52,15 @@ dependencies = [
 dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0", "ruff>=0.16"]
 connect = ["websockets>=16.0"]
 mcp = ["mcp>=1.0,<2"]
-all = ["silica-harness[connect,mcp]"]
+all = ["silica-core[connect,mcp]"]
 
 [project.scripts]
 silica = "silica.entry:main"
 
 [project.urls]
-Homepage = "https://github.com/kiycoh/silica-harness"
-Repository = "https://github.com/kiycoh/silica-harness"
-Issues = "https://github.com/kiycoh/silica-harness/issues"
+Homepage = "https://github.com/kiycoh/silica-core"
+Repository = "https://github.com/kiycoh/silica-core"
+Issues = "https://github.com/kiycoh/silica-core/issues"
 
 [tool.setuptools]
 # skills/ is a non-package subdir of silica (the harness skill the setup

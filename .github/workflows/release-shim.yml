@@ -1,32 +1,39 @@
 name: release-shim
 
-# Publishes `silica-agent`, the redirect to `silica-harness` (see
-# packaging/silica-agent/pyproject.toml for why the old name is kept alive
-# rather than deleted).
+# Publishes one of the redirect distributions: `silica-agent` (the 2026-08-23
+# rename) or `silica-harness` (the 2026-09-08 rename), both pointing at
+# `silica-core` (see packaging/*/pyproject.toml for why the old names are kept
+# alive rather than deleted).
 #
-# Manual, not tag-driven: the shim's job is to point at a moving target, so one
-# release keeps working for every silica-harness that follows it. Run this only
-# when the shim's own metadata changes, which should be close to never.
+# Manual, not tag-driven: a shim's job is to point at a moving target, so one
+# release keeps working for every silica-core that follows it. Run this only
+# when a shim's own metadata changes, which should be close to never.
 on:
   workflow_dispatch:
+    inputs:
+      shim:
+        description: which redirect to publish
+        required: true
+        type: choice
+        options: [silica-harness, silica-agent]
 
 permissions: {}
 
 concurrency:
-  group: release-shim
+  group: release-shim-${{ inputs.shim }}
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    # Same environment as release.yml, so PyPI's trusted publisher for
-    # silica-agent narrows to it the same way. NOTE: that publisher must name
-    # THIS repository (kiycoh/silica-harness) and this workflow file — the one
-    # configured before the 2026-08-23 rename points at kiycoh/silica-agent and
-    # cannot match the OIDC claim.
+    # Same environment as release.yml, so PyPI's trusted publisher for the shim
+    # narrows to it the same way. NOTE: that publisher must name THIS
+    # repository (kiycoh/silica-core) and this workflow file — a publisher
+    # configured before a rename points at the old repository name and cannot
+    # match the OIDC claim.
     environment:
       name: pypi
-      url: https://pypi.org/p/silica-agent
+      url: https://pypi.org/p/${{ inputs.shim }}
     permissions:
       id-token: write   # OIDC for PyPI Trusted Publishing (no stored token)
     steps:
@@ -41,7 +48,7 @@ jobs:
       # finds there.
       - name: Build the shim
         run: uv build --out-dir "$GITHUB_WORKSPACE/shim-dist" && rm -f "$GITHUB_WORKSPACE/shim-dist/.gitignore"
-        working-directory: packaging/silica-agent
+        working-directory: packaging/${{ inputs.shim }}
 
       # The only thing this distribution does is resolve to another one and
       # keep the `silica` command working, so that is what gets checked before
@@ -51,7 +58,7 @@ jobs:
         run: |
           uv venv /tmp/shim-check
           VIRTUAL_ENV=/tmp/shim-check uv pip install "$GITHUB_WORKSPACE"/shim-dist/*.whl
-          VIRTUAL_ENV=/tmp/shim-check uv pip show silica-harness > /dev/null
+          VIRTUAL_ENV=/tmp/shim-check uv pip show silica-core > /dev/null
           /tmp/shim-check/bin/silica --version
 
       - name: Publish to PyPI

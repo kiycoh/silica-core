@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/kiycoh/silica-harness/main/assets/banner-light.svg" />
-    <img src="https://raw.githubusercontent.com/kiycoh/silica-harness/main/assets/banner.svg" alt="Silica" width="440" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/banner-light.svg" />
+    <img src="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/banner.svg" alt="Silica" width="440" />
   </picture>
 </p>
 
@@ -30,7 +30,7 @@ network.
 ## Install
 
 ```bash
-uv tool install 'silica-harness[mcp]'    # or: pipx install 'silica-harness[mcp]'
+uv tool install 'silica-core[mcp]'    # or: pipx install 'silica-core[mcp]'
 silica setup claude                      # or: codex, opencode, dsh
 ```
 
@@ -121,7 +121,7 @@ private product this core is cut from keeps those lanes.
 ## Development
 
 ```bash
-git clone https://github.com/kiycoh/silica-harness.git && cd silica-harness
+git clone https://github.com/kiycoh/silica-core.git && cd silica-core
 uv sync --extra dev --extra mcp
 uv run pytest -q
 SILICA_BENCH_CORPUS=/path/to/markdown uv run pytest tests/test_retrieval_check.py -s   # the acceptance check

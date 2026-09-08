@@ -5,12 +5,12 @@ description: Search a folder of documents or code with located evidence instead 
 
 # Silica: located evidence, no model
 
-The `silica` MCP server indexes the folder the session was opened in and
+The `silica-core` MCP server indexes the folder the session was opened in and
 serves five tools named `silica_*`. If they are deferred, load them with
 ToolSearch. If they are missing, say so and give the install line:
 
 ```bash
-uv tool install 'silica-harness[mcp]' && silica setup claude   # or codex, opencode, dsh
+uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, opencode, dsh
 ```
 
 ## The loop
