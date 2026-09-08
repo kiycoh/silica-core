@@ -5,7 +5,6 @@
 !pyproject.toml
 !README.md
 !LICENSE
-!LICENSE-COMMERCIAL.md
 !silica/
 # setuptools-scm reads it in the build stage to derive the version; without it
 # the wheel installs as pyproject's fallback_version, 0.0.0, and the image can no

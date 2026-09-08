@@ -15,7 +15,7 @@ dynamic = ["version"]
 description = "Retrieval tools for coding agents: files, search, read, code_pack, write_note over a folder, no model in the loop"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "AGPL-3.0-or-later"
+license = "MIT"
 authors = [{ name = "Alessandro Carosia" }]
 classifiers = [
   "Environment :: Console",

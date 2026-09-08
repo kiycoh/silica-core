@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Alessandro Carosia
 
 """codepack - deterministic context pack for one source file (spec-code-recall).

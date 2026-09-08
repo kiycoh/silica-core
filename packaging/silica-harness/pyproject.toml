@@ -22,7 +22,7 @@ version = "0.7.0"
 description = "Renamed to silica-core. This package installs it."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "AGPL-3.0-or-later"
+license = "MIT"
 authors = [{ name = "Alessandro Carosia" }]
 keywords = ["retrieval", "search", "bm25", "mcp", "agents"]
 classifiers = [

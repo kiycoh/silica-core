@@ -169,5 +169,4 @@ uv run lint-imports && uv run mypy silica && uv run ruff check silica tests
 
 ## License
 
-AGPL-3.0-or-later. A commercial licence is available, see
-[LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md).
+MIT. See [LICENSE](LICENSE).

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Alessandro Carosia
 
 """`silica setup <client>` — wire the MCP server into a coding agent's config.

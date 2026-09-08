@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Alessandro Carosia
 
 """codeast.c — C/C++ skeleton walker, one walker on both grammars.

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """A conversion child must not outlive the process that spawned it.
 
 mineru holds the GPU for minutes per book. subprocess.run reaps it on timeout
