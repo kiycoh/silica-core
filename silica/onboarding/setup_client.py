@@ -36,6 +36,11 @@ import yaml
 # What every client is told to run. uvx keeps the server at one command with no
 # install step of its own, which is the whole point of the generated block.
 MCP_COMMAND = ["uvx", "--from", "silica-harness[mcp]", "silica", "mcp"]
+FROM_SPEC = MCP_COMMAND[2]  # `silica setup <client> --from SPEC` swaps the release for a checkout or a pin
+
+
+def mcp_command() -> list[str]:
+    return [MCP_COMMAND[0], "--from", FROM_SPEC, *MCP_COMMAND[3:]]
 
 # No SILICA_VAULT in the generated block, deliberately. Claude Code, Codex and
 # opencode are CLIs launched from a project and spawn the stdio server with
@@ -115,10 +120,11 @@ def _report(path: Path, block: str, dry_run: bool, backup: Path | None) -> int:
 
 
 def _codex_block() -> str:
-    args = ", ".join(f'"{a}"' for a in MCP_COMMAND[1:])
+    cmd = mcp_command()
+    args = ", ".join(f'"{a}"' for a in cmd[1:])
     return (
         "\n[mcp_servers.silica]\n"
-        f'command = "{MCP_COMMAND[0]}"\n'
+        f'command = "{cmd[0]}"\n'
         f"args = [{args}]\n"
         f"startup_timeout_sec = {CODEX_STARTUP_TIMEOUT_SEC}\n"
     )
@@ -160,8 +166,8 @@ def _dsh_row() -> dict:
         "config": {
             "serverName": "silica",
             "transport": "stdio",
-            "command": MCP_COMMAND[0],
-            "args": MCP_COMMAND[1:],
+            "command": mcp_command()[0],
+            "args": mcp_command()[1:],
         },
     }
 
@@ -219,7 +225,7 @@ def _setup_opencode(path: Path, dry_run: bool) -> int:
         if "silica" in data.get("mcp", {}):
             _say(f"  silica is already configured in {escape(str(path))} — nothing to do")
             return 0
-    entry: dict = {"type": "local", "command": MCP_COMMAND, "enabled": True}
+    entry: dict = {"type": "local", "command": mcp_command(), "enabled": True}
     data.setdefault("mcp", {})["silica"] = entry
     block = json.dumps(data, indent=2) + "\n"
     if dry_run:
@@ -244,7 +250,7 @@ def _setup_claude(dry_run: bool) -> int:
     in each repo to say the same thing.
     """
     cmd = ["claude", "mcp", "add", "--scope", "user",
-           "--transport", "stdio", "silica", "--", *MCP_COMMAND]
+           "--transport", "stdio", "silica", "--", *mcp_command()]
     printable = " ".join(cmd)
     if dry_run or not shutil.which("claude"):
         if not dry_run:
@@ -272,9 +278,13 @@ def run_setup(args: list[str]) -> int:
     positional = [a for a in args if not a.startswith("-")]
     client = positional[0] if positional else ""
     if client not in CLIENTS:
-        _say(f"  Usage: silica setup <{'|'.join(CLIENTS)}> [--dry-run] [--config PATH]", markup=False)
+        _say(f"  Usage: silica setup <{'|'.join(CLIENTS)}> [--dry-run] [--config PATH] [--from SPEC]", markup=False)
         return 1
     dry_run = "--dry-run" in args
+    global FROM_SPEC
+    FROM_SPEC = next((a.split("=", 1)[1] for a in args if a.startswith("--from=")), MCP_COMMAND[2])
+    if "--from" in args and args.index("--from") + 1 < len(args):
+        FROM_SPEC = args[args.index("--from") + 1]
     if client == "claude":
         return _setup_claude(dry_run)
     override = next((a.split("=", 1)[1] for a in args if a.startswith("--config=")), "")

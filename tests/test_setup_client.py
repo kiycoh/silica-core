@@ -179,3 +179,9 @@ def test_dry_run_installs_no_skill(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     setup_client.run_setup(["codex", "--config", str(tmp_path / "config.toml"), "--dry-run"])
     assert not (tmp_path / ".agents").exists()
+
+
+def test_from_spec_swaps_the_release_for_a_checkout(tmp_path, capsys):
+    out = _printed(["codex", "--config", str(tmp_path / "config.toml"), "--dry-run", "--from", "/src/silica[mcp]"], capsys)
+    assert '"--from", "/src/silica[mcp]", "silica", "mcp"' in out
+    assert "silica-harness[mcp]" in _printed(["codex", "--config", str(tmp_path / "c2.toml"), "--dry-run"], capsys)

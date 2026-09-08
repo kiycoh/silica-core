@@ -19,7 +19,7 @@ from pydantic import Field
 
 from silica.config import CONFIG
 from silica.kernel.recall import paths as _paths
-from silica.kernel.recall.lexical import _tokens, get_lexical_store
+from silica.kernel.recall.lexical import TOKENIZER_VERSION, _tokens, get_lexical_store
 from silica.kernel.recall.rerank import _query_terms, best_window_spans
 from silica.tools import tool
 
@@ -84,10 +84,14 @@ def _meta_path() -> Path:
 
 
 def _load_meta() -> dict:
+    """The stamps file; an index built by another tokenizer reads as never built."""
     try:
-        return orjson.loads(_meta_path().read_bytes())
+        meta = orjson.loads(_meta_path().read_bytes())
     except (OSError, ValueError):
-        return {"built_at": None, "stamps": {}}
+        meta = {}
+    if meta.get("tokenizer") != TOKENIZER_VERSION:
+        return {"built_at": None, "stamps": {}, "tokenizer": TOKENIZER_VERSION}
+    return meta
 
 
 def _failures() -> dict[str, str]:
@@ -129,9 +133,9 @@ def _mtime(rel: str) -> float | None:
 
 def index_state(meta: dict | None = None) -> dict:
     """{state: cold|stale|ready, docs, built_at}. `cold` = never built."""
-    if not _paths.index_file("lexical").is_file() or not _meta_path().is_file():
-        return {"state": "cold", "docs": 0, "built_at": None}
     meta = meta or _load_meta()
+    if not _paths.index_file("lexical").is_file() or not meta.get("built_at"):
+        return {"state": "cold", "docs": 0, "built_at": None}
     stamps = meta.get("stamps", {})
     live = _note_paths()
     stale = any(stamps.get(r) != _mtime(r) for r in live) or bool(set(stamps) - set(live))
@@ -142,9 +146,11 @@ def build_index(rebuild: bool = False, embed: bool = False) -> dict:
     """Build or refresh the document index. Incremental by mtime; `rebuild`
     re-reads everything. Never raises for one unreadable file: it lands in
     `failed` and in the failures file `silica_files` reports from."""
-    rebuild = rebuild or not _meta_path().is_file()
+    meta = _load_meta()
+    rebuild = rebuild or not meta.get("built_at")
+    if rebuild:
+        meta = {"built_at": None, "stamps": {}, "tokenizer": TOKENIZER_VERSION}
     store = get_lexical_store()
-    meta = {"built_at": None, "stamps": {}} if rebuild else _load_meta()
     stamps: dict[str, float] = meta["stamps"]
     root = _root()
     live = _note_paths()

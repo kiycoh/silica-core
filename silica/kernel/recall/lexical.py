@@ -11,6 +11,7 @@ Scores are raw BM25: comparable within one call, never a probability.
 from __future__ import annotations
 
 import math
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -28,15 +29,47 @@ def _index_path() -> Path:
     return paths.index_file("lexical")
 
 
+# Function words only, the size of NLTK's lists (179 English, ~150 Italian):
+# articles, pronouns, prepositions, conjunctions, auxiliaries, a few adverbs.
+# The stop-words package lists 1333 English words and dropped "world",
+# "system", "number" and "first" from the index; Lucene's 33 keep "does",
+# "over" and "versus", which BM25 then matches in every paper. Neither is
+# the right size for a corpus index.
+STOPWORDS = frozenset("""
+i me my myself we our ours ourselves you your yours yourself yourselves he him
+his himself she her hers herself it its itself they them their theirs themselves
+what which who whom this that these those am is are was were be been being have
+has had having do does did doing a an the and but if or because as until while
+of at by for with about against between into through during before after above
+below to from up down in out on off over under again further then once here
+there when where why how all any both each few more most other some such no nor
+not only own same so than too very s t can will just don should now d ll m o re
+ve y ain aren couldn didn doesn hadn hasn haven isn ma mightn mustn needn shan
+shouldn wasn weren won wouldn versus via etc
+io me mi mio mia miei mie tu te ti tuo tua tuoi tue lui lei sé si suo sua suoi
+sue noi ci nostro nostra nostri nostre voi vi vostro vostra vostri vostre loro
+essi esse esso essa questo questa questi queste quello quella quelli quelle ciò
+che chi cui il lo la i gli le un uno una di a da in con su per tra fra del
+dello della dei degli delle al allo alla ai agli alle dal dallo dalla dai dagli
+dalle nel nello nella nei negli nelle sul sullo sulla sui sugli sulle e ed o ma
+se anche non né come dove quando perché mentre oppure sia ancora già più meno
+molto poco tutto tutti tutta tutte ogni qualche alcuni alcune altro altra altri
+altre stesso stessa stessi stesse sono sei è siamo siete era eri eravamo erano
+essere stato stata stati state ho hai ha abbiamo avete hanno aveva avevano avere
+avuto fa fanno fare fatto può possono qui qua lì là così poi
+""".split())
+TOKENIZER_VERSION = 4  # bumped when the token stream changes; the index rebuilds
+
+
+_WORD = re.compile(r"[^\W_]+")
+
+
 def _tokens(text: str) -> list[str]:
-    """Tokens for lexical matching — reuse the C1 text seam, surface (unstemmed)
-    so proper nouns and dates match verbatim."""
-    from silica.kernel.text.text import tokens
-    from silica.config import CONFIG
-    out: list[str] = []
-    for sentence in tokens(text, lang=CONFIG.lang, stem=False):
-        out.extend(surface for _stem, surface in sentence)
-    return out
+    """Lowercased words and alphanumerics ("bm25", "gpt4", "2026" stay whole),
+    at least two characters, function words removed. No stemming: proper
+    nouns and dates match verbatim; no language detection: nothing here
+    depends on it."""
+    return [w for w in _WORD.findall(text.lower()) if len(w) >= 2 and w not in STOPWORDS]
 
 
 class LexicalStore(DiskSynced):

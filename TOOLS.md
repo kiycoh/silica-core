@@ -175,7 +175,8 @@ optional REPL, converters beyond the built-in PDF text layer.
 3. The retrieval check `tests/test_retrieval_check.py` passes on that
    corpus (it skips when `SILICA_BENCH_CORPUS` is unset): the granularity
    question returns the granularity paper's section 5 as a hit; the
-   reranking question's top document is the reranking-tradeoffs paper; the
+   reranking question has the reranking-tradeoffs paper among its top five
+   documents; the
    borrow-checker question's top hit has `coverage` below 0.5 and no hit
    matches both `borrow` and `checker`.
 4. `silica_read` with a stale `expect_version` returns `error.changed`.
