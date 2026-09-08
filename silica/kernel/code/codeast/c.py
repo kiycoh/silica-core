@@ -33,7 +33,7 @@ _DOC_TAKERS = {"function_definition", "declaration", "type_definition"} | _TYPE_
 def extract(root, src: bytes, path: str, language: str) -> ModuleSkeleton:
     imports: list[str] = []
     symbols: dict[tuple[str, str, str], Symbol] = {}
-    calls: dict[tuple[str, str], None] = {}
+    calls: dict[tuple[str, str], int] = {}
     # _walk fills this in place, so it is a heterogeneous scratch dict; the two
     # reads below coerce at the boundary rather than trusting the inference.
     state: dict[str, Any] = {"main": False, "module_doc": None}
@@ -42,7 +42,7 @@ def extract(root, src: bytes, path: str, language: str) -> ModuleSkeleton:
         path=path, language=language, imports=imports,
         symbols=list(symbols.values()),
         module_doc=str(state["module_doc"] or ""),
-        calls=[Call(name=k[0], parent=k[1]) for k in calls],
+        calls=[Call(name=k[0], parent=k[1], line=v) for k, v in calls.items()],
         has_main_guard=bool(state["main"]),
     )
 
@@ -80,7 +80,8 @@ def _walk(container, src: bytes, imports, symbols, calls, state) -> None:
                 full = _comments_text(_split_doc(pending, src)[1], src)
                 _add(symbols, Symbol(kind="class", name=_text(decl, src),
                                      signature=_sig(node, src),
-                                     doc=_first_line(full), doc_full=full))
+                                     doc=_first_line(full), doc_full=full,
+                                     line=node.start_point[0] + 1, end_line=node.end_point[0] + 1))
         pending = []
 
 
@@ -166,7 +167,8 @@ def _function(node, src: bytes, symbols, calls, state, doc_comments,
         return  # operator overloads, destructors: outside the skeleton
     full = _comments_text(doc_comments, src)
     _add(symbols, Symbol(kind=kind, name=name, signature=_sig(node, src),
-                         doc=_first_line(full), doc_full=full, parent=parent))
+                         doc=_first_line(full), doc_full=full, parent=parent,
+                         line=node.start_point[0] + 1, end_line=node.end_point[0] + 1))
     if is_def:
         body = node.child_by_field_name("body")
         if body is not None:
@@ -184,7 +186,8 @@ def _type_spec(node, src: bytes, symbols, calls, state, doc_comments,
     name = _text(name_node, src)
     full = _comments_text(doc_comments, src)
     _add(symbols, Symbol(kind="class", name=name, signature=_sig(node, src),
-                         doc=_first_line(full), doc_full=full, parent=parent))
+                         doc=_first_line(full), doc_full=full, parent=parent,
+                         line=node.start_point[0] + 1, end_line=node.end_point[0] + 1))
     pending: list = []
     for i in range(body.named_child_count):
         child = body.named_child(i)
@@ -210,6 +213,6 @@ def _collect_calls(node, src: bytes, out: dict, parent: str) -> None:
         if fn is not None:
             text = _text(fn, src).replace("::", ".")
             if _CALL_NAME.match(text):
-                out[(text, parent)] = None
+                out.setdefault((text, parent), node.start_point[0] + 1)
     for i in range(node.named_child_count):
         _collect_calls(node.named_child(i), src, out, parent)

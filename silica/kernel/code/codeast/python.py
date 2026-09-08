@@ -129,7 +129,7 @@ def _py_calls(root, src: bytes) -> list[Call]:
     """Every call site's spelled name, tagged with its top-level container.
     Only grammar-clean names (identifier / dotted attribute) are kept:
     `f().g(...)` and subscripted receivers are skipped by the regex."""
-    out: dict[tuple[str, str], None] = {}
+    out: dict[tuple[str, str], int] = {}
 
     def walk(node, parent: str) -> None:
         if node.type == "call":
@@ -137,7 +137,7 @@ def _py_calls(root, src: bytes) -> list[Call]:
             if fn is not None:
                 text = _text(fn, src)
                 if _CALL_NAME.match(text):
-                    out[(text, parent)] = None
+                    out.setdefault((text, parent), node.start_point[0] + 1)
         for i in range(node.named_child_count):
             walk(node.named_child(i), parent)
 
@@ -151,7 +151,7 @@ def _py_calls(root, src: bytes) -> list[Call]:
             n = target.child_by_field_name("name")
             name = _text(n, src) if n is not None else ""
         walk(node, name)
-    return [Call(name=k[0], parent=k[1]) for k in out]
+    return [Call(name=k[0], parent=k[1], line=v) for k, v in out.items()]
 
 
 def _py_deferred_imports(root, src: bytes, aliases: dict[str, str]) -> list[str]:
@@ -221,16 +221,21 @@ def _py_constant(node, src: bytes, symbols: list[Symbol]) -> None:
     if len(value) > _CONST_VALUE_CAP:
         value = value[:_CONST_VALUE_CAP] + " ..."
     symbols.append(Symbol(kind="constant", name=name,
-                          signature=f"{name} = {value}" if value else name))
+                          signature=f"{name} = {value}" if value else name,
+                          line=node.start_point[0] + 1, end_line=node.end_point[0] + 1))
 
 
 def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
                 decorators: list[str] | None = None,
-                aliases: dict[str, str] | None = None) -> None:
+                aliases: dict[str, str] | None = None,
+                first_line: int = 0) -> None:
     if node.type == "decorated_definition":
         inner = node.child_by_field_name("definition")
         if inner is not None:
-            _py_extract(inner, src, imports, symbols, _py_decorators(node, src), aliases)
+            # the declaration starts at its first decorator: a diff hunk or a
+            # traceback that lands on `@route(...)` still names the function
+            _py_extract(inner, src, imports, symbols, _py_decorators(node, src), aliases,
+                        first_line=node.start_point[0] + 1)
         return
     if node.type == "import_statement":
         for i in range(node.named_child_count):
@@ -283,6 +288,7 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
             doc=_py_docstring(node, src),
             doc_full=_py_docstring_full(node, src),
             decorators=decorators or [],
+            line=first_line or node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
         return
     if node.type == "class_definition":
@@ -295,6 +301,7 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
             doc=_py_docstring(node, src),
             doc_full=_py_docstring_full(node, src),
             decorators=decorators or [],
+            line=first_line or node.start_point[0] + 1, end_line=node.end_point[0] + 1,
         ))
         body = node.child_by_field_name("body")
         for i in range(body.named_child_count if body is not None else 0):
@@ -314,4 +321,5 @@ def _py_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
                     doc_full=_py_docstring_full(target, src),
                     parent=cls_name,
                     decorators=method_decos,
+                    line=child.start_point[0] + 1, end_line=target.end_point[0] + 1,
                 ))

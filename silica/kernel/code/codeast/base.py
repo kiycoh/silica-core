@@ -59,12 +59,15 @@ class Symbol:
     parent: str = "" # enclosing class name for methods
     doc_full: str = ""  # whole docstring, per-line stripped ("" when absent)
     decorators: list[str] = field(default_factory=list)  # names, '@' and call args stripped
+    line: int = 0      # first line of the declaration, decorators included (1-based; 0 = unknown)
+    end_line: int = 0  # last line of the declaration, inclusive
 
 
 @dataclass(frozen=True)
 class Call:
     name: str    # called name as written, dotted allowed ("x.f")
     parent: str  # enclosing top-level symbol ("" at module level)
+    line: int = 0  # the call site's line (1-based; 0 = unknown); the first one when deduped
 
 
 @dataclass(frozen=True)

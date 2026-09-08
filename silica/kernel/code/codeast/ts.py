@@ -92,7 +92,7 @@ def _export_names(node, src: bytes, aliases: dict[str, str] | None,
 
 def _calls(root, src: bytes) -> list[Call]:
     """Every call site's spelled name, tagged with its top-level container."""
-    out: dict[tuple[str, str], None] = {}
+    out: dict[tuple[str, str], int] = {}
 
     def walk(node, parent: str) -> None:
         if node.type in ("call_expression", "new_expression"):
@@ -101,7 +101,7 @@ def _calls(root, src: bytes) -> list[Call]:
             if fn is not None:
                 text = _text(fn, src)
                 if _CALL_NAME.match(text):
-                    out[(text, parent)] = None
+                    out.setdefault((text, parent), node.start_point[0] + 1)
         for i in range(node.named_child_count):
             walk(node.named_child(i), parent)
 
@@ -123,7 +123,7 @@ def _calls(root, src: bytes) -> list[Call]:
                     name = _text(n, src) if n is not None else ""
                     break
         walk(node, name)
-    return [Call(name=k[0], parent=k[1]) for k in out]
+    return [Call(name=k[0], parent=k[1], line=v) for k, v in out.items()]
 
 
 def _module_docs(root, src: bytes) -> tuple[str, list[str]]:
@@ -163,6 +163,7 @@ def _class_members(node, src: bytes, cls_name: str, symbols: list[Symbol]) -> No
             name=_text(mname, src) if mname is not None else "?",
             signature=_signature(child, src),
             doc=_first_line(doc), doc_full=doc, parent=cls_name,
+            line=child.start_point[0] + 1, end_line=child.end_point[0] + 1,
         ))
 
 
@@ -197,6 +198,9 @@ def _ts_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
                 _import_names(node, src, aliases, module)
         return
     doc = _doc(doc_node if doc_node is not None else node, src)
+    # an `export` statement wraps the declaration: the symbol starts there
+    first = (doc_node if doc_node is not None else node).start_point[0] + 1
+    last = node.end_point[0] + 1
     if node.type == "function_declaration":
         name = node.child_by_field_name("name")
         symbols.append(Symbol(
@@ -204,6 +208,7 @@ def _ts_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
             name=_text(name, src) if name is not None else "?",
             signature=_signature(node, src),
             doc=_first_line(doc), doc_full=doc,
+            line=first, end_line=last,
         ))
         return
     if node.type == "lexical_declaration":
@@ -224,6 +229,7 @@ def _ts_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
                 name=_text(name, src),
                 signature=_signature(dec, src) if is_fn else _text(name, src),
                 doc=_first_line(doc), doc_full=doc,
+                line=first, end_line=last,
             ))
         return
     if node.type in ("class_declaration", "abstract_class_declaration"):
@@ -231,7 +237,8 @@ def _ts_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
         cls_name = _text(name_node, src) if name_node is not None else "?"
         symbols.append(Symbol(kind="class", name=cls_name,
                               signature=_signature(node, src),
-                              doc=_first_line(doc), doc_full=doc))
+                              doc=_first_line(doc), doc_full=doc,
+                              line=first, end_line=last))
         _class_members(node, src, cls_name, symbols)
         return
     if node.type in ("interface_declaration", "type_alias_declaration",
@@ -242,6 +249,7 @@ def _ts_extract(node, src: bytes, imports: list[str], symbols: list[Symbol],
             name=_text(name_node, src) if name_node is not None else "?",
             signature=_signature(node, src).split("=")[0].strip(),
             doc=_first_line(doc), doc_full=doc,
+            line=first, end_line=last,
         ))
         return
 

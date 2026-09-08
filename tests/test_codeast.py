@@ -719,3 +719,20 @@ def test_c_and_java_module_doc_drop_licence_noise():
     assert c.module_doc == "Ring buffer for the audio path."
     j = extract_skeleton(JAVA_NOISY_SRC, "java", path="Tokens.java")
     assert j.module_doc == "Session token minting."
+
+
+def test_symbols_carry_line_ranges_in_every_family():
+    py = {s.name: s for s in extract_skeleton(PY_SRC, "python", path="m.py").symbols}
+    lines = PY_SRC.splitlines()
+    assert py["hi"].line == lines.index("def hi(name: str) -> str:") + 1
+    assert py["hi"].end_line == lines.index('    return f"hi {name}"') + 1
+    assert py["FSM"].line == lines.index("class FSM:") + 1 and py["FSM"].end_line == len(lines)
+    assert py["run"].line == lines.index("    def run(self, files: list[str]) -> None:") + 1
+    deco = {s.name: s for s in extract_skeleton(PY_DECORATED, "python", path="c.py").symbols}
+    assert deco["Config"].line == PY_DECORATED.splitlines().index("@dataclass") + 1
+    assert deco["load"].line == PY_DECORATED.splitlines().index("    @staticmethod") + 1
+    ts = {s.name: s for s in extract_skeleton(TS_SRC, "typescript", path="a.ts").symbols}
+    assert ts["greet"].line == TS_SRC.splitlines().index("export function greet(name: string): string {") + 1
+    assert ts["run"].parent == "Machine" and ts["run"].line == TS_SRC.splitlines().index("  run(files: string[]): void {") + 1
+    calls = extract_skeleton("def a():\n    x = 1\n    b()\n    b()\n", "python", path="m.py").calls
+    assert [(c.name, c.parent, c.line) for c in calls] == [("b", "a", 3)]  # the first site of a deduped call

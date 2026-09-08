@@ -152,7 +152,7 @@ def classify_import(
 # store — derived index at paths.index_dir()/codegraph.json
 # ---------------------------------------------------------------------------
 
-STORE_VERSION = 4   # v4: TS re-exports resolve; C/Java module_doc loses licence noise
+STORE_VERSION = 5   # v5: symbols carry line/end_line, call edges carry the call site's line
 
 
 def store_path() -> Path:
@@ -212,7 +212,7 @@ def _resolve_calls(sk, rel: str, files: AbstractSet[str], root: Path,
     # call_edges() silently under-reported.
     local_defs = {s.name for s in sk.symbols
                   if s.kind in ("function", "class") and not s.parent}
-    edges: dict[tuple[str, str, str], None] = {}
+    edges: dict[tuple[str, str, str], int] = {}  # -> first call site's line
     for call in sk.calls:
         name = call.name
         head = name.split(".", 1)[0]
@@ -249,13 +249,14 @@ def _resolve_calls(sk, rel: str, files: AbstractSet[str], root: Path,
                         target, callee = value, name
                         break
         if target and target != rel:
-            edges[(target, callee or "", call.parent)] = None
+            edges.setdefault((target, callee or "", call.parent), call.line)
         elif target is None and "." not in name and name in local_defs:
             # Self-edge. Cross-file consumers (codewiki's call_in/call_out and
             # call_adjacency) already drop src == tgt, so this only reaches the
             # queries that want it.
-            edges[(rel, name, call.parent)] = None
-    return [{"target": t, "callee": ce, "caller": ca} for (t, ce, ca) in sorted(edges)]
+            edges.setdefault((rel, name, call.parent), call.line)
+    return [{"target": t, "callee": ce, "caller": ca, "line": edges[(t, ce, ca)]}
+            for (t, ce, ca) in sorted(edges)]
 
 
 def _resolve_calls_ts(sk, rel: str, files: AbstractSet[str], root: Path,
@@ -269,18 +270,19 @@ def _resolve_calls_ts(sk, rel: str, files: AbstractSet[str], root: Path,
     # was missing from the graph.
     local_defs = {s.name for s in sk.symbols
                   if s.kind in ("function", "class") and not s.parent}
-    edges: dict[tuple[str, str, str], None] = {}
+    edges: dict[tuple[str, str, str], int] = {}
     for call in sk.calls:
         head, _, rest = call.name.partition(".")
         module = sk.import_aliases.get(head)
         if not module:
             if not rest and head in local_defs:
-                edges[(rel, head, call.parent)] = None
+                edges.setdefault((rel, head, call.parent), call.line)
             continue
         kind, value = classify_import(module, rel, files, language, root)
         if kind == "resolved" and value != rel:
-            edges[(value, rest or head, call.parent)] = None
-    return [{"target": t, "callee": c, "caller": p} for (t, c, p) in sorted(edges)]
+            edges.setdefault((value, rest or head, call.parent), call.line)
+    return [{"target": t, "callee": c, "caller": p, "line": edges[(t, c, p)]}
+            for (t, c, p) in sorted(edges)]
 
 
 def _reexports(sk, rel: str, files: AbstractSet[str], root: Path,
@@ -316,7 +318,7 @@ _EMPTY_V2: dict[str, Any] = {"module_doc": "", "module_comments": [], "dunder_al
              "has_main_guard": False, "calls": [], "deferred": [], "reexports": []}
 
 
-def _file_entry(root: Path, rel: str, files: AbstractSet[str]) -> tuple[dict, list[tuple[str, str]]]:
+def _file_entry(root: Path, rel: str, files: AbstractSet[str]) -> tuple[dict, list[tuple[str, str, int]]]:
     """One store entry, plus the raw (name, parent) call sites for C/C++ —
     those resolve later in build_codegraph's include join, once every file's
     symbols exist."""
@@ -380,7 +382,7 @@ def _file_entry(root: Path, rel: str, files: AbstractSet[str]) -> tuple[dict, li
         "symbols": [
             {"kind": s.kind, "name": s.name, "parent": s.parent,
              "signature": s.signature, "doc": s.doc, "doc_full": s.doc_full,
-             "decorators": s.decorators}
+             "decorators": s.decorators, "line": s.line, "end_line": s.end_line}
             for s in sk.symbols
         ],
         "module_doc": sk.module_doc,
@@ -395,32 +397,33 @@ def _file_entry(root: Path, rel: str, files: AbstractSet[str]) -> tuple[dict, li
                   if language in ("typescript", "javascript") else []),
         "parse_error": sk.parse_error,
     }
-    raw_calls = ([(c.name, c.parent) for c in sk.calls]
+    raw_calls = ([(c.name, c.parent, c.line) for c in sk.calls]
                  if language in ("c", "cpp") else [])
     return entry, raw_calls
 
 
-def _join_c_calls(rel: str, raw: list[tuple[str, str]], entries: dict[str, dict]) -> list[dict]:
+def _join_c_calls(rel: str, raw: list[tuple[str, str, int]], entries: dict[str, dict]) -> list[dict]:
     """C/C++ call edges: includes carry no names, so the import-scoped matcher
     cannot attach calls. Instead, an edge exists when a spelled callee is
     among the symbols of a directly included, resolved file.
     # ponytail: direct includes only, no transitivity; deepen if real repos read thin
     """
-    edges: dict[tuple[str, str, str], None] = {}
+    edges: dict[tuple[str, str, str], int] = {}
     for target in entries[rel].get("imports", []):
         names = {s["name"] for s in entries.get(target, {}).get("symbols", [])}
-        for name, parent in raw:
+        for name, parent, line in raw:
             callee = name.rsplit(".", 1)[-1]
             if callee in names and target != rel:
-                edges[(target, callee, parent)] = None
+                edges.setdefault((target, callee, parent), line)
     # A file is not among its own includes, so the loop above can never see a
     # callee defined here: same-file edges need the file's own symbols.
     own = {s["name"] for s in entries[rel].get("symbols", [])}
-    for name, parent in raw:
+    for name, parent, line in raw:
         callee = name.rsplit(".", 1)[-1]
         if callee in own:
-            edges[(rel, callee, parent)] = None
-    return [{"target": t, "callee": c, "caller": p} for (t, c, p) in sorted(edges)]
+            edges.setdefault((rel, callee, parent), line)
+    return [{"target": t, "callee": c, "caller": p, "line": edges[(t, c, p)]}
+            for (t, c, p) in sorted(edges)]
 
 
 def build_codegraph(root: Path) -> CodeGraph:
@@ -431,7 +434,7 @@ def build_codegraph(root: Path) -> CodeGraph:
     current = supported_files(root)
     files = set(current)
     entries: dict[str, dict] = {}
-    c_raw: dict[str, list[tuple[str, str]]] = {}
+    c_raw: dict[str, list[tuple[str, str, int]]] = {}
     for rel in current:
         entry, raw_calls = _file_entry(root, rel, files)
         entries[rel] = entry

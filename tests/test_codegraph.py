@@ -76,6 +76,11 @@ import subprocess
 from silica.kernel.code import codegraph
 
 
+def _bare(edges):
+    """(target, callee, caller) without the call site's line."""
+    return [{k: e[k] for k in ("target", "callee", "caller")} for e in edges]
+
+
 def _init_repo(path: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=path, check=True)
     subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=path, check=True)
@@ -215,15 +220,15 @@ def test_call_edges_resolved_bare_dotted_alias(tmp_path):
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True)
     graph = build_codegraph(root)
     edges = graph.files["pkg/app.py"]["calls"]
-    assert {"target": "pkg/util.py", "callee": "helper", "caller": "main"} in edges
-    assert {"target": "pkg/alias_target.py", "callee": "go", "caller": "main"} in edges
+    assert {"target": "pkg/util.py", "callee": "helper", "caller": "main"} in _bare(edges)
+    assert {"target": "pkg/alias_target.py", "callee": "go", "caller": "main"} in _bare(edges)
     # bare helper() and util.helper() dedupe to one edge
     assert len([e for e in edges if e["target"] == "pkg/util.py"]) == 1
     # external (os.path.join) never becomes an edge
     assert all(e["target"].startswith("pkg/") for e in edges)
     assert not any(e["callee"] == "join" for e in edges)
     # local() IS an edge: defined in this same file, so it is first-party
-    assert {"target": "pkg/app.py", "callee": "local", "caller": "main"} in edges
+    assert {"target": "pkg/app.py", "callee": "local", "caller": "main"} in _bare(edges)
     assert ("pkg/app.py", "pkg/util.py", "helper", "main") in graph.call_edges()
 
 
@@ -296,7 +301,7 @@ def test_java_build_import_and_call_edges(tmp_path):
     assert app["external"] == ["org.springframework"]
     assert app["has_main_guard"] is True
     assert {"target": "src/main/java/com/ex/util/Helper.java",
-            "callee": "assist", "caller": "App"} in app["calls"]
+            "callee": "assist", "caller": "App"} in _bare(app["calls"])
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +350,7 @@ def test_c_call_edge_through_direct_resolved_include(tmp_path):
     assert main["imports"] == ["util/helper.h"]
     assert main["external"] == ["stdio.h"]
     # graph-level join: assist is a symbol of the directly included helper.h
-    assert {"target": "util/helper.h", "callee": "assist", "caller": "main"} in main["calls"]
+    assert {"target": "util/helper.h", "callee": "assist", "caller": "main"} in _bare(main["calls"])
     # printf never becomes an edge (no resolved include carries it)
     assert all(e["callee"] != "printf" for e in main["calls"])
 
@@ -380,7 +385,7 @@ def test_call_edge_survives_external_import_shadowing(tmp_path):
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp_path, check=True)
     graph = build_codegraph(tmp_path)
     edges = graph.files["app.py"]["calls"]
-    assert {"target": "pkg/yamlmod.py", "callee": "load", "caller": "main"} in edges
+    assert {"target": "pkg/yamlmod.py", "callee": "load", "caller": "main"} in _bare(edges)
 
 
 def test_ts_reexport_resolves_to_its_source(tmp_path):
@@ -417,3 +422,21 @@ def test_structureless_graph_is_never_persisted_and_never_served(tmp_path, monke
     store.unlink()
     assert codegraph.load_codegraph(tmp_path) is not None
     assert not store.exists()  # a structureless build is served, never written
+
+
+def test_symbols_and_call_edges_carry_lines(tmp_path):
+    """A traceback or a diff hunk names a line; the store must map it to a
+    symbol and to the call sites without reparsing the file."""
+    _init_repo(tmp_path)
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "util.py").write_text("def helper():\n    pass\n", encoding="utf-8")
+    src = "from pkg.util import helper\n\n\n@dec\ndef main():\n    x = 1\n    helper()\n    helper()\n"
+    (tmp_path / "app.py").write_text(src, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp_path, check=True)
+    g = codegraph.build_codegraph(tmp_path)
+    main = next(s for s in g.files["app.py"]["symbols"] if s["name"] == "main")
+    assert (main["line"], main["end_line"]) == (4, 8), main  # from the decorator to the last body line
+    edge = next(e for e in g.files["app.py"]["calls"] if e["callee"] == "helper")
+    assert edge["line"] == 7, edge  # the first call site when two dedupe to one edge

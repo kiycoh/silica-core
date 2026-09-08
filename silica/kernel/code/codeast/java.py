@@ -30,7 +30,7 @@ def extract(root, src: bytes, path: str, language: str) -> ModuleSkeleton:
     imports: list[str] = []
     aliases: dict[str, str] = {}
     symbols: list[Symbol] = []
-    calls: dict[tuple[str, str], None] = {}
+    calls: dict[tuple[str, str], int] = {}
     has_main = False
 
     module_doc = ""
@@ -69,7 +69,7 @@ def extract(root, src: bytes, path: str, language: str) -> ModuleSkeleton:
     return ModuleSkeleton(
         path=path, language=language, imports=imports, symbols=symbols,
         module_doc=module_doc,
-        calls=[Call(name=k[0], parent=k[1]) for k in calls],
+        calls=[Call(name=k[0], parent=k[1], line=v) for k, v in calls.items()],
         import_aliases=aliases, has_main_guard=has_main,
     )
 
@@ -143,6 +143,7 @@ def _type_decl(node, src: bytes, symbols: list[Symbol], comment, parent: str) ->
         kind="class", name=name, signature=_signature(node, src),
         doc=doc, doc_full=doc_full, parent=parent,
         decorators=_annotations(node, src),
+        line=node.start_point[0] + 1, end_line=node.end_point[0] + 1,
     ))
     has_main = False
     body = node.child_by_field_name("body")
@@ -162,6 +163,7 @@ def _type_decl(node, src: bytes, symbols: list[Symbol], comment, parent: str) ->
                 kind="method", name=mname, signature=_signature(child, src),
                 doc=mdoc, doc_full=mdoc_full, parent=name,
                 decorators=_annotations(child, src),
+                line=child.start_point[0] + 1, end_line=child.end_point[0] + 1,
             ))
             if mname == "main" and _is_static_void(child, src):
                 has_main = True
@@ -171,7 +173,7 @@ def _type_decl(node, src: bytes, symbols: list[Symbol], comment, parent: str) ->
     return has_main
 
 
-def _collect_calls(node, src: bytes, out: dict[tuple[str, str], None], parent: str) -> None:
+def _collect_calls(node, src: bytes, out: dict[tuple[str, str], int], parent: str) -> None:
     kind = node.type
     if kind == "method_invocation":
         obj = node.child_by_field_name("object")
@@ -179,12 +181,12 @@ def _collect_calls(node, src: bytes, out: dict[tuple[str, str], None], parent: s
         text = ((_text(obj, src) + ".") if obj is not None else "")
         text += _text(name, src) if name is not None else ""
         if text and _CALL_NAME.match(text):
-            out[(text, parent)] = None
+            out.setdefault((text, parent), node.start_point[0] + 1)
     elif kind == "object_creation_expression":
         typ = node.child_by_field_name("type")
         if typ is not None:
             text = _text(typ, src)
             if _CALL_NAME.match(text):
-                out[(text, parent)] = None
+                out.setdefault((text, parent), node.start_point[0] + 1)
     for i in range(node.named_child_count):
         _collect_calls(node.named_child(i), src, out, parent)
