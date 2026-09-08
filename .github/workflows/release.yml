@@ -1,8 +1,14 @@
 name: release
 
-# Cut a release by pushing a SemVer tag, e.g.:
-#   git tag v0.3.0 && git push origin v0.3.0
+# Cut a release by bumping the plugin manifests, then pushing a SemVer tag:
+#   v=0.7.2
+#   sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$v\"/" \
+#     .claude-plugin/plugin.json .codex-plugin/plugin.json
+#   git commit -am "chore(plugin): both manifests declare $v"
+#   git tag "v$v" && git push origin main "v$v"
 # setuptools-scm reads the tag to stamp the version; git-cliff builds the notes.
+# The manifests stay hand-bumped because a harness reads them from the commit,
+# never from this run: the first step below refuses to ship when they drift.
 
 on:
   push:
@@ -36,6 +42,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # full history + tags for setuptools-scm and git-cliff
+
+      # v0.7.0 and v0.7.1 both shipped with the manifests still declaring 0.6.1,
+      # so every plugin install stayed pinned to the 0.6.1 tree: the cache is
+      # keyed on that string and saw no reason to refresh. Cheapest step in the
+      # job, and first, so the drift costs ten seconds instead of a burned
+      # version number.
+      - name: Verify the plugin manifests match the tag
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          for m in .claude-plugin/plugin.json .codex-plugin/plugin.json; do
+            got=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "$m")
+            [ "$got" = "$want" ] || { echo "$m declares $got, tag is $want"; exit 1; }
+          done
 
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
