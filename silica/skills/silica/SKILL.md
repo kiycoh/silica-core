@@ -24,8 +24,12 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, opencode
    corpus never contains; `coverage` is the share of the query's rare-term
    mass a hit carries. A discriminating term in `terms_absent`, or a top
    `coverage` under about 0.5, means the corpus does not answer: stop or
-   rephrase, do not read the hits into an answer. `index.state = cold`
-   means nothing was indexed yet; the first search builds the index.
+   rephrase, do not read the hits into an answer. `scope` counts what the
+   search could see: `unconverted` or `failed` above zero means a relevant
+   document may never rank, so check `silica_files(status=…)` before
+   calling absence; with a `folder`, `terms_absent_in_scope` is the zero of
+   that folder, not of the corpus. `index.state = cold` means nothing was
+   indexed yet; the first search builds the index.
 3. **Read before you cite.** `silica_read(path, section=…)` or
    `(path, start, end)` serves the slice with the outline and a `version`.
    Cite path and line. Every hit carries the same `version`: pass it as

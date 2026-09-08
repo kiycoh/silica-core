@@ -165,3 +165,18 @@ def test_hit_version_guards_the_read(root):
     assert got["version"] == hit["version"] and "compaction" in got["text"].lower()
     (root._root() / hit["path"]).write_text("# LSM trees\n\nrewritten\n", encoding="utf-8")
     assert root.read(hit["path"], expect_version=hit["version"])["error"]["code"] == "changed"
+
+
+def test_scope_reports_what_the_search_could_see(root):
+    """The scan the index could not read counts under the folder it sits in,
+    and a term the corpus holds elsewhere is absent from the folder only."""
+    r = root.search("compaction memtable", folder="docs")
+    assert r["scope"] == {"folder": "docs", "docs": 2, "unconverted": 1, "failed": 0}
+    assert r["terms_absent"] == [] and r["terms_absent_in_scope"] == []
+    (root._root() / "notes").mkdir()
+    (root._root() / "notes" / "x.md").write_text("# Notes\n\nabout pages\n", encoding="utf-8")
+    r = root.search("compaction pages", folder="notes")
+    assert r["scope"]["docs"] == 1 and r["scope"]["unconverted"] == 0
+    assert r["terms_absent"] == [] and r["terms_absent_in_scope"] == ["compaction"]
+    whole = root.search("compaction pages")
+    assert "terms_absent_in_scope" not in whole and whole["scope"]["docs"] == 3

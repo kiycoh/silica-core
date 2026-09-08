@@ -69,7 +69,17 @@ for each hit, the `width`-character window densest in idf-weighted query
 terms, with its line number.
 
 Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window}],
-documents: [{path, score, matched_terms}], candidates, terms_absent, index}`.
+documents: [{path, score, matched_terms}], candidates, terms_absent,
+terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
+
+- `scope` says what the search could see: the documents indexed under
+  `folder` (the whole root when empty) and how many files there the index
+  read but found no text in (`unconverted`) or could not read (`failed`). A
+  relevant document among those never ranks; `silica_files(status=…)` names
+  them. `terms_absent` is always corpus-wide. With a `folder`,
+  `terms_absent_in_scope` lists the query terms the corpus holds but nowhere
+  under that folder, so a zero there is a zero of the scope, not of the
+  corpus.
 
 - `version` is the content hash `silica_read` checks: carried into
   `expect_version`, a file edited between the search and the read is refused

@@ -441,12 +441,23 @@ def silica_search(
     idf_absent = math.log(1 + (len(store) + 0.5) / 0.5)
     mass = (sum(known.values()) + idf_absent * len(absent)) or 1.0
     docs = store.bm25(query)
+    scope = ""
     if folder.strip():
         try:
             scope = _rel(folder)
         except ValueError as e:
             return _error("out_of_root", str(e))
         docs = [d for d in docs if _paths.in_folder(d[0], scope)]
+    # What the search could see: a relevant document among the unconverted or
+    # the failed never ranks, and a term the corpus holds may still be absent
+    # from the folder. `in_folder` with an empty folder is the whole root.
+    meta = _load_meta()
+    visible = {"folder": scope,
+               "docs": sum(1 for p in store.paths() if _paths.in_folder(p, scope)),
+               "unconverted": sum(1 for p in meta.get("no_text", {}) if _paths.in_folder(p, scope)),
+               "failed": sum(1 for p in _failures() if _paths.in_folder(p, scope))}
+    absent_in_scope = sorted(t for t in known
+                             if not any(_paths.in_folder(p, scope) for p in store.paths_with(t)))
     top = docs[: max(k * 3, 10)]
     dense: dict[str, float] = {}
     if hybrid:
@@ -514,6 +525,8 @@ def silica_search(
                            **({"dense": round(dense[p], 3)} if p in dense else {})} for p, sc, m in top],
             "candidates": len(docs),
             "terms_absent": absent,
+            **({"terms_absent_in_scope": absent_in_scope} if scope else {}),
+            "scope": visible,
             "index": index_state()}
 
 

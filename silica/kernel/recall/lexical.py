@@ -208,6 +208,10 @@ class LexicalStore(DiskSynced):
     def paths(self) -> list[str]:
         return list(self._docs)
 
+    def paths_with(self, term: str) -> list[str]:
+        """Documents that contain `term`; empty when it occurs nowhere."""
+        return list(self._postings.get(term, {}))
+
     def query_idf(self, terms: set[str]) -> dict[str, float]:
         """BM25 idf per KNOWN term, for the query-density window scan
         (rerank.best_window_spans). Terms with df=0 are omitted, not given
