@@ -26,7 +26,7 @@ from datetime import datetime
 from fnmatch import fnmatch
 from pathlib import Path
 
-from silica.config import CONFIG
+from silica.config import CONFIG, SILICA_HOME
 
 try:  # POSIX only; see index_lock for what Windows gives up.
     import fcntl
@@ -254,7 +254,9 @@ def is_source_leaf(path: str) -> bool:
 # Silica runtime directory helpers
 # ---------------------------------------------------------------------------
 
-_SILICA_HOME = Path.home() / ".silica"
+# The root every runtime directory below hangs off, SILICA_HOME included.
+# Stays a module global because conftest rebinds it to a tmp dir per test.
+_SILICA_HOME = SILICA_HOME
 
 
 def silica_tmp_dir() -> Path:

@@ -4,6 +4,8 @@
 """Silica configuration: the root, the converters, the optional embeddings.
 
 Read from the environment first, then `~/.silica/.env`, then the defaults.
+`SILICA_HOME` moves that whole runtime directory, and like `SILICA_VAULT` it
+is read from the shell alone — a file cannot say where it itself lives.
 `SILICA_VAULT` is honoured only when exported in the shell: in the user
 file it is ignored with a warning, because Silica serves the folder it is
 started in and a pinned root belongs to the invocation, not to a file.
@@ -19,7 +21,25 @@ from dotenv import dotenv_values
 
 from silica import SHELL_ENV, VAULT_PINNED  # noqa: F401 — re-exported
 
-USER_ENV = Path.home() / ".silica" / ".env"
+
+def _silica_home() -> Path:
+    """`~/.silica` unless SILICA_HOME overrides it: the runtime directory that
+    holds `.env`, `index/`, `tmp/` and `inbox/`.
+
+    Read from the real environment only, never from a .env file — the variable
+    that says where the config lives cannot itself live in the config, the same
+    rule SILICA_VAULT already follows. What it buys is a second root on one
+    machine: running this distribution against a clean home while another tree
+    keeps its own `~/.silica`, so neither inherits the other's model, keys or
+    index. Renaming the directory outright would have done none of that and
+    invalidated every installed user's index.
+    """
+    override = os.environ.get("SILICA_HOME", "").strip()
+    return Path(os.path.expanduser(override)) if override else Path.home() / ".silica"
+
+
+SILICA_HOME = _silica_home()
+USER_ENV = SILICA_HOME / ".env"
 
 
 def load_user_env(path: Path) -> None:
