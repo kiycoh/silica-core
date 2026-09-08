@@ -76,7 +76,11 @@ documents: [{path, score, matched_terms}], candidates, terms_absent, index}`.
 - `matched_terms` lists the distinct query terms present in that hit.
 - `coverage` is the share of the query's idf mass that the hit's matched
   terms carry, from 0 to 1. A hit that matches every rare term is near 1; a
-  hit that matches only the common words is near 0.
+  hit that matches only the common words is near 0. A term in `terms_absent`
+  counts at the idf BM25 gives a term with document frequency zero, the
+  heaviest in the corpus, so a query whose rare words are all absent reads
+  low even when its one surviving word matches (measured on the test corpus:
+  0.31 with the absent terms ignored, 0.13 with them weighed).
 - `terms_absent` lists the query terms that occur nowhere in the corpus.
 - Read `coverage` down the hits, one entry per distinct path, and the shape
   says how many documents are in contention. Measured on the test corpus,

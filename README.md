@@ -98,6 +98,8 @@ ranked list always has a top. What tells the two apart:
 
 - `coverage`: the share of the query's idf mass the hit's matched terms
   carry. Near 1, every rare term matched; near 0, only the common words did.
+  A term absent from the whole corpus still weighs in, at the idf of a term
+  found nowhere, so absence pulls coverage down instead of vanishing from it.
 - `terms_absent`: query terms that occur nowhere in the corpus.
 - `matched_terms`: which words this hit actually contains.
 

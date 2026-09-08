@@ -77,3 +77,9 @@ def test_stale_version_is_refused(corpus):
     v = corpus.read(path, end=1)["version"]
     assert corpus.read(path, expect_version="0" * 12)["error"]["code"] == "changed"
     assert corpus.read(path, expect_version=v)["version"] == v
+
+
+def test_absent_terms_pull_the_top_hit_down(corpus):
+    r = corpus.search("kubernetes ingress controller nginx annotations")
+    assert r["terms_absent"], "the control query needs words the corpus never contains"
+    assert r["hits"] and r["hits"][0]["coverage"] < 0.5, r["hits"][0]

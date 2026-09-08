@@ -146,3 +146,12 @@ def test_hybrid_adds_a_dense_only_document(root, monkeypatch):
     dense_only = [h for h in r["hits"] if h["path"] == "docs/btree.md"]
     assert dense_only and dense_only[0]["dense"] > 0.9 and dense_only[0]["matched_terms"] == []
     assert dense_only[0]["coverage"] == 0 and dense_only[0]["line"] == 1
+
+
+def test_absent_terms_weigh_on_coverage(root):
+    """Three rare words the corpus never contains and one common word it
+    does: the hit still comes back, and coverage says how little it covers."""
+    r = root.search("zebra giraffe okapi compaction")
+    assert r["terms_absent"] == ["giraffe", "okapi", "zebra"]
+    assert r["hits"] and r["hits"][0]["matched_terms"] == ["compaction"]
+    assert r["hits"][0]["coverage"] < 0.5, r["hits"][0]

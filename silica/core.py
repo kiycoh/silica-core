@@ -7,6 +7,7 @@ calls a model; the root is the folder Silica was started in (or --vault)."""
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 import time
@@ -415,9 +416,10 @@ def silica_search(
     document; each hit carries its densest `width`-char window and line.
     `score` is raw BM25 (comparable within one call only). `matched_terms`
     are the query terms in the hit; `coverage` is the share of the query's
-    idf mass they carry (near 1 = every rare term matched, near 0 = only the
-    common words); `terms_absent` are query terms found nowhere in the
-    corpus. No boolean "no answer" exists: read coverage and matched_terms
+    idf mass they carry, absent terms included at the weight of a term found
+    nowhere (near 1 = every rare term matched, near 0 = only the common
+    words); `terms_absent` are query terms found nowhere in the corpus. No
+    boolean "no answer" exists: read coverage and matched_terms
     and decide to stop or rephrase. Builds the index on first use."""
     if hybrid:
         from silica import embeddings
@@ -431,7 +433,13 @@ def silica_search(
     store = get_lexical_store()
     idf = store.idf(set(_tokens(query)))
     known = {t: v for t, v in idf.items() if v is not None}
-    mass = sum(known.values()) or 1.0
+    absent = sorted(t for t, v in idf.items() if v is None)
+    # A term found nowhere weighs what BM25 gives a term at df=0, the heaviest
+    # in the corpus, so a query whose rare words are all absent reads low even
+    # when its one surviving word matches: measured 2026-09-08, "kubernetes
+    # ingress controller nginx annotations" read coverage 1.0 on "annotations".
+    idf_absent = math.log(1 + (len(store) + 0.5) / 0.5)
+    mass = (sum(known.values()) + idf_absent * len(absent)) or 1.0
     docs = store.bm25(query)
     if folder.strip():
         try:
@@ -503,7 +511,7 @@ def silica_search(
             "documents": [{"path": p, "score": round(sc, 2), "matched_terms": sorted(m),
                            **({"dense": round(dense[p], 3)} if p in dense else {})} for p, sc, m in top],
             "candidates": len(docs),
-            "terms_absent": sorted(t for t, v in idf.items() if v is None),
+            "terms_absent": absent,
             "index": index_state()}
 
 
