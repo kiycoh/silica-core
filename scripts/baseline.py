@@ -71,8 +71,13 @@ TASKS = [
                  "occurs nowhere", "absent term"]]},
     {"id": "C2", "cwd": REPO, "kind": "code",
      "prompt": "List every call site of the function `best_window_spans` as path:line.",
-     "all_of": ["core.py:518", "rerank.py:132", "test_recall_windows.py:25",
-                "test_recall_windows.py:30"]},
+     # the call sites are read from the tree at start: an edit above one of
+     # them moved core.py's from 518 to 523 between two runs on 2026-09-09
+     "all_of": [f"{f}:{n}" for f, n in (
+         (f, i) for f in ("silica/core.py", "silica/kernel/recall/rerank.py", "tests/test_recall_windows.py")
+         for i, line in enumerate((REPO / f).read_text().splitlines(), 1)
+         if "best_window_spans(" in line and not line.lstrip().startswith(("def ", "from ", "import ")))]
+     },
     {"id": "C3", "cwd": REPO, "kind": "code",
      "prompt": "What does `silica_code_pack` do when a `#L<line>` target points at a line "
                "outside every declaration? Cite the code that decides it.",
@@ -90,9 +95,11 @@ TASKS = [
      "prompt": "Is there a paper that measures whether reranking BM25 first-stage candidates "
                "with a cross-encoder or an LLM reranker improves retrieval? Name it and give "
                "one number it reports.",
+     # any paper in the corpus that reranks BM25 candidates and reports a number
      "any_of": [["rerank-before-you-reason", "2601.14224", "rankzephyr", "2312.02724",
                  "rankvicuna", "2309.15088", "2003.06713", "monot5", "mono-t5",
-                 "document-ranking-with-a-pretrained"]],
+                 "document-ranking-with-a-pretrained", "rankgpt", "2304.09542",
+                 "is-chatgpt-good-at-search"]],
      "digits": True},
     {"id": "D3", "cwd": PAPERS, "kind": "docs",
      "prompt": "What do these papers say about Rust's borrow checker and lifetime errors?",
