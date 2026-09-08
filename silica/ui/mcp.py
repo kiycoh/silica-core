@@ -58,11 +58,14 @@ INSTRUCTIONS = (
     "Silica indexes the folder this server was started in and returns located "
     "evidence, never answers. silica_search gives ranked passages with path, "
     "section, line, matched_terms, coverage and terms_absent: low coverage or a "
-    "discriminating term in terms_absent means the corpus does not answer, so stop "
-    "or rephrase instead of reading the hits. Read a passage with silica_read "
-    "before citing it and carry its version forward. silica_files says what the "
-    "index skipped or could not read; an empty result under index.state=cold is "
-    "not a miss. Nothing is summarised or remembered for you."
+    "discriminating term in terms_absent means the corpus does not answer in these "
+    "words, so rephrase once with the corpus's own vocabulary, keeping names, "
+    "numbers and identifiers, then stop instead of reading the hits; many "
+    "candidates with coverage flat down the hits means the query is too broad, so "
+    "narrow it. Read a passage with silica_read before citing it and carry the "
+    "hit's version forward. silica_files says what the index skipped or could not "
+    "read; an empty result under index.state=cold is not a miss. Nothing is "
+    "summarised or remembered for you."
 )
 
 

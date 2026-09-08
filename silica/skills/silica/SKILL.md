@@ -23,8 +23,12 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, opencode
 2. **Read the reply before the hits.** `terms_absent` lists query words the
    corpus never contains; `coverage` is the share of the query's rare-term
    mass a hit carries. A discriminating term in `terms_absent`, or a top
-   `coverage` under about 0.5, means the corpus does not answer: stop or
-   rephrase, do not read the hits into an answer. `scope` counts what the
+   `coverage` under about 0.5, means the corpus does not answer in these
+   words: rephrase once with the corpus's vocabulary, keeping names,
+   numbers and identifiers as they are, and if the second reply reads the
+   same, stop; do not read the hits into an answer. A large `candidates`
+   with `coverage` flat down the hits means the query is too broad: narrow
+   it with rarer words or a `folder`. `scope` counts what the
    search could see: `unconverted` or `failed` above zero means a relevant
    document may never rank, so check `silica_files(status=…)` before
    calling absence; with a `folder`, `terms_absent_in_scope` is the zero of
