@@ -52,6 +52,12 @@ NATIVE_TOOLS = ["Read", "Grep", "Glob", "Skill", "ToolSearch", "Bash(rg:*)", "Ba
 PREAMBLE = ("Work only from the files in the current folder. Cite file paths with line "
             "numbers, or the section or page. If the folder does not contain the answer, "
             "say so plainly instead of guessing. Keep the answer under 150 words.\n\n")
+# Arm F: the same plugin, named in the prompt. Separates "not chosen" from
+# "not useful": the value of the retrieval when it is used.
+FORCED = ("Silica tools are available in this session: use silica_search to search, "
+          "silica_read to read a passage, and silica_code_pack for a source file, instead "
+          "of grep and file reads.\n\n")
+INSPIRATION = REPO.parent / "silica-core_inspiration"
 
 # any_of: every group needs one of its alternatives; all_of: every string;
 # digits: at least one digit in the answer. Expectations were read at HEAD
@@ -101,16 +107,62 @@ TASKS = [
                  "query prediction", "splade", "2109.10086"]]},
 ]
 
+# Harder: repositories of 470 to 3,800 source files, questions that name no
+# identifier and no file, an answer that sits in one function's body.
+# Expectations verified by grep on 2026-09-09.
+HARD_TASKS = [
+    {"id": "H1", "cwd": INSPIRATION / "serena", "kind": "hard",
+     "prompt": "Where does the code decide what to do when a tool's answer is too long for the "
+               "client, and what is the default limit in characters?",
+     "all_of": ["tools_base.py"], "any_of": [["150_000", "150,000", "150000", "150 000", "150k"]]},
+    {"id": "H2", "cwd": INSPIRATION / "codegraph", "kind": "hard",
+     "prompt": "Which MCP tools does the server expose by default, and where is that default "
+               "list defined?",
+     "all_of": ["explore", "tools.ts"]},
+    {"id": "H3", "cwd": INSPIRATION / "codegraph", "kind": "hard",
+     "prompt": "When the relevance floor would leave the explore reply with too few files even "
+               "though the gather step found candidates, what does the server do and why? Cite "
+               "the code.",
+     "all_of": ["tools.ts"],
+     "any_of": [["backfill", "back-fill", "best-scoring", "falls straight back to grep",
+                 "worst outcome"]]},
+    {"id": "H4", "cwd": INSPIRATION / "repowise", "kind": "hard",
+     "prompt": "When a reply is truncated to fit its budget, how can the agent recover the "
+               "dropped content? Give the marker format and the tool that accepts it.",
+     "any_of": [["repowise#"]], "all_of": ["get_symbol"]},
+    {"id": "H5", "cwd": INSPIRATION / "claude-context", "kind": "hard",
+     "prompt": "What similarity threshold does the MCP search handler pass to the core search, "
+               "and what default does the core search function itself declare? Cite both.",
+     "all_of": ["handlers.ts", "context.ts"], "any_of": [["0.3"], ["0.5"]]},
+    {"id": "H6", "cwd": INSPIRATION / "serena", "kind": "hard",
+     "prompt": "What does the Claude Code hook do after several consecutive grep or read-file "
+               "calls? Cite the code.",
+     "all_of": ["hooks.py"], "any_of": [["deny"]]},
+    {"id": "H7", "cwd": INSPIRATION / "code-context-engine", "kind": "hard",
+     "prompt": "When no chunk passes the confidence threshold but some chunks were scored, what "
+               "does the retriever return? Cite the code.",
+     "all_of": ["retriever.py"],
+     "any_of": [["scored[:1]", "top-1", "top 1", "first", "single", "one result", "highest",
+                 "best"]]},
+    {"id": "H8", "cwd": INSPIRATION / "repowise", "kind": "hard",
+     "prompt": "How is the three-level retrieval quality label of an answer decided, and what "
+               "does 'weak' mean? Cite the code.",
+     "all_of": ["confidence.py"], "any_of": [["dominant", "runner-up", "runner up"]]},
+]
+
 
 def command(arm: str, model: str, max_turns: int, budget: float,
-            skills: bool = True) -> list[str]:
+            skills: bool = True, plugin_dir: str = "") -> list[str]:
     base = ["claude", "-p", "--model", model, "--max-turns", str(max_turns),
             "--max-budget-usd", str(budget), "--output-format", "stream-json", "--verbose",
             "--no-session-persistence"] + ([] if skills else ["--disable-slash-commands"])
-    if arm == "A":
-        return base + ["--allowedTools", ",".join(NATIVE_TOOLS + SILICA_TOOLS)]
-    return base + ["--settings", json.dumps({"enabledPlugins": {PLUGIN_KEY: False}}),
-                   "--allowedTools", ",".join(NATIVE_TOOLS)]
+    off = ["--settings", json.dumps({"enabledPlugins": {PLUGIN_KEY: False}})]
+    if arm in ("A", "F"):
+        # With --plugin-dir the installed plugin (the marketplace cache, 0.6.1 on
+        # this machine on 2026-09-09) is replaced by the working tree.
+        return base + (off + ["--plugin-dir", plugin_dir] if plugin_dir else []) + \
+            ["--allowedTools", ",".join(NATIVE_TOOLS + SILICA_TOOLS)]
+    return base + off + ["--allowedTools", ",".join(NATIVE_TOOLS)]
 
 
 def score(task: dict, answer: str) -> tuple[int, list[str]]:
@@ -128,13 +180,14 @@ def score(task: dict, answer: str) -> tuple[int, list[str]]:
 
 
 def run_one(task: dict, arm: str, rep: int, model: str, max_turns: int, budget: float,
-            timeout: int, skills: bool = True) -> dict:
+            timeout: int, skills: bool = True, plugin_dir: str = "") -> dict:
     # The prompt goes on stdin: `--allowedTools` is variadic and would swallow
     # a trailing positional prompt (measured 2026-09-09: "Input must be provided").
     t0 = time.time()
-    proc = subprocess.run(command(arm, model, max_turns, budget, skills), cwd=task["cwd"],
-                          input=PREAMBLE + task["prompt"], capture_output=True, text=True,
-                          timeout=timeout)
+    proc = subprocess.run(command(arm, model, max_turns, budget, skills, plugin_dir),
+                          cwd=task["cwd"],
+                          input=(FORCED if arm == "F" else "") + PREAMBLE + task["prompt"],
+                          capture_output=True, text=True, timeout=timeout)
     tools: collections.Counter = collections.Counter()
     result: dict = {}
     for line in proc.stdout.splitlines():
@@ -178,8 +231,8 @@ def summarize(out: Path) -> str:
 
     lines = ["| task | arm | n | score | cost $ | turns | tool calls | silica calls | "
              "context tok (in+cache) | out tok | s |", "|---|---|---|---|---|---|---|---|---|---|---|"]
-    for task in TASKS:
-        for arm in ("A", "B"):
+    for task in TASKS + HARD_TASKS:
+        for arm in ("A", "F", "B"):
             rs = by.get((task["id"], arm), [])
             if not rs:
                 continue
@@ -191,7 +244,7 @@ def summarize(out: Path) -> str:
                          f"{ctx:,.0f} | {mean(rs, 'output_tokens'):,.0f} | {mean(rs, 'duration_s'):.0f} |")
     lines.append("")
     for kind in ("code", "docs", "all"):
-        for arm in ("A", "B"):
+        for arm in ("A", "F", "B"):
             rs = [r for r in rows if r["arm"] == arm and (kind == "all" or r["kind"] == kind)]
             if rs:
                 lines.append(f"{kind:4s} {arm}: n={len(rs)} score={mean(rs, 'score'):.2f} "
@@ -216,6 +269,8 @@ def main() -> int:
     ap.add_argument("--arms", default="A,B")
     ap.add_argument("--out", default="", help="results folder; default docs/baseline/<stamp>")
     ap.add_argument("--no-skills", action="store_true", help="disable every skill in both arms")
+    ap.add_argument("--plugin-dir", default="", help="load the plugin from this checkout instead of the installed one")
+    ap.add_argument("--set", default="base", choices=["base", "hard"], help="task set")
     ap.add_argument("--summary", default="", help="only summarise this results folder")
     a = ap.parse_args()
     if a.summary:
@@ -230,7 +285,8 @@ def main() -> int:
             if l.strip():
                 r = json.loads(l)
                 done.add((r["task"], r["arm"], r["rep"]))
-    wanted = [t for t in TASKS if not a.tasks or t["id"] in a.tasks.split(",")]
+    pool_tasks = TASKS if a.set == "base" else HARD_TASKS
+    wanted = [t for t in pool_tasks if not a.tasks or t["id"] in a.tasks.split(",")]
     grid = [(t, arm, rep) for t in wanted for rep in range(1, a.reps + 1)
             for arm in a.arms.split(",") if (t["id"], arm, rep) not in done]
     print(f"{len(grid)} runs -> {runs}  (model {a.model}, jobs {a.jobs})", flush=True)
@@ -238,7 +294,8 @@ def main() -> int:
 
     def job(t, arm, rep):
         try:
-            r = run_one(t, arm, rep, a.model, a.max_turns, a.budget, a.timeout, not a.no_skills)
+            r = run_one(t, arm, rep, a.model, a.max_turns, a.budget, a.timeout, not a.no_skills,
+                        a.plugin_dir)
         except subprocess.TimeoutExpired:
             r = {"task": t["id"], "kind": t["kind"], "arm": arm, "rep": rep, "model": a.model,
                  "exit": -1, "subtype": "timeout", "is_error": True, "cost_usd": None,
