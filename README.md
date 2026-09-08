@@ -100,21 +100,18 @@ ranked list always has a top. What tells the two apart:
   carry. Near 1, every rare term matched; near 0, only the common words did.
 - `terms_absent`: query terms that occur nowhere in the corpus.
 - `matched_terms`: which words this hit actually contains.
-- `dominance`: the top hit's score over the runner-up's, `null` when there
-  is no runner-up. Near 1 the pool is flat and one passage is not enough;
-  high, and the top hit stands alone.
 
 Measured on 254 converted papers (22 MB): the answered questions scored
 0.69 to 1.00 on their top hit, a question the corpus does not cover scored
 0.44. No boolean is derivable from lexical signals alone, so Silica exposes
 the numbers and the harness decides to stop, read, or rephrase.
 
-`dominance` does not substitute for `coverage`, and the same corpus shows
-why: the question it cannot answer scored the *highest* dominance of the
-set, 1.29 against 1.07 to 1.16 on the answered ones. A query the corpus does
-not cover still has one clear top — that is what a ranked list does.
-Coverage says whether to trust the pool; dominance says whether one hit out
-of it is enough.
+The same column, read down the hits, says whether one document or several
+are in contention. Best section per document on that corpus: `0.99 · 0.67 ·
+0.60` is one paper, `0.97 · 0.94 · 0.67` is two, `0.79 · 0.73 · 0.72` is
+spread, `0.44 · 0.29 · 0.28` is nothing. Only the absolute level tells the
+first shape from the last, so Silica reports the column and no ratio between
+its neighbours: a ratio scores the first and the last shape alike.
 
 Ranking is BM25 over documents, then over the heading sections of the top
 documents, at most two sections per document, with each hit's densest

@@ -35,7 +35,7 @@ TOOL_RESULT_CHARS = 12000
 SYSTEM = (
     "You are a research assistant working inside the folder {root}. You have tools that "
     "return located evidence and never answers: silica_search gives ranked passages with "
-    "path, section, line, matched_terms, coverage, dominance and terms_absent; read a passage with "
+    "path, section, line, matched_terms, coverage and terms_absent; read a passage with "
     "silica_read before citing it, and cite path and line. Low coverage or a discriminating "
     "term in terms_absent means the corpus does not answer: say so instead of guessing. "
     "silica_files says what the index skipped. Write a note only when asked."

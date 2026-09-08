@@ -19,7 +19,7 @@ from pydantic import Field
 
 from silica.config import CONFIG
 from silica.kernel.recall import paths as _paths
-from silica.kernel.recall.lexical import TOKENIZER_VERSION, _tokens, dominance, get_lexical_store
+from silica.kernel.recall.lexical import TOKENIZER_VERSION, _tokens, get_lexical_store
 from silica.kernel.recall.rerank import _query_terms, best_window_spans
 from silica.tools import tool
 
@@ -415,11 +415,8 @@ def silica_search(
     are the query terms in the hit; `coverage` is the share of the query's
     idf mass they carry (near 1 = every rare term matched, near 0 = only the
     common words); `terms_absent` are query terms found nowhere in the
-    corpus. `dominance` is the top hit's score over the runner-up's, null
-    when there is no runner-up to divide by: near 1 the pool is flat and one
-    hit is not enough, high and the top hit stands alone. No boolean "no
-    answer" exists: read coverage, dominance and matched_terms and decide to
-    stop or rephrase. Builds the index on first use."""
+    corpus. No boolean "no answer" exists: read coverage and matched_terms
+    and decide to stop or rephrase. Builds the index on first use."""
     if hybrid:
         from silica import embeddings
         if not embeddings.enabled():
@@ -500,9 +497,7 @@ def silica_search(
         hits.append(hit)
         if len(hits) == k:
             break
-    dom = dominance([h["score"] for h in hits])
     return {"root": str(_root()), "query": query, "hits": hits,
-            "dominance": round(dom, 2) if dom is not None else None,
             "documents": [{"path": p, "score": round(sc, 2), "matched_terms": sorted(m),
                            **({"dense": round(dense[p], 3)} if p in dense else {})} for p, sc, m in top],
             "candidates": len(docs),
