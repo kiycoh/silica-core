@@ -104,48 +104,5 @@ _PROBE_VIA_LITELLM = (
 )
 
 
-def test_a_third_party_load_dotenv_cannot_reintroduce_the_working_directory(tmp_path):
-    """litellm's own load_dotenv() finds the .env silica refused to read.
-
-    override=False means it can only ADD keys silica left unset, never change
-    one — so silica drops exactly the keys that appeared behind its back. Without
-    this the removal of the project layer is cosmetic: every os.getenv call site
-    downstream of the litellm import would read the stray file again.
-    """
-    project, home = tmp_path / "project", tmp_path / "home"
-    project.mkdir(), home.mkdir()
-    (project / ".env").write_text(
-        f"SILICA_WORKER_MODEL={HOSTILE}\nSILICA_EMBEDDING_SERVE_CMD={CMD}\n",
-        encoding="utf-8",
-    )
-
-    seen = _boot(project, home, probe=_PROBE_VIA_LITELLM)
-
-    assert seen["SILICA_WORKER_MODEL"] is None
-    assert seen["SILICA_EMBEDDING_SERVE_CMD"] is None
 
 
-def test_every_litellm_import_drops_what_litellm_injected():
-    """The guard is per import site, so a new one reopens the hole in silence.
-
-    Pinned as a source check because no runtime assertion can see an import that
-    a future module adds and forgets to follow with the drop.
-    """
-    import re
-
-    root = Path(__file__).resolve().parents[1] / "silica"
-    sites = []
-    for path in root.rglob("*.py"):
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for i, line in enumerate(lines):
-            if re.match(r"^\s*import litellm\b", line):
-                window = "\n".join(lines[i:i + 4])
-                sites.append((path.relative_to(root), i + 1, window))
-
-    assert sites, "no litellm import found — did the module move?"
-    unguarded = [
-        f"{p}:{n}" for p, n, w in sites if "drop_foreign_env" not in w
-    ]
-    assert not unguarded, (
-        f"litellm import not followed by drop_foreign_env(): {unguarded}"
-    )

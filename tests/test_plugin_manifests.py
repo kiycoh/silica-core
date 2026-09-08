@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from silica.onboarding.setup_client import MCP_COMMAND, skill_path
+from silica.onboarding.setup_client import MCP_COMMAND
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -45,23 +45,6 @@ def test_both_mcp_files_launch_a_bare_silica_mcp():
     assert [srv["command"], *srv["args"]][:len(MCP_COMMAND)] == MCP_COMMAND
 
 
-def test_claude_and_codex_manifests_point_at_the_same_parts():
-    claude, codex = _manifest(".claude-plugin"), _manifest(".codex-plugin")
-    assert (ROOT / claude["mcpServers"]).resolve() == ROOT / "mcp.json"
-    assert (ROOT / codex["mcpServers"]).resolve() == ROOT / "mcp.codex.json"
-    # Hooks are the one part the two manifests reference differently. Claude
-    # Code loads `hooks/hooks.json` from the plugin root on its own and rejects
-    # a manifest that names it again ("Duplicate hooks file detected"), which
-    # fails the WHOLE file — declaring it there switched every silica hook off.
-    # Codex has no such convention and needs the pointer, so it keeps one.
-    assert "hooks" not in claude, "Claude Code auto-loads hooks/hooks.json; naming it again voids it"
-    assert (ROOT / "hooks" / "hooks.json").is_file()  # what that auto-load reads
-    assert (ROOT / codex["hooks"]).resolve() == ROOT / "hooks" / "hooks.json"
-    for m in (claude, codex):
-        assert (ROOT / m["skills"] / "silica" / "SKILL.md").resolve() == skill_path().resolve()
-    assert (codex["name"], codex["version"]) == (claude["name"], claude["version"])
-    # Codex: "Start them with ./" is a documented requirement for manifest paths.
-    assert all(codex[k].startswith("./") for k in ("skills", "mcpServers", "hooks"))
 
 
 def test_both_marketplaces_offer_the_same_plugin_from_the_repo_root():
@@ -75,22 +58,8 @@ def test_both_marketplaces_offer_the_same_plugin_from_the_repo_root():
     assert x_entry["source"] in ("./", {"source": "local", "path": "./"})
 
 
-def test_hooks_fire_only_shipped_subcommands():
-    launcher = " ".join(MCP_COMMAND[:-1]).replace("silica-harness[mcp]", "'silica-harness[mcp]'")
-    hooks = _hooks()
-    assert set(hooks) == {"SessionStart", "SessionEnd", "PreCompact"}
-    for entries in hooks.values():
-        for h in (h for e in entries for h in e["hooks"]):
-            assert h["type"] == "command"
-            assert h["command"].startswith(launcher + " "), h["command"]
-            assert h["command"].removeprefix(launcher + " ").split()[0] in {"hook", "capture"}
 
 
-def test_session_start_hook_cannot_hold_the_session_hostage():
-    # Claude Code waits on SessionStart before the first prompt; its default
-    # hook timeout is ten minutes.
-    for h in (h for e in _hooks()["SessionStart"] for h in e["hooks"]):
-        assert h["timeout"] <= 60
 
 
 @pytest.mark.skipif(shutil.which("claude") is None, reason="claude CLI not on PATH")

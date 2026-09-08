@@ -49,34 +49,10 @@ def _tool_names() -> set[str]:
 # --- pass 1: the named declaration sites ------------------------------------
 
 
-def test_web_turn_constraints_names_only_real_tools():
-    from silica.agent.constraints import web_turn_constraints
-
-    missing = set(web_turn_constraints().tools) - _tool_names()
-    assert not missing, f"/web lane names tools that do not exist: {sorted(missing)}"
 
 
-def test_every_builtin_worker_profile_names_only_real_tools():
-    """A profile whose tools vanish becomes a worker with no tools at all, which
-    the loop reports as a plain empty answer."""
-    from silica.capabilities import profiles_builtin as pb
-    from silica.capabilities.profile import WorkerProfile
-
-    names = _tool_names()
-    profiles = [v for v in vars(pb).values() if isinstance(v, WorkerProfile)]
-    assert profiles, "no built-in profiles found; this test would pass vacuously"
-    for profile in profiles:
-        missing = set(profile.tools) - names
-        assert not missing, f"profile {profile.name!r} names {sorted(missing)}"
 
 
-def test_chat_exclusions_all_exist():
-    """Twin of the assertion in test_tool_budget, kept here so this file is the
-    one place that answers "which literal name lists exist"."""
-    from silica.agent.constraints import _CHAT_EXCLUDED
-
-    missing = _CHAT_EXCLUDED - _tool_names()
-    assert not missing, f"stale exclusions, hiding nothing: {sorted(missing)}"
 
 
 # --- pass 2: every `tools=` literal in the tree ------------------------------
@@ -112,16 +88,6 @@ def _declared_tool_names() -> list[tuple[str, int, str]]:
     return found
 
 
-def test_the_ast_scan_actually_finds_the_known_sites():
-    """A scan that silently matches nothing would make the next test vacuous.
-
-    Pinned to the two sites that exist today: the /web constraints in
-    agent/constraints.py and the inline (steering-dependent) tuple in
-    sources/web_research.py.
-    """
-    files = {f for f, _, _ in _declared_tool_names()}
-    assert "agent/constraints.py" in files
-    assert "sources/web_research.py" in files
 
 
 @pytest.mark.parametrize("site", _declared_tool_names(), ids=lambda s: f"{s[0]}:{s[1]}:{s[2]}")
@@ -130,16 +96,3 @@ def test_every_literal_tools_declaration_resolves(site):
     assert name in TOOLS, f"{path}:{line} names tool {name!r}, which is not registered"
 
 
-def test_web_research_and_the_web_lane_declare_the_same_core_tools():
-    """The two /web declarations are duplicated by hand (the import direction is
-    sources -> agent, so constraints.py cannot read web_research). Duplication is
-    fine; drifting apart is not. `plan` is the one sanctioned difference: it is
-    added only under steering."""
-    from silica.agent.constraints import web_turn_constraints
-
-    declared = {
-        name for f, _, name in _declared_tool_names() if f == "sources/web_research.py"
-    }
-    lane = set(web_turn_constraints().tools)
-    assert lane <= declared
-    assert declared - lane <= {"plan"}, f"unexplained drift: {sorted(declared - lane)}"

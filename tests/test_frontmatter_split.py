@@ -48,21 +48,8 @@ def test_broken_yaml_is_unusable_but_preserved():
 SEQ_NOTE = "---\n- a\n- b\n---\n\nbody\n"
 
 
-def test_contested_writers_leave_a_non_mapping_note_untouched():
-    from silica.kernel.write import contested as c
-
-    assert c.mark_contested(SEQ_NOTE, "flagged: x") == SEQ_NOTE
-    assert c.clear_contested(SEQ_NOTE) == SEQ_NOTE
-    assert c.mark_superseded_by(SEQ_NOTE, "Winner.md") == SEQ_NOTE
-    assert c.resolve_contested(SEQ_NOTE, resolved_by="user", valid_to="2026-08-04") == SEQ_NOTE
-    assert c.contested_refs(SEQ_NOTE) == []
 
 
-def test_reliability_tier_ranks_a_non_mapping_note_lowest():
-    from silica.kernel.write.contested import TIER_DISTILLED, reliability_tier
-
-    # a parse accident must never win a contest
-    assert reliability_tier(SEQ_NOTE) == TIER_DISTILLED
 
 
 def test_add_alias_leaves_a_non_mapping_note_untouched():
@@ -70,7 +57,3 @@ def test_add_alias_leaves_a_non_mapping_note_untouched():
     assert fm.aliases_of(SEQ_NOTE) == []
 
 
-def test_derive_type_survives_a_non_mapping_note():
-    from silica.kernel.write.notetype import derive_type
-
-    assert derive_type("Some/Note.md", SEQ_NOTE)  # a type, not an AttributeError

@@ -8,10 +8,6 @@ def test_tool_registry_loads():
     assert len(TOOLS) > 0, "No tools registered after importing atomic module"
 
 
-def test_read_note_registered():
-    """silica_read_note should be in the registry."""
-    import silica.tools.atomic  # noqa: F401
-    assert "silica_read_note" in TOOLS
 
 
 def test_tool_json_schema():
@@ -44,74 +40,9 @@ def test_driver_base_types():
     assert content.content == "hello"
 
 
-def test_verbose_config_and_logging():
-    """Setting CONFIG.debug_logging to True enables debug logging levels and updates setup."""
-    import logging
-    from silica.config import CONFIG
-    from silica.cli import _setup_logging
-    
-    # Save original state
-    orig_debug = CONFIG.debug_logging
-    
-    try:
-        # Enable debug logging
-        _setup_logging(debug=True)
-        assert CONFIG.debug_logging is True
-        
-        # httpx/litellm/openai are always suppressed to avoid raw HTTP spam
-        assert logging.getLogger("httpx").level == logging.WARNING
-        assert logging.getLogger("litellm").level == logging.WARNING
-        assert logging.getLogger("LiteLLM").level == logging.ERROR
-        assert logging.getLogger("openai").level == logging.WARNING
-        # asyncio DEBUG suppressed: litellm streaming spawns one loop per chunk
-        assert logging.getLogger("asyncio").level == logging.WARNING
-
-        # Reset logging
-        _setup_logging(debug=False)
-        assert CONFIG.debug_logging is False
-        assert logging.getLogger("httpx").level == logging.WARNING
-        assert logging.getLogger("litellm").level == logging.WARNING
-        assert logging.getLogger("openai").level == logging.WARNING
-        
-    finally:
-        # Restore original state
-        CONFIG.debug_logging = orig_debug
-        _setup_logging(debug=orig_debug)
 
 
 
-def test_verbose_fsm_logging(caplog):
-    """FSM transitions are logged in debug/verbose mode."""
-    import logging
-    from silica.config import CONFIG
-    from silica.router.orchestrator import InjectorFSM
-    
-    orig_verbose = CONFIG.verbose
-    CONFIG.verbose = True
-    
-    # Set logger to DEBUG so caplog captures debug logs
-    logger = logging.getLogger("silica.router.orchestrator")
-    orig_level = logger.level
-    logger.setLevel(logging.DEBUG)
-    
-    try:
-        # Create FSM
-        fsm = InjectorFSM(inbox_file="nonexistent.md", target_dir="tmp")
-        
-        # Testing _make_tmp with verbose logging
-        import shutil
-        import tempfile
-        tmp_dir = tempfile.mkdtemp()
-        fsm.target_dir = tmp_dir
-        
-        with caplog.at_level(logging.DEBUG):
-            fsm._make_tmp({"test": "data"})
-            assert any("Created staging file" in rec.message for rec in caplog.records)
-            
-        shutil.rmtree(tmp_dir)
-    finally:
-        CONFIG.verbose = orig_verbose
-        logger.setLevel(orig_level)
 
 
 def test_inbox_indexing_and_external_reads(tmp_path):
@@ -179,21 +110,6 @@ def test_inbox_indexing_and_external_reads(tmp_path):
         CONFIG.vault_path = orig_vault
 
 
-def test_silica_restore_idempotent():
-    """Verify that silica_restore ignores file-not-found errors during delete_created rollback operations."""
-    from silica.tools.wrapped import silica_restore
-    from unittest.mock import patch
-
-    inverses = [
-        {"kind": "delete_created", "path": "Deep Learning/Backpropagation.md"}
-    ]
-
-    with patch("silica.tools.wrapped.DRIVER.delete", side_effect=RuntimeError("Error: File \"Deep Learning/Backpropagation.md\" not found.")):
-        res = silica_restore(txn_id="txn_123", inverses=inverses)
-
-    assert res["success"] is True
-    assert "deleted_created:Deep Learning/Backpropagation.md (already_absent)" in res["applied"]
-    assert len(res["errors"]) == 0
 
 
 def test_list_inbox_files_fs(tmp_path):
@@ -240,9 +156,3 @@ def test_list_inbox_files_fs(tmp_path):
         CONFIG.vault_path = orig_vault
 
 
-def test_new_tools_registration():
-    """Verify that silica_exists and silica_inbox_ls are registered in the registry."""
-    from silica.tools import TOOLS
-    import silica.tools.atomic  # noqa: F401
-    assert "silica_exists" in TOOLS
-    assert "silica_inbox_ls" in TOOLS

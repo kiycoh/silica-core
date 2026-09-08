@@ -53,9 +53,3 @@ def test_pinned_provider_stands_the_chain_down(bare_env, monkeypatch):
     assert model_from_env() == ("", "")
 
 
-def test_model_configured_guard(monkeypatch):
-    from silica import cli
-    monkeypatch.setattr(cli.CONFIG, "model", "")
-    assert cli._model_configured() is False
-    monkeypatch.setattr(cli.CONFIG, "model", "qwen3-30b")
-    assert cli._model_configured() is True

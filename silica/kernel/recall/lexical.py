@@ -1,25 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Alessandro Carosia
 
-"""Lexical retrieval leg — hand-written in-memory postings BM25 + fuzzy match.
+"""Lexical index — in-memory postings, BM25 over whole documents.
 
-Silica's semantic stack (embeddings + cross-encoder + co-occurrence) is weak on
-rare tokens, proper nouns, and dates — the exact queries a lexical index nails.
-IWE uses BM25 (no Tantivy); we mirror that hand-rolled, matching the codebase
-idiom (the co-occurrence and embedding indexes are also hand-managed) rather
-than adding a dependency.
-
-ponytail: an in-memory term -> {path: tf} postings map (maintained in
-upsert/remove, rebuilt on load — never persisted) gives O(1) df and O(union)
-candidates instead of an O(docs) scan per query; swap for a real index
-(Tantivy/whoosh) only if the corpus outgrows memory. Fused into RRF by RANK, so
-its unbounded BM25 scores never need to be comparable to cosine (spec 1.2).
+ponytail: a term -> {path: tf} postings map (rebuilt on load, never
+persisted) gives O(1) df and O(union) candidates instead of an O(docs)
+scan per query; swap for a real index only if the corpus outgrows memory.
+Scores are raw BM25: comparable within one call, never a probability.
 """
 from __future__ import annotations
 
 import math
 import threading
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +21,6 @@ from silica.kernel.recall.paths import DiskSynced
 
 _BM25_K1 = 1.5
 _BM25_B = 0.75
-_FUZZY_MIN = 0.82  # SequenceMatcher ratio floor for a fuzzy title/key hit
 
 
 def _index_path() -> Path:
@@ -128,73 +119,35 @@ class LexicalStore(DiskSynced):
                 out[t] = math.log(1 + (n - df + 0.5) / (df + 0.5))
         return out
 
-    def match_count(self, query: str, *, min_terms: int = 2) -> int:
-        """Notes matching at least `min_terms` DISTINCT query terms (capped at
-        the query's own term count, so a one-word query still counts).
-
-        A plain union count is not a signal: measured 2026-09-01, the token
-        "silica" sits in 244 of 270 notes of a nucleated vault and made a query
-        about MCP tiers "hit" 250 of them. Two distinct terms is the cheapest
-        cut that keeps the stats/occult/cooking separation the union already had.
-        """
-        terms = set(_tokens(query))
-        if not terms or not self._docs:
-            return 0
-        need = min(max(int(min_terms), 1), len(terms))
-        seen: dict[str, int] = {}
-        for term in terms:
-            for path in self._postings.get(term, {}):
-                seen[path] = seen.get(path, 0) + 1
-        return sum(1 for n in seen.values() if n >= need)
-
-    def rank(self, query: str, *, k: int = 25) -> list[tuple[str, float]]:
-        if not self._docs:
-            return []
-        q_terms = _tokens(query)
+    def idf(self, terms: set[str]) -> dict[str, float | None]:
+        """BM25 idf per query term; None when the term occurs nowhere in the
+        corpus. That None is the honest signal `terms_absent` is built from."""
         n = len(self._docs)
-        avgdl = (sum(self._len.values()) / n) if n else 0.0
-        q_term_set = set(q_terms)
-        df: dict[str, int] = {term: len(self._postings.get(term, {})) for term in q_term_set}
-        candidates: set[str] = set().union(
-            *(self._postings.get(t, {}).keys() for t in q_term_set)
-        )
+        out: dict[str, float | None] = {}
+        for t in terms:
+            df = len(self._postings.get(t, {}))
+            out[t] = math.log(1 + (n - df + 0.5) / (df + 0.5)) if df else None
+        return out
 
-        bm25: dict[str, float] = {}
-        for path in candidates:
-            tf = self._docs[path]
-            dl = self._len[path] or 1
-            score = 0.0
-            for term in q_terms:
-                f = tf.get(term, 0)
-                if not f or df.get(term, 0) == 0:
-                    continue
-                idf = math.log(1 + (n - df[term] + 0.5) / (df[term] + 0.5))
-                denom = f + _BM25_K1 * (1 - _BM25_B + _BM25_B * dl / (avgdl or 1))
-                score += idf * (f * (_BM25_K1 + 1)) / denom
-            if score > 0.0:
-                bm25[path] = score
-        bm25_ranked = sorted(bm25.items(), key=lambda kv: (-kv[1], kv[0]))
-
-        # Fuzzy leg: quick-ratio upper bounds reject before the full O(L^2)
-        # ratio() — both are documented upper bounds on ratio(), so this can
-        # never drop a real hit. Must scan ALL names, not just BM25 candidates.
-        ql = query.strip().lower()
-        fuzzy: dict[str, float] = {}
-        for path, name_lower in self._name_lower.items():
-            sm = SequenceMatcher(None, ql, name_lower)
-            if sm.real_quick_ratio() < _FUZZY_MIN or sm.quick_ratio() < _FUZZY_MIN:
+    def bm25(self, query: str) -> list[tuple[str, float, set[str]]]:
+        """Every candidate document, best first: (path, raw score, matched terms).
+        Empty store -> []."""
+        n = len(self._docs)
+        if not n:
+            return []
+        avgdl = sum(self._len.values()) / n
+        score: dict[str, float] = {}
+        matched: dict[str, set[str]] = {}
+        for term, w in self.idf(set(_tokens(query))).items():
+            if w is None:
                 continue
-            r = sm.ratio()
-            if r >= _FUZZY_MIN:
-                fuzzy[path] = r
-        fuzzy_ranked = sorted(fuzzy.items(), key=lambda kv: (-kv[1], kv[0]))
-
-        # Fuse the two lexical rankings by rank (RRF-style, local constant).
-        fused: dict[str, float] = {}
-        for ranking in (bm25_ranked, fuzzy_ranked):
-            for rank, (path, _s) in enumerate(ranking):
-                fused[path] = fused.get(path, 0.0) + 1.0 / (60 + rank + 1)
-        return sorted(fused.items(), key=lambda kv: (-kv[1], kv[0]))[:k]
+            for path, f in self._postings.get(term, {}).items():
+                dl = self._len[path] or 1
+                score[path] = score.get(path, 0.0) + w * (f * (_BM25_K1 + 1)) / (
+                    f + _BM25_K1 * (1 - _BM25_B + _BM25_B * dl / avgdl))
+                matched.setdefault(path, set()).add(term)
+        ranked = sorted(score.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [(p, sc, matched[p]) for p, sc in ranked]
 
     def _read_disk(self) -> dict[str, Any]:
         try:

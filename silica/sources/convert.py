@@ -1909,13 +1909,11 @@ def _asr_via_endpoint(wav: Path) -> str:
     """OpenAI-compatible `/v1/audio/transcriptions`, asking for VTT.
 
     VTT rather than the default json: the cue timings are what
-    `vtt_to_text(paragraph_gap_s=...)` turns into paragraph breaks, and a
+    `_vtt_to_text(paragraph_gap_s=...)` turns into paragraph breaks, and a
     transcript with no paragraph breaks is one oversized inbox note. The text is
     thrown away either way, only the boundaries survive.
     """
     import httpx
-
-    from silica.sources.web_fetch import vtt_to_text
 
     url = f"{_asr_base(CONFIG.stt_base_url)}/audio/transcriptions"
     data = {"model": CONFIG.stt_model, "response_format": "vtt"}
@@ -1950,13 +1948,11 @@ def _asr_via_endpoint(wav: Path) -> str:
             body = str(json.loads(body).get("text", ""))
         except ValueError:
             pass
-    return vtt_to_text(body, paragraph_gap_s=_ASR_PARAGRAPH_GAP_S)
+    return _vtt_to_text(body, paragraph_gap_s=_ASR_PARAGRAPH_GAP_S)
 
 
 def _asr_via_whispercpp(wav: Path) -> str:
     """Local whisper.cpp binary, for a machine with no server running."""
-    from silica.sources.web_fetch import vtt_to_text
-
     configured = CONFIG.stt_whispercpp_bin.strip()
     # Upstream renamed `main` to `whisper-cli` in 2024; accept either.
     exe = shutil.which(configured) if configured else (
@@ -1986,7 +1982,7 @@ def _asr_via_whispercpp(wav: Path) -> str:
     if proc.returncode != 0 or not vtt.exists():
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         raise ValueError(f"whisper.cpp failed: {tail[-1][:200] if tail else proc.returncode}")
-    return vtt_to_text(vtt.read_text(encoding="utf-8", errors="replace"),
+    return _vtt_to_text(vtt.read_text(encoding="utf-8", errors="replace"),
                        paragraph_gap_s=_ASR_PARAGRAPH_GAP_S)
 
 
@@ -2340,3 +2336,39 @@ def _rewrite_image_links(md: str, renamed: dict[str, str] | None = None) -> str:
         return f"![[{(renamed or {}).get(base, base)}]]"
 
     return _MD_IMG_RE.sub(repl, md)
+
+
+_VTT_TAG_RE = re.compile(r"<[^>]+>")
+_VTT_NOISE = ("WEBVTT", "NOTE", "STYLE", "Kind:", "Language:")
+
+
+def _vtt_secs(ts: str) -> float:
+    h, m, sec = ("0:0:" + ts).split(":")[-3:]
+    return int(h) * 3600 + int(m) * 60 + float(sec)
+
+
+def _vtt_to_text(vtt: str, paragraph_gap_s: float = 0.0) -> str:
+    """VTT cues to plain lines: timings and inline tags dropped, rolling
+    duplicates collapsed, a blank line where the speaker paused at least
+    `paragraph_gap_s` (0 = never)."""
+    from html import unescape
+
+    lines: list[str] = []
+    prev_end: float | None = None
+    for raw in vtt.splitlines():
+        s = raw.strip()
+        if not s or s.isdigit() or s.startswith(_VTT_NOISE):
+            continue
+        if "-->" in s:
+            try:
+                a, b = (_vtt_secs(x.strip().split(" ")[0]) for x in s.split("-->")[:2])
+            except ValueError:
+                continue
+            if paragraph_gap_s and prev_end is not None and a - prev_end >= paragraph_gap_s and lines and lines[-1]:
+                lines.append("")
+            prev_end = b
+            continue
+        s = unescape(_VTT_TAG_RE.sub("", s)).strip()
+        if s and (not lines or lines[-1] != s):
+            lines.append(s)
+    return "\n".join(lines)

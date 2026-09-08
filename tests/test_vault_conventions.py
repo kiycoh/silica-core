@@ -8,7 +8,6 @@ all) must reproduce today's hardcoded values bit-for-bit.
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
 
 from silica.config import CONFIG
 from silica.kernel.vault_manifest import (
@@ -110,203 +109,28 @@ def test_conventions_extra_callouts_normalized_lowercase(tmp_path):
 # render_prompt: {LANGUAGE} / {MAX_TAGS} placeholder substitution
 # ---------------------------------------------------------------------------
 
-def test_render_prompt_no_manifest_max_tags_unchanged(monkeypatch):
-    """No manifest ⇒ max_tags is still bit-identical to the previously
-    hardcoded prompt text (max_tags default is untouched by this design)."""
-    monkeypatch.setattr(CONFIG, "vault_path", "")
-    from silica.kernel.prep_delegation import render_prompt
-
-    rendered = render_prompt(target="Concepts/AI")
-    assert "at most **3 tags**" in rendered
-    assert "{LANGUAGE}" not in rendered
-    assert "{MAX_TAGS}" not in rendered
 
 
-def test_render_prompt_no_manifest_no_source_text_degrades_to_english(monkeypatch):
-    """No manifest and no source sample ⇒ language.detect("") degrades to
-    "english" deterministically — {LANGUAGE} is still always a concrete name,
-    never None/empty, even in the total-absence-of-signal case."""
-    monkeypatch.setattr(CONFIG, "vault_path", "")
-    from silica.kernel.prep_delegation import render_prompt
-
-    rendered = render_prompt(target="Concepts/AI")
-    assert "written in English" in rendered
 
 
-def test_render_prompt_session_date_substituted(monkeypatch):
-    """F2a: {SESSION_DATE} carries the source session's date into the
-    ephemeral date-resolution rule."""
-    monkeypatch.setattr(CONFIG, "vault_path", "")
-    from silica.kernel.prep_delegation import render_prompt
-
-    rendered = render_prompt(target="Concepts/AI", session_date="2026-05-01")
-    assert "2026-05-01" in rendered
-    assert "{SESSION_DATE}" not in rendered
 
 
-def test_render_prompt_session_date_defaults_to_unknown(monkeypatch):
-    """No session date ⇒ the placeholder still resolves (to "unknown") and the
-    rule tells the model to keep source wording — never guess."""
-    monkeypatch.setattr(CONFIG, "vault_path", "")
-    from silica.kernel.prep_delegation import render_prompt
-
-    rendered = render_prompt(target="Concepts/AI")
-    assert "{SESSION_DATE}" not in rendered
-    assert "unknown" in rendered
 
 
-def test_render_prompt_capture_rules_absent_leaves_no_placeholder(monkeypatch):
-    """F1b: no vault manifest ⇒ {CAPTURE_RULES} vanishes (no section, no
-    dangling placeholder token) — bit-identical to before the field existed."""
-    monkeypatch.setattr(CONFIG, "vault_path", "")
-    from silica.kernel.prep_delegation import render_prompt
-
-    rendered = render_prompt(target="Concepts/AI")
-    assert "{CAPTURE_RULES}" not in rendered
-    assert "Vault capture rules" not in rendered
 
 
-def test_render_prompt_capture_rules_injected(tmp_path, monkeypatch):
-    """F1b: a vault-declared capture_rules string is injected as its own section."""
-    (tmp_path / "vault.yaml").write_text(
-        "conventions:\n"
-        "  capture_rules: |\n"
-        "    Record every measurement in metric with imperial in parens.\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    from silica.kernel import vault_manifest
-    from silica.kernel.prep_delegation import render_prompt
-
-    vault_manifest.reset_manifest_cache()
-    rendered = render_prompt(target="Concepts/AI")
-    vault_manifest.reset_manifest_cache()
-    assert "{CAPTURE_RULES}" not in rendered
-    assert "## Vault capture rules" in rendered
-    assert "Record every measurement in metric" in rendered
 
 
-def test_distiller_prompt_has_date_resolution_rule(monkeypatch):
-    """The Ephemeral Facts section instructs relative->absolute date
-    resolution with the never-guess fallback."""
-    monkeypatch.setattr(CONFIG, "vault_path", "")
-    from silica.kernel.prep_delegation import render_prompt
-
-    rendered = render_prompt(target="Concepts/AI", session_date="2026-05-01")
-    low = rendered.lower()
-    assert "relative time" in low
-    assert "yyyy-mm-dd" in low
-    assert "keep the source wording" in low
 
 
-def test_render_prompt_follows_source_language_italian(tmp_path, monkeypatch):
-    """No `conventions.language` declared ⇒ follow the source: an Italian
-    source sample resolves {LANGUAGE} to "Italian" via real detection."""
-    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    reset_manifest_cache()
-    from silica.kernel.prep_delegation import render_prompt
-
-    italian_text = (
-        "Questo è un testo campione scritto interamente in lingua italiana "
-        "per il rilevamento automatico della lingua del documento sorgente, "
-        "che serve per verificare il comportamento di rilevamento."
-    )
-    rendered = render_prompt(target="Concepts/AI", source_text=italian_text)
-    assert "written in Italian" in rendered
 
 
-def test_render_prompt_follows_source_language_english(tmp_path, monkeypatch):
-    """No `conventions.language` declared ⇒ follow the source: an English
-    source sample resolves {LANGUAGE} to "English" via real detection."""
-    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    reset_manifest_cache()
-    from silica.kernel.prep_delegation import render_prompt
-
-    english_text = (
-        "This is a sample text written entirely in the English language, "
-        "used to verify that the source document's language is correctly "
-        "detected and substituted into the prompt."
-    )
-    rendered = render_prompt(target="Concepts/AI", source_text=english_text)
-    assert "written in English" in rendered
 
 
-def test_render_prompt_declared_language_wins_over_source(tmp_path, monkeypatch):
-    """A declared `conventions.language` is translation intent: it wins
-    regardless of the source sample's detected language."""
-    (tmp_path / "vault.yaml").write_text(
-        "conventions:\n  language: Italian\n", encoding="utf-8"
-    )
-    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    reset_manifest_cache()
-    from silica.kernel.prep_delegation import render_prompt
-
-    english_text = (
-        "This English source text must be ignored for language selection "
-        "because the manifest explicitly declares Italian as the target."
-    )
-    rendered = render_prompt(target="Concepts/AI", source_text=english_text)
-    assert "written in Italian" in rendered
 
 
-def test_render_prompt_uses_vault_conventions(tmp_path, monkeypatch):
-    (tmp_path / "vault.yaml").write_text(
-        "conventions:\n  language: english\n  max_tags: 5\n", encoding="utf-8"
-    )
-    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
-    reset_manifest_cache()
-    from silica.kernel.prep_delegation import render_prompt
-
-    rendered = render_prompt(target="Concepts/AI")
-    assert "written in english" in rendered
-    assert "at most **5 tags**" in rendered
-    assert "{LANGUAGE}" not in rendered
-    assert "{MAX_TAGS}" not in rendered
 
 
-@patch("silica.agent.providers.get_provider")
-def test_run_distiller_wires_payload_excerpts_into_language_detection(
-    mock_get_provider, monkeypatch
-):
-    """Wiring guard: run_distiller must feed the payload's inbox_excerpt text
-    into render_prompt's source_text (via _payload_sample_text), so with no
-    declared conventions.language an Italian payload yields {LANGUAGE} =
-    "Italian" in the prompt actually sent to the LLM. A rename of
-    batches/concepts/inbox_excerpt in kernel/payload.py must fail here."""
-    monkeypatch.setattr(CONFIG, "vault_path", "")  # no manifest ⇒ follow source
-    from silica.kernel.prep_delegation import run_distiller
-
-    mock_provider = MagicMock()
-    mock_get_provider.return_value = mock_provider
-    mock_response = MagicMock()
-    mock_response.text = '{"updates": []}'
-    mock_response.finish_reason = "stop"
-    mock_provider.call_llm.return_value = mock_response
-
-    payload = {
-        "schema_version": 1,
-        "batches": [{
-            "inbox_file": "appunti.md",
-            "concepts": [{
-                "name": "Discesa del gradiente",
-                "action_hint": "create",
-                "inbox_excerpt": (
-                    "Questo estratto è scritto interamente in lingua italiana "
-                    "e descrive la discesa del gradiente, che serve per "
-                    "verificare il rilevamento della lingua della sorgente."
-                ),
-                "vault_collision": None,
-            }],
-        }],
-    }
-    result = run_distiller(payload=payload, target="Concepts/AI")
-    assert "error" not in result
-
-    # Cache-stable split: the rendered template (with {LANGUAGE} resolved) is
-    # the system message's first text part.
-    sent = mock_provider.call_llm.call_args.kwargs["messages"][0]["content"][0]["text"]
-    assert "written in Italian" in sent
-    assert "{LANGUAGE}" not in sent
 
 
 # ---------------------------------------------------------------------------

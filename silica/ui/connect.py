@@ -185,49 +185,12 @@ class BridgeServer:
         kind = frame.get("type")
         if kind in ("rpc_result", "rpc_error"):
             backend._on_frame(frame)
-        elif kind == "chat":
-            tid, text = str(frame.get("turnId", "")), str(frame.get("text", ""))
-            if not self.chat_enabled:
-                await _send(ws, {"type": "chat_error", "turnId": tid,
-                                 "error": "chat is unavailable: this bridge is hosted by a "
-                                          "TUI session; use `silica --gui` or `silica connect`"})
-                return
-            from silica.ui.web import server as web
-
-            if not web._begin_turn():
-                await _send(ws, {"type": "chat_error", "turnId": tid,
-                                 "error": "a turn is already in progress"})
-                return
-            # Held on self — the event loop only weakly references tasks, and a
-            # bare create_task can be garbage-collected mid-turn.
-            self._chat_task = asyncio.create_task(self._chat_turn(ws, tid, text))
-        elif kind == "chat_cancel":
-            if not self.chat_enabled:
-                return
-            from silica.ui.web import server as web
-
-            if web.current_cancel is not None:
-                web.current_cancel.set()
+        elif kind in ("chat", "chat_cancel"):
+            if kind == "chat":
+                await _send(ws, {"type": "chat_error", "turnId": str(frame.get("turnId", "")),
+                                 "error": "chat is not part of silica core; the bridge serves vault I/O only"})
         elif kind == "event":
             logger.debug("bridge: metadata event: %s", frame)  # non-fatal, LINT audits later
-
-    async def _chat_turn(self, ws: Any, tid: str, text: str) -> None:
-        from silica.ui.web.server import run_turn
-
-        try:
-            async for item in run_turn(text):
-                kind = item.get("type")
-                if kind == "done":
-                    await _send(ws, {"type": "chat_done", "turnId": tid,
-                                     "answer": item.get("answer", ""),
-                                     "html": item.get("html", "")})
-                elif kind == "error":
-                    await _send(ws, {"type": "chat_error", "turnId": tid,
-                                     "error": item.get("error", "")})
-                else:
-                    await _send(ws, {"type": "chat_event", "turnId": tid, "event": item})
-        except Exception as exc:  # socket died mid-turn; run_turn's finally cleans up
-            logger.warning("bridge: chat turn aborted: %s", exc)
 
 
 def bridge_supported() -> bool:

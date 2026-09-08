@@ -683,14 +683,6 @@ def test_real_mineru_reads_a_pptx_without_libreoffice(tmp_vault, monkeypatch):
     assert "Images via mineru" in body
 
 
-def test_gui_picker_accepts_the_new_families(tmp_vault):
-    """`supported_nucleate_extensions()` is the GUI drop-zone's accept set; it
-    unions DOC_EXTS, so a widened converter must show up there with no edit."""
-    from silica.sources.registry import supported_nucleate_extensions
-
-    accepted = set(supported_nucleate_extensions())
-    assert {".png", ".jpg", ".tiff", ".pptx", ".xlsx"} <= accepted
-    assert {".mp3", ".wav", ".mp4", ".mkv"} <= accepted
 
 
 # --- legacy office: the LibreOffice hop -------------------------------------
@@ -1144,28 +1136,8 @@ def _fake_wav(monkeypatch):
     monkeypatch.setattr(conv, "_media_to_wav", to_wav)
 
 
-@pytest.mark.parametrize("ext", conv.MEDIA_EXTS)
-def test_every_media_ext_reaches_the_asr_lane(ext, tmp_vault, monkeypatch):
-    _fake_wav(monkeypatch)
-    _fake_asr(monkeypatch)
-    tmp_vault.note(f"talk{ext}", "x")
-
-    body = _inbox_note(conv.convert(f"talk{ext}")[0]).read_text(encoding="utf-8")
-    assert "# talk" in body
-    assert "the demux is one call." in body
 
 
-def test_transcript_gets_paragraph_breaks_at_pauses(tmp_vault, monkeypatch):
-    """A transcript with no blank line anywhere is ONE paragraph, and
-    `_split_by_size` leaves an oversized paragraph whole — so a long talk would
-    land as a single note whose concepts RECON caps at 40. A pause is the only
-    paragraph boundary a transcript carries."""
-    _fake_wav(monkeypatch)
-    _fake_asr(monkeypatch)
-    tmp_vault.note("talk.mp3", "x")
-
-    body = _inbox_note(conv.convert("talk.mp3")[0]).read_text(encoding="utf-8")
-    assert "is that the demux is one call.\n\nAfter a long pause" in body
 
 
 def test_silent_media_raises_instead_of_writing_an_empty_note(tmp_vault, monkeypatch):
@@ -1186,16 +1158,6 @@ def test_unknown_asr_provider_names_the_known_ones(tmp_vault, monkeypatch):
         conv.convert("talk.mp3")
 
 
-def test_media_never_reaches_a_document_provider(tmp_vault, monkeypatch):
-    """A .mp4 handed to a document provider or mineru is a parse of garbage, not an error."""
-    monkeypatch.setattr(CONFIG, "pdf_provider", "mineru")
-    monkeypatch.setattr(conv, "_via_pdfium", _never_called_default)
-    monkeypatch.setattr(conv.subprocess, "run", _never_called)
-    _fake_wav(monkeypatch)
-    _fake_asr(monkeypatch)
-    tmp_vault.note("clip.mkv", "x")
-
-    assert conv.convert("clip.mkv")
 
 
 @pytest.mark.parametrize("base,expected", [
@@ -1677,21 +1639,6 @@ def test_csv_family_one_profile_for_shards(tmp_vault):
     assert note_rel2 == note_rel
 
 
-def test_family_members_are_not_reported_unconverted(tmp_vault):
-    from silica.tools.graph import _covering_stem
-
-    v = Path(CONFIG.vault_path)
-    (v / "vendite_01.csv").write_text("a,b\n1,2\n")
-    (v / "vendite_02.csv").write_text("a,b\n3,4\n")
-
-    [note_rel] = conv.convert(str(v / "vendite_01.csv"))
-
-    # The profile is named for the family, so a plain stem match sees two
-    # uncovered files where one note already describes both.
-    covering = _covering_stem(v / "vendite_02.csv")
-    assert covering == Path(note_rel).stem == "vendite"
-    # A lone file is covered by its own note only — never by a sibling's.
-    assert _covering_stem(v / "altro.csv") == ""
 
 
 def test_csv_family_requires_a_counter_suffix(tmp_vault):

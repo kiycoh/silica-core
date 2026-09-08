@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import json
-import re
 import signal
 import subprocess
 import sys
 from pathlib import Path
 
-from silica.onboarding.setup_client import skill_path
 from silica.ui.mcp import CORE_TOOLS, exposed_tools
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,33 +23,8 @@ def test_core_tools_resolve_and_are_agent_visible():
         assert params.get("type") == "object"
 
 
-def test_declared_writers_are_real_served_tools():
-    from silica.ui.mcp import DESTRUCTIVE_TOOLS, MCP_EXCLUDED, WRITE_TOOLS
-
-    # A stale name in the hint sets (renamed tool) would silently stop hinting;
-    # every declared writer must still exist on the served-or-excluded surface.
-    surface = set(exposed_tools(all_tools=True)) | set(MCP_EXCLUDED)
-    assert (WRITE_TOOLS | DESTRUCTIVE_TOOLS) <= surface, \
-        (WRITE_TOOLS | DESTRUCTIVE_TOOLS) - surface
-    assert not WRITE_TOOLS & DESTRUCTIVE_TOOLS
 
 
-def test_every_served_tool_sets_all_four_hints():
-    """An omitted hint is not "unspecified" to a host: the MCP spec defaults
-    destructiveHint and openWorldHint to TRUE. Setting two of four advertised
-    journaled, revertible writes as destructive and a closed-world vault as
-    open-world."""
-    from silica.ui.mcp import DESTRUCTIVE_TOOLS, tool_annotations
-
-    for name in exposed_tools(all_tools=True):
-        hints = tool_annotations(name)
-        assert set(hints) == {"readOnlyHint", "destructiveHint",
-                              "idempotentHint", "openWorldHint"}, name
-        assert hints["openWorldHint"] is False, name
-        # destructiveHint only where /undo cannot give the note back whole.
-        assert hints["destructiveHint"] is (name in DESTRUCTIVE_TOOLS), name
-    # The default surface stays free of destructive tools entirely.
-    assert not set(exposed_tools()) & DESTRUCTIVE_TOOLS
 
 
 def test_write_tools_are_additive_and_reads_are_idempotent():
@@ -78,26 +51,8 @@ def test_the_hint_dicts_are_not_shared_between_tools():
     assert tool_annotations("silica_recall")["openWorldHint"] is False
 
 
-def test_all_surface_matches_agent_loop_filter_minus_declared_exclusions():
-    # ADR-0033: --all is the agent-loop filter minus MCP_EXCLUDED — tools whose
-    # exposure verdict is written down (no consent surface, no accuracy gate),
-    # never an accident of which modules got imported.
-    from silica.tools import TOOLS
-    from silica.ui.mcp import MCP_EXCLUDED
-
-    exposed = exposed_tools(all_tools=True)
-    expected = {n for n, t in TOOLS.items()
-                if not t.sensitive and not t.internal and n not in MCP_EXCLUDED}
-    assert set(exposed) == expected
 
 
-def test_skill_references_only_core_tools():
-    # The Claude skill teaches the default MCP surface — a tool name in the
-    # skill that isn't in CORE_TOOLS is drift (renamed, or never exposed).
-    skill = skill_path().read_text(encoding="utf-8")
-    referenced = set(re.findall(r"silica_\w+", skill))
-    unknown = referenced - set(CORE_TOOLS)
-    assert not unknown, f"SKILL.md references tools outside the MCP core surface: {unknown}"
 
 
 def test_plugin_manifest_launches_silica_mcp():
@@ -134,15 +89,6 @@ def test_plugin_serves_its_own_tree_not_the_published_wheel():
     assert marketplace["plugins"][0]["name"] == plugin["name"]
 
 
-def test_server_instructions_teach_the_loop_to_clients_without_skills():
-    # Codex and DSH read the skill from ~/.agents/skills; a client with no
-    # skill surface at all (opencode) only ever sees what the server says of
-    # itself, and that text must not name a tool the default surface hides.
-    from silica.ui.mcp import make_server
-    text = make_server().instructions or ""
-    for tool in ("silica_recall", "silica_write_note", "silica_patch_note"):
-        assert tool in text
-    assert not set(re.findall(r"silica_\w+", text)) - set(CORE_TOOLS)
 
 
 def test_one_sigint_stops_the_server():

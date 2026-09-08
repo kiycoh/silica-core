@@ -177,25 +177,3 @@ def test_apply_manifest_clears_lang_on_switch_to_plain_vault(tmp_path, monkeypat
     assert CONFIG.cooccurrence_lang == "auto"  # not leaked from vault a; "auto" is the real default
 
 
-def test_nucleate_gating_sources_prose_only(tmp_path, monkeypatch, capsys):
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t.t"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
-    (tmp_path / "m.py").write_text("x = 1\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
-    vault = tmp_path / ".silica"
-    vault.mkdir()
-    (vault / "vault.yaml").write_text("sources: [prose]\n", encoding="utf-8")
-    monkeypatch.setattr(CONFIG, "vault_path", str(vault))
-    from silica.driver import fs_backend
-    import silica.driver as driver_mod
-    monkeypatch.setattr(driver_mod, "DRIVER", fs_backend.ObsidianFSBackend(str(vault)))
-    reset_manifest_cache()
-
-    from silica.cli import _expand_workflow_shortcut
-
-    msg = _expand_workflow_shortcut("/nucleate m.py")
-    assert msg == ""  # handled: skipped, nothing for the agent
-    assert not (vault / "Inbox" / "m.md").exists()  # code source disabled
-    assert "Skipped" in capsys.readouterr().out

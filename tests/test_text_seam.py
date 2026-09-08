@@ -68,75 +68,12 @@ def test_tokens_without_stemming_keeps_surfaces():
     ]
 
 
-def test_classify_stems_match_cooccur_nodes_on_dirty_body():
-    """C1: classify and the co-occurrence index share ONE notion of «body» —
-    math and images never diverge the two profiles again."""
-    from silica.kernel.organize.classify import _stems_from_body
-    from silica.kernel.recall.cooccurrence import build_contribution
-
-    body = (
-        "La discesa $\\nabla f = \\frac{a}{b}$ converge. ![[plot.png]]\n\n"
-        "Rete neurale profonda con retropropagazione."
-    )
-    stems = set(_stems_from_body(body, "italian"))
-    nodes = set(build_contribution("", body, lang="italian")["nodes"])
-    assert stems == nodes
-    assert not any(s.startswith(("frac", "nabla", "png", "plot")) for s in stems)
 
 
-def test_wikilinks_unwrap_to_words_without_moving_tokens():
-    """C1: `[[a|b]]` is markup, so it must not reach a phrase-level consumer as
-    syntax — keyphrase kept pool n-grams verbatim and emitted `decidibilità]]`.
-    Unwrapping (not dropping) is what keeps the token-level consumers frozen:
-    `_TOKEN_RE` already yielded `a` and `b` from the raw form, so the
-    co-occurrence node set must come out byte-identical to the pre-fix one.
-    """
-    from silica.kernel.recall.cooccurrence import build_contribution
-    from silica.kernel.text.text import clean_body
-
-    body = (
-        "La [[Decidibilità]] separa i [[linguaggi context-free|linguaggi CF]] "
-        "dal resto, vedi [[Analisi asintotica#Ricorrenze]] e ![[Teorema di Rice]]. "
-        # adjacent links with nothing between them: `]][[` used to do the
-        # separating, so an unpadded unwrap glued the two aliases into one token
-        "Algoritmi [[Analisi asintotica|asintoticamente]][[Efficienza| efficienti]]. "
-        # markdown link: _URL_RE deletes the target and used to leave `]( )`
-        "Vedi [Maltego](https://example.com/x) e [Ricorrenze](Analisi asintotica.md)."
-    )
-    out = clean_body(body, fences=True)
-    assert "[[" not in out and "]]" not in out and "|" not in out, out
-    assert "](" not in out, "markdown link scaffolding must not survive either"
-    assert "Maltego" in out and "example.com" not in out, "text kept, URL target dropped"
-    assert "Analisi asintotica.md" in out, "a relative target is prose, keep its words"
-    assert "Decidibilità" in out and "linguaggi context-free" in out
-    assert "linguaggi CF" in out, "the alias is prose too, not just the target"
-    assert "Ricorrenze" in out, "a heading anchor names something; keep its word"
-
-    # The frozen half: same nodes as the raw body would have produced, because
-    # unwrapping yields exactly the words the tokenizer already found.
-    raw_nodes = set(build_contribution("", body, lang="italian")["nodes"])
-    unwrapped_nodes = set(build_contribution("", out, lang="italian")["nodes"])
-    assert raw_nodes == unwrapped_nodes, raw_nodes ^ unwrapped_nodes
 
 
-def test_moc_heading_is_english_whatever_the_note_language():
-    """Vault strings are UI copy: emitted in English, the Italian spelling is
-    only recognised. Two chunks of one hub used to get `## Da:` and `## From:`
-    from the same source when the language sample flipped (2026-09-02)."""
-    from silica.router.states.write import _moc_heading
-
-    it_strong = "Questa è una lezione sulle reti neurali con il gradiente."
-    assert _moc_heading("lezione.md", it_strong) == "## From: lezione.md"
-    assert _moc_heading("lecture.md", "This lecture covers gradients.") == "## From: lecture.md"
 
 
-def test_merge_moc_section_appends_into_a_legacy_italian_section():
-    from silica.kernel.write.moc import merge_moc_section
-
-    hub = "# Hub\n\n## Da: lezione\n\n- [[A]]\n"
-    out = merge_moc_section(hub, "## From: lezione", ["- [[B]]"])
-    assert out.count("## Da: lezione") == 1 and "## From: lezione" not in out
-    assert "- [[A]]\n- [[B]]" in out
 
 
 def test_tokens_min_len_is_callers_choice():

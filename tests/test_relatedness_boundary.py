@@ -81,13 +81,3 @@ def test_leg_imports_are_allowlisted():
     )
 
 
-def test_allowlist_has_no_stale_entries():
-    stale = [
-        rel for rel in ALLOWED
-        if not (SILICA_ROOT / rel).exists()
-        or not _LEG_IMPORT_RE.search((SILICA_ROOT / rel).read_text(encoding="utf-8"))
-    ]
-    assert not stale, (
-        f"Allowlist entries no longer import the legs directly: {stale}. "
-        "Remove them so the boundary stays tight."
-    )

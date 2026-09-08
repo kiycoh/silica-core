@@ -50,17 +50,5 @@ THREE_HITS = ("pad line\n" * 40 + "the yoga class\n" + "pad line\n" * 40
               + "yoga again\n" + "pad line\n" * 40 + "yoga once more\n" + "pad line\n" * 40)
 
 
-def test_ranks_past_five_get_one_window(monkeypatch):
-    p = _perceive_with(monkeypatch, [THREE_HITS] * 7, "yoga", k=7, window_chars=120)
-    assert p.blocks[0].excerpt.count("[…]") == 2   # three windows at the top
-    assert p.blocks[4].excerpt.count("[…]") == 2
-    assert p.blocks[5].excerpt.count("[…]") == 0   # one window from rank 6 on
-    assert "yoga" in p.blocks[5].excerpt
 
 
-def test_perceive_excerpts_start_on_line_boundaries(monkeypatch):
-    p = _perceive_with(monkeypatch, [THREE_HITS], "yoga", k=1, window_chars=120)
-    for seg in p.blocks[0].excerpt.split("\n[…]\n"):
-        at = THREE_HITS.find(seg)
-        assert at >= 0
-        assert at == 0 or THREE_HITS[at - 1] == "\n", repr(seg[:30])

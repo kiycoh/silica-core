@@ -36,16 +36,14 @@ from silica.driver.base import (
     Txn,
 )
 from silica.kernel.write import frontmatter as fm
-from silica.kernel.write import session_changes
 from silica.kernel.link import ofm
-from silica.kernel.recall.graph_export import is_vault_artifact
+from silica.kernel.recall.paths import is_vault_artifact
 from silica.kernel.recall.paths import (
     atomic_write_bytes,
     contain_in_vault,
     ignore_matcher,
     is_source_leaf,
 )
-from silica.kernel.write.notetype import stamp_type
 logger = logging.getLogger(__name__)
 
 # Per-note Hit ceiling for content search. The tool layer renders at most 3
@@ -78,32 +76,6 @@ _ROSTER_RECHECK_INTERVAL = 2.0
 # vector until the threshold or exit flush lands. In-process reads stay
 # exact (the store's memory is updated per op).
 _EMBED_FLUSH_EVERY = 32
-
-
-# Deferred embed-delete flush state (see _drop_embed_vector).
-_embed_deletes_pending = 0
-_embed_flush_registered = False
-
-
-def _flush_pending_embed_deletes() -> None:
-    """Persist buffered embed deletes; safe to call with nothing pending."""
-    global _embed_deletes_pending
-    if _embed_deletes_pending <= 0:
-        return
-    try:
-        from silica.kernel.recall.embed import get_store
-        get_store().save()
-        _embed_deletes_pending = 0
-    except Exception as exc:
-        logger.debug("deferred embed flush failed (non-fatal): %s", exc)
-
-
-def _register_embed_flush() -> None:
-    global _embed_flush_registered
-    if not _embed_flush_registered:
-        import atexit
-        atexit.register(_flush_pending_embed_deletes)
-        _embed_flush_registered = True
 
 
 def _locked(method):
@@ -1041,8 +1013,6 @@ class ObsidianFSBackend(GraphIndexMixin):
             raise FileExistsError(f"Note already exists: {rel_path}")
         full_path.parent.mkdir(parents=True, exist_ok=True)
 
-        content = stamp_type(rel_path, content)   # OKF §4.1 `type`, if absent
-        session_changes.touched(rel_path, None)  # no baseline: the note is new
         # Notes are irreplaceable and this backend keeps no version history
         # (snapshot_versions returns an empty Txn), so a truncating write_text
         # has nothing to roll back to when it dies mid-write.
@@ -1076,9 +1046,6 @@ class ObsidianFSBackend(GraphIndexMixin):
         if not full_path.exists():
             raise RuntimeError(f"Cannot overwrite non-existent file: {path}")
 
-        if stamp:
-            content = stamp_type(rel_path, content)   # OKF §4.1 `type`, if absent
-        session_changes.touched(rel_path, self._read_cached(full_path))
         atomic_write_bytes(full_path, content.encode("utf-8"))
         self._invalidate_body(rel_path)
         name = rel_path.rsplit("/", 1)[-1].removesuffix(".md")
@@ -1088,38 +1055,11 @@ class ObsidianFSBackend(GraphIndexMixin):
             self._patch_index(rel_path, content)
         return NoteRef(name=name, path=rel_path)
 
-    def autolink_note(
-        self,
-        path: str,
-        candidates: list[str] | None = None,
-        title_index: list[str] | None = None,
-    ) -> list[str]:
-        """FS backend: pure-Python kernel autolink + direct overwrite.
-
-        `title_index`, when given, is used as-is (caller-built, e.g. LINKING's
-        one-per-chunk index) instead of rebuilding via build_title_index(
-        self.list_files()) on every call.
-        """
-        import os
-        from silica.kernel.link.autolink import autolink, build_alias_map, build_title_index
-        nc = self.read_note(path)
-        body = nc.content or ""
-        if not body.strip():
-            return []
-        if title_index is None:
-            title_index = build_title_index(self.list_files())
-        self_title = os.path.splitext(os.path.basename(path))[0]
-        aliases = build_alias_map(self.alias_index(), title_index)
-        new_body, added = autolink(
-            body, title_index, candidates=candidates, self_title=self_title, aliases=aliases
-        )
-        if added:
-            self.overwrite(path, new_body)
-        return added
 
     def append(self, ref: NoteRef | str, content: str) -> None:
         """Append content to an existing note."""
         path = self._resolve_path(ref)
+        rel_path_str = contain_in_vault(str(path), self.vault_path)
         if not path.exists():
             raise RuntimeError(f"File not found: {path}")
 
@@ -1128,8 +1068,6 @@ class ObsidianFSBackend(GraphIndexMixin):
         # symlink out of the vault reads as vault-relative while the append
         # lands on the target. relative_to() alone only catches the absolute
         # case — it compares strings and never resolves the link.
-        rel_path_str = contain_in_vault(str(path), self.vault_path)
-        session_changes.touched(rel_path_str, self._read_cached(path))
         with open(path, "a", encoding="utf-8") as f:
             f.write(content)
 
@@ -1149,7 +1087,6 @@ class ObsidianFSBackend(GraphIndexMixin):
         # Contained before the read, for the reason append() gives: the write
         # below resolves symlinks (atomic_write_bytes writes THROUGH them), so
         # an unresolved boundary check here would rewrite a file outside.
-        rel_path_str = contain_in_vault(str(path), self.vault_path)
         content = path.read_text(encoding="utf-8")
         data, delim, body = fm.split(content)
 
@@ -1159,199 +1096,10 @@ class ObsidianFSBackend(GraphIndexMixin):
         data[name] = value
 
         new_content = fm.dump(data, body)
-        session_changes.touched(rel_path_str, content)
         atomic_write_bytes(path, new_content.encode("utf-8"))
         self._body_cache.pop(str(path), None)
 
-    @_locked
-    def move(self, ref: NoteRef | str, to: str) -> None:
-        """Move/rename a note, rewriting incoming wikilinks in all referrers.
 
-        Mirrors Obsidian's "automatically update internal links" behaviour:
-
-        - Resolved referrers (predecessors in the graph) have their link text
-          rewritten via the pure kernel ``rewrite_links`` function.
-        - Ambiguity guard: if the old basename is shared by multiple notes and
-          the referrer's name-based resolution points elsewhere, only path-based
-          links in that referrer are rewritten (``rewrite_name_links=False``).
-        - After the physical rename, the in-memory index is updated
-          incrementally for the moved note and every rewritten referrer.
-        - Unresolved-promotion sweep: raw targets that were previously
-          unresolvable but now resolve to the new path are promoted to resolved
-          graph edges via ``_patch_index``.
-        """
-        from silica.kernel.link.rename import rewrite_links
-
-        # Step 1: guarantee a fresh index before reading graph state
-        self._ensure_index()
-
-        src = self._resolve_path(ref)
-        if not src.exists():
-            raise RuntimeError(f"File not found: {src}")
-
-        # Step 2: vault-relative paths. Both ends go through the containment
-        # choke point: `ref` may be a NoteRef carrying an absolute path, and
-        # `to` is caller-supplied, so neither is trusted to stay in the vault.
-        old_rel = contain_in_vault(str(src), self.vault_path)
-        new_rel = contain_in_vault(to, self.vault_path)
-        old_basename = old_rel.rsplit("/", 1)[-1].removesuffix(".md")
-
-        # Step 3: collect referrers BEFORE moving so graph is still accurate
-        referrers: list[str] = list(self._graph.predecessors(old_rel)) if old_rel in self._graph else []
-
-        # Ambiguity guard: check whether the old basename is shared by
-        # multiple notes (i.e. name-based resolution could be ambiguous).
-        basename_is_unique = len(self._notes_by_name.get(old_basename.lower(), [])) <= 1
-
-        # Step 4: physical filesystem move
-        dst = self.vault_path / new_rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        # The row follows the file: baseline first (in case this is the note's
-        # first touch this session), then move it onto the new key.
-        session_changes.touched(old_rel, self._read_cached(src))
-        session_changes.renamed(old_rel, new_rel)
-        src.rename(dst)
-        # The ledger follows the file the way the session row does: it keys
-        # notes by path, and a moved note the ledger still knows under its old
-        # name is re-appended into on the next nucleate of its source.
-        # Never raises; a failure is logged with what it costs.
-        from silica.kernel.write.provenance import rename_note
-
-        rename_note(old_rel, new_rel, vault_path=str(self.vault_path))
-        self._invalidate_body(old_rel)
-        self._invalidate_body(new_rel)
-        # The old key's vector now points at a gone path; drop it or a rename makes
-        # the note appear twice in candidates (stale old key + fresh new key). The
-        # new path re-embeds lazily on the next build_index (A13).
-        self._drop_embed_vector(old_rel)
-
-        # move() is the only multi-file write in this backend.  Everything after
-        # the physical rename (referrer disk-writes, index patches, unresolved
-        # sweep) is wrapped so that ANY failure sets _needs_reindex=True before
-        # re-raising.  This forces a clean full rebuild on the next
-        # _ensure_index(), matching the backend's existing fallback convention
-        # (see restore()).  The alternative — leaving the in-memory index in a
-        # torn state — would silently corrupt subsequent operations in the same
-        # session (e.g. the rest of an /organize batch).
-        try:
-            # Step 5a: rewrite link text on disk for referrers that need it.
-            # Also collect updated content for every referrer so we can re-patch
-            # the index after step 6 (which deletes the old node and breaks edges).
-            referrer_updates: list[tuple[str, str]] = []  # (rel_path, content_to_index)
-
-            for referrer_rel in referrers:
-                referrer_path = self.vault_path / referrer_rel
-                if not referrer_path.exists():
-                    continue
-                referrer_content = referrer_path.read_text(encoding="utf-8")
-
-                # The referrers are the third write target of a move, and the
-                # only one that is discovered rather than passed in — so it is
-                # the one the containment at step 2 does not cover. A referrer
-                # that is a symlink out of the vault would be rewritten THROUGH
-                # the link, editing a file the boundary does not own. Withhold
-                # only the disk write: its edges are still re-indexed below, so
-                # the graph stays correct while the foreign file keeps the old
-                # link text.
-                try:
-                    contain_in_vault(referrer_rel, self.vault_path)
-                except ValueError:
-                    logger.warning(
-                        "move: referrer %s leaves the vault — its links to %s "
-                        "were left unrewritten", referrer_rel, old_rel)
-                    referrer_updates.append((referrer_rel, referrer_content))
-                    continue
-
-                # Determine whether name-based rewrites are safe for this referrer
-                if basename_is_unique:
-                    allow_name = True
-                else:
-                    # Resolve where [[old_basename]] points from this referrer's
-                    # perspective — only allow name-based rewrite if it resolves
-                    # to the moved note (not some other same-named note).
-                    resolved = self._resolve_target(old_basename, source_path=referrer_rel)
-                    allow_name = resolved is not None and resolved.path == old_rel
-
-                new_content, n = rewrite_links(
-                    referrer_content, old_rel, new_rel,
-                    rewrite_name_links=allow_name,
-                )
-                if n > 0:
-                    # Write directly — avoids re-entrant overwrite() logic
-                    session_changes.touched(referrer_rel, referrer_content)
-                    atomic_write_bytes(referrer_path, new_content.encode("utf-8"))
-                    self._invalidate_body(referrer_rel)
-                    referrer_updates.append((referrer_rel, new_content))
-                else:
-                    # Even if content is unchanged, we must re-patch after the old
-                    # node is removed (step 6) so that name-based edges that still
-                    # resolve correctly are re-established in the graph.
-                    referrer_updates.append((referrer_rel, referrer_content))
-
-            # Step 6: patch index for the moved note itself first, so that when
-            # referrer edges are rebuilt in step 5b, _resolve_target() can already
-            # see the new path.
-            moved_content = dst.read_text(encoding="utf-8")
-            self._patch_index(old_rel, None)
-            self._patch_index(new_rel, moved_content)
-
-            # Step 5b: re-index every referrer now that new_rel is registered.
-            # This rebuilds their outgoing edges (including name-based links that
-            # now resolve to new_rel) without requiring any file content change.
-            for referrer_rel, content in referrer_updates:
-                self._patch_index(referrer_rel, content)
-
-            # Step 7: unresolved-promotion sweep — targets that were previously
-            # unresolvable may now resolve because the new name/path matches them.
-            # Collect affected sources first, then patch (avoid mutating while iterating).
-            sources_to_promote: list[tuple[str, str]] = []
-            # Snapshot, not the live set: @_locked keeps another MCP thread's
-            # _patch_index out, but this loop must survive any future in-loop
-            # patch too — a set mutated while iterated raises.
-            for source, target in list(self._unresolved_links):
-                resolved = self._resolve_target(target, source_path=source)
-                if resolved is not None and resolved.path == new_rel:
-                    sources_to_promote.append((source, target))
-            for source, _target in sources_to_promote:
-                promote_path = self.vault_path / source
-                if promote_path.exists():
-                    promote_content = promote_path.read_text(encoding="utf-8")
-                    self._patch_index(source, promote_content)
-
-        except Exception:
-            # Force a full rebuild on next _ensure_index() so no torn state
-            # persists into subsequent operations. A torn move can leave any
-            # number of referrer bodies rewritten on disk but uninvalidated
-            # here, so drop the whole cache rather than track partial state.
-            self._needs_reindex = True
-            self._body_cache.clear()
-            raise
-
-    def _drop_embed_vector(self, rel_path: str) -> None:
-        """Remove a note's embedding vector when it is deleted/renamed, so
-        cosine_top_k stops returning it as a phantom candidate before the next
-        full /embed rebuild (audit A13). Best-effort: retrieval quality, never fatal.
-
-        The in-memory store updates per op (this process never sees the
-        phantom); the npz save is buffered every _EMBED_FLUSH_EVERY deletes
-        plus once at exit, because each save serializes the whole index and a
-        bulk /organize was paying that per note.
-        """
-        global _embed_deletes_pending
-        try:
-            from silica.kernel.recall.embed import get_store
-            store = get_store()
-            key = rel_path.removesuffix(".md")
-            if store.get_vec(key) is not None:  # skip non-embedding vaults / unindexed notes
-                store.delete(key)
-                _embed_deletes_pending += 1
-                if _EMBED_FLUSH_EVERY is None or _embed_deletes_pending >= _EMBED_FLUSH_EVERY:
-                    store.save()
-                    _embed_deletes_pending = 0
-                else:
-                    _register_embed_flush()
-        except Exception as exc:
-            logger.debug("embed vector cleanup failed for %s (non-fatal): %s", rel_path, exc)
 
     def delete(self, ref: NoteRef | str) -> None:
         """Delete a note from the vault."""
@@ -1360,14 +1108,12 @@ class ObsidianFSBackend(GraphIndexMixin):
             raise RuntimeError(f"File not found: {path}")
 
         rel_path_str = path.relative_to(self.vault_path).as_posix()
-        session_changes.touched(rel_path_str, self._read_cached(path))
         path.unlink()
         self._invalidate_body(rel_path_str)
         if self._needs_reindex:
             self._rebuild_index()
         else:
             self._patch_index(rel_path_str, None)
-        self._drop_embed_vector(rel_path_str)
 
     # ------------------------------------------------------------------
     # Advanced

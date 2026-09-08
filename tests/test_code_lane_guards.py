@@ -167,16 +167,3 @@ def test_real_refs_still_work(tmp_path):
 # codewiki: the digest's budget never writes into the store
 # ---------------------------------------------------------------------------
 
-def test_public_symbols_does_not_mutate_the_store_entry():
-    from silica.kernel.code import codewiki
-
-    entry = {"language": "python", "dunder_all": None, "symbols": [
-        {"kind": "function", "name": "pub", "parent": "", "signature": "def pub()",
-         "doc": "d", "doc_full": "d", "decorators": []},
-        {"kind": "method", "name": "m", "parent": "C", "signature": "def m(self)",
-         "doc": "d", "doc_full": "d", "decorators": []},
-    ]}
-    syms = codewiki._public_symbols(entry)
-    for s in syms:
-        s["brief"] = True
-    assert all("brief" not in s for s in entry["symbols"])

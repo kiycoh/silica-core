@@ -851,3 +851,13 @@ def resolve_target_dir(target_dir: str) -> str:
             )
         resolved.append(seg)
     return "/".join(resolved)
+
+
+# Silica-generated files at the vault root (mindmap and graph exports of
+# earlier versions): never notes, never indexed.
+_VAULT_ROOT_ARTIFACT_STEMS = frozenset({"log", "GRAPH_REPORT"})
+
+
+def is_vault_artifact(note_id: str) -> bool:
+    stem = note_id.replace("\\", "/").removesuffix(".md")
+    return "/" not in stem and stem in _VAULT_ROOT_ARTIFACT_STEMS

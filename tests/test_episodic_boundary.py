@@ -63,13 +63,6 @@ def test_episodic_imports_are_allowlisted():
     )
 
 
-def test_allowlist_has_no_stale_entries():
-    stale = [
-        rel for rel in ALLOWED
-        if not (SILICA_ROOT / rel).exists()
-        or not _EPISODIC_IMPORT_RE.search((SILICA_ROOT / rel).read_text(encoding="utf-8"))
-    ]
-    assert not stale, f"Allowlist entries no longer import the store: {stale}."
 
 
 def _bind(vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,32 +79,3 @@ def _bind(vault: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cooc_mod.clear()
 
 
-def test_facts_never_surface_as_retrieval_hits(tmp_path, monkeypatch):
-    """A populated store must not add a single leg hit — only the fact block."""
-    from silica.driver import DRIVER
-    from silica.kernel.recall import episodic
-    from silica.kernel.recall.episodic import EpisodicStore
-    from silica.kernel.recall.perception import perceive
-    from silica.tools.graph import silica_cooccurrence_refresh
-
-    _bind(tmp_path / "v", monkeypatch)
-    monkeypatch.setattr(episodic, "store_path", lambda: tmp_path / "episodic.json")
-    DRIVER.create("Concepts/Rerank.md",
-                  '---\ndate: "2026-01-01"\n---\n\nthe reranker fuses three legs\n')
-    silica_cooccurrence_refresh(force=True)
-
-    store = EpisodicStore()
-    store.capture([{"key": "silica.reranker", "text": "the reranker is jina v3"}],
-                  run_id="silica-s1-end", seen="2026-08-01")
-    store.save()
-
-    p = perceive("what reranker do I use?", now="2026-08-02",
-                 use_embedder=False, use_rerank=False)
-
-    assert [b.path for b in p.blocks] == ["Concepts/Rerank"]
-    assert all("jina v3" not in b.excerpt for b in p.blocks)
-    # The one channel machine memory has to the model, and it is labelled.
-    assert "jina v3" in p.facts_block
-    assert p.facts_block.startswith("Personal memory:")
-    rendered = p.render()
-    assert rendered.count("jina v3") == 1
