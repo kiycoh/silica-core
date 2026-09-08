@@ -92,6 +92,7 @@ _DECL_NODES: dict[str, tuple[str, ...]] = {
                    "method_definition"),
 }
 _DECL_NODES["javascript"] = _DECL_NODES["typescript"]
+_LINE_SELECTOR = re.compile(r"L[1-9]\d*")
 
 
 def _find_decl(node, src: bytes, kinds: tuple[str, ...], name: str):
@@ -401,7 +402,8 @@ def _neighborhood(graph, path: str, entry: dict,
 def code_pack(vault: Path | str, target: str,
               budget_chars: int = BUDGET_CHARS,
               sections: list[str] | None = None) -> dict:
-    """Context pack for `target` ("path", "path#Class" or "path#Class.member").
+    """Context pack for `target` ("path", "path#Class", "path#Class.member" or
+    "path#L<line>", the innermost symbol whose declaration spans that line).
 
     `sections` (None = all) names which of hierarchy / neighborhood / external
     / importers to emit; the target is always served. The tool is stateless,
@@ -456,6 +458,20 @@ def code_pack(vault: Path | str, target: str,
             # base.py: consumers must not read "empty" as "no structure"
             dropped.append(f"note: {path} did not parse (tree-sitter unavailable or the file is unparseable); "
                            "outline, hierarchy, neighborhood and external are unavailable")
+    if _LINE_SELECTOR.fullmatch(selector):
+        # `#L148` from a traceback or a diff hunk: the innermost function,
+        # method or class whose declaration spans that line, from the ranges
+        # the store keeps, so the file is not opened just to learn what to ask
+        want = int(selector[1:])
+        inside = [s for s in entry.get("symbols", [])
+                  if s.get("kind") in ("function", "method", "class")
+                  and 0 < s.get("line", 0) <= want <= s.get("end_line", 0)]
+        if inside:
+            s = min(inside, key=lambda s: s["end_line"] - s["line"])
+            selector = f"{s['parent']}.{s['name']}" if s.get("parent") else s["name"]
+        else:
+            dropped.append(f"note: no symbol of {path} contains line {want}; file-level pack")
+            selector = ""
 
     # `_target_block` only sees the body, so the header line and the pack's own
     # trailing newline have to come out of its budget too, or a larger budget
@@ -503,6 +519,7 @@ def code_pack(vault: Path | str, target: str,
         "sections": emitted_sections,
         "dropped": dropped,
         "target_mode": mode,
+        "selector": selector if mode == "symbol" else None,
         "truncated": mode != "verbatim",
         "head_ref": head_ref,
         "target_chars": len(source),

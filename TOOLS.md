@@ -173,12 +173,22 @@ outline: [{level, title, line}], source?, pages?, page_map?, extract_path?}`.
   table reconstruction. `silica import` (mineru, docling) stays the upgrade
   path, and its sidecar wins wherever it exists.
 
-## 4. `silica_code_pack` — unchanged
+## 4. `silica_code_pack` — one file and what it touches, inside a budget
 
-Current signature stays: `target`, `budget_chars`, `sections`. The reply
-keeps `truncated` and `dropped` and adds `languages` (the parsers available
-in this install). Static AST only: no runtime analysis, no test selection,
-no documentation generation.
+`silica_code_pack(target, budget_chars=24000, sections=None)`
+
+`target` is a root-relative source path, optionally narrowed: `#Class`,
+`#Class.member`, or `#L<line>`, the innermost function, method or class
+whose declaration spans that line, from the line ranges the code graph
+keeps. A traceback's `file.py:148` or a diff hunk is a target as it is,
+with no read to learn which name to ask for; a line outside every
+declaration degrades to the file-level pack and says so in `dropped`.
+
+The reply keeps `truncated` and `dropped`, and adds `languages` (the parsers
+available in this install) and `selector` (the symbol served when
+`target_mode` is `symbol`, so a `#L` target says what it resolved to).
+Static AST only: no runtime analysis, no test selection, no documentation
+generation.
 
 ## 5. `silica_write_note` — explicit, atomic, guarded
 

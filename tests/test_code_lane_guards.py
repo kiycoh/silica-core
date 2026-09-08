@@ -183,3 +183,21 @@ def test_code_pack_names_a_parse_error_instead_of_emitting_nothing(tmp_path, mon
                         lambda vault: codegraph.CodeGraph(head_ref=graph.head_ref, files=broken))
     pack = codepack.code_pack(repo, "pkg/mod.py")
     assert any(d.startswith("note: pkg/mod.py did not parse") for d in pack["dropped"]), pack["dropped"]
+
+
+def test_line_selector_resolves_to_the_innermost_symbol(tmp_path, monkeypatch):
+    """`#L<line>` is what a traceback or a diff hunk hands over: the pack
+    names the symbol it landed in, a method over its class, and says when the
+    line sits outside every declaration."""
+    repo = tmp_path
+    _init_repo(repo)
+    _commit(repo, "pkg/mod.py",
+            "import os\n\n\nclass K:\n    def m(self):\n        return os.sep\n\n\ndef f():\n    return 1\n", "seed")
+    monkeypatch.setattr(codegraph, "store_path", lambda: repo / "cg.json")
+    pack = codepack.code_pack(repo, "pkg/mod.py#L6")
+    assert pack["selector"] == "K.m" and pack["target_mode"] == "symbol", pack["dropped"]
+    assert pack["text"].splitlines()[1].startswith("def m(self)")
+    assert codepack.code_pack(repo, "pkg/mod.py#L10")["selector"] == "f"
+    top = codepack.code_pack(repo, "pkg/mod.py#L1")
+    assert top["selector"] is None and top["target_mode"] == "verbatim"
+    assert any(d.startswith("note: no symbol of pkg/mod.py contains line 1") for d in top["dropped"])

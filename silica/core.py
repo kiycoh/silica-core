@@ -651,7 +651,7 @@ def silica_read(
 
 @tool(cls="atomic")
 def silica_code_pack(
-    target: Annotated[str, Field(description="Root-relative source path, optionally narrowed with '#Class' or '#Class.member'")],
+    target: Annotated[str, Field(description="Root-relative source path, optionally narrowed with '#Class', '#Class.member' or '#L<line>' (the symbol whose declaration spans that line)")],
     budget_chars: Annotated[int, Field(description="Character budget for the whole pack; the target is always served")] = 24000,
     sections: Annotated[list[str] | None, Field(description="Sections besides the target: any of 'hierarchy', 'neighborhood', 'external', 'importers'. Empty = all")] = None,
 ) -> dict:
