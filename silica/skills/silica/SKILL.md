@@ -10,7 +10,7 @@ serves five tools named `silica_*`. If they are deferred, load them with
 ToolSearch. If they are missing, say so and give the install line:
 
 ```bash
-uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, opencode, dsh
+uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, cursor, zed, … (silica setup --list)
 ```
 
 ## The loop

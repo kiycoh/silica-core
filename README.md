@@ -42,7 +42,7 @@ network.
 
 ```bash
 uv tool install 'silica-core[mcp]'   # or: pipx install 'silica-core[mcp]'
-silica setup claude                  # or: codex, opencode, dsh
+silica setup claude                  # or: codex, cursor, zed, goose, … (silica setup --list)
 ```
 
 The package is `silica-core`, the command is `silica`, the tools are
