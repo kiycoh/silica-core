@@ -1,11 +1,17 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/banner-light.svg" />
-    <img src="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/banner.svg" alt="Silica" width="440" />
+    <img src="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/banner.svg" alt="Silica Core" width="520" />
   </picture>
 </p>
 
 <p align="center">Retrieval tools for coding agents. No model in the loop.</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/silica-core/"><img src="https://img.shields.io/pypi/v/silica-core" alt="PyPI" /></a>
+  <a href="https://pypi.org/project/silica-core/"><img src="https://img.shields.io/pypi/pyversions/silica-core" alt="Python versions" /></a>
+  <a href="https://github.com/kiycoh/silica-core/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/kiycoh/silica-core/ci.yml?branch=main&label=ci" alt="CI" /></a>
+</p>
 
 ---
 
@@ -23,6 +29,11 @@ summarises, plans or remembers for you. The harness owns the loop.
 | `silica_code_pack` | an AST context pack for one source file inside a character budget |
 | `silica_write_note` | one atomic write, linted for structure and unresolved wikilinks |
 
+`silica_search` indexes markdown and the PDFs that carry a text layer.
+Source files are not in the index: `silica_files` lists a `.py` as
+`excluded`, `silica_read` serves it by line and `silica_code_pack` by file.
+To find a symbol in a repository, grep wins.
+
 The contract, the reply shapes and the acceptance checks are in
 [TOOLS.md](TOOLS.md). Nothing on that page needs an API key, a model or a
 network.
@@ -37,6 +48,27 @@ silica setup claude                  # or: codex, opencode, dsh
 The package is `silica-core`, the command is `silica`, the tools are
 `silica_*`: the distribution carries the name, the code keeps the namespace.
 
+Leave the choice to the harness. Measured with Opus on 2026-09-09, 144 runs,
+every run correct: no arm of any experiment separated on the answer, so what
+moves is the work spent reaching it. Twelve questions over a 5.5M-token
+corpus of papers, Silica reached for spontaneously, against the same harness
+without the plugin: 3.9 turns instead of 5.0, 2.9 tool calls instead of 4.0,
+$0.20 instead of $0.22 a task at a warm cache. The same answers for a
+quarter fewer calls. On code the model never reaches for `silica_search`,
+because the questions name identifiers and the descriptions say grep wins
+there: the two resident schemas cost 13% on those tasks and return nothing.
+Told to use the tools instead of grep it is worse everywhere: 49% over
+spontaneous use on the papers, 1.7 times a plain grep on code, 3.2 times at
+the worst task.
+
+Put the pair in front of the model instead: `silica mcp` marks
+`silica_search` and `silica_read` `anthropic/alwaysLoad`, so a client that
+defers MCP tools behind its own tool search keeps those two in the list and
+the other three ride behind them. On the same twelve document tasks the model
+reached for a deferred search once, and a resident one twelve times. The
+marker is declared, never inferred, and it has to reach the wire as `_meta`:
+a wrapper that rebuilds the tool list carries it over itself.
+
 `setup` registers the MCP server in the client's own config at user scope.
 Every session then serves the folder the client was opened in. To serve
 another root, pass `--vault DIR` in the server entry, or export
@@ -49,7 +81,11 @@ that page alone. No conversion, no `.md` written beside it. The reply also
 carries `extract_path`, the extracted text on disk, for `grep` and the
 harness's own reader — the line numbers there are the ones `silica_read`
 serves. A scan has no text layer and reads as `unconverted` until you
-convert it.
+convert it. `silica import` writes that conversion beside the original,
+refuses to replace a `.md` it did not write, and records the original's
+SHA-256 and the extracting tool's version in the frontmatter; `silica_read`
+and `silica_files` then report `source_state: stale` on either path when
+the PDF changed under a `.md` that did not.
 
 Extras: `[connect]` adds the Obsidian bridge, `[all]` both. The converters
 for PDF (headings, figures), DOCX, EPUB, FB2, RTF, XLS and ODF need no extra.

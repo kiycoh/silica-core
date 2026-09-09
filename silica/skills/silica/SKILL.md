@@ -1,6 +1,6 @@
 ---
 name: silica
-description: Search a folder of documents or code with located evidence instead of grep. Use before grep for any question about what the files in the current folder say; use when the user asks what a corpus, a set of papers, the docs or a repository say about something, when a question needs a passage you can cite by path and line, or when the answer may not be in the corpus at all and you need to know that before reading.
+description: Search a folder of documents or code with located evidence instead of grep. Use it for a question about what the files in the current folder say, when the answer is a passage and not a string; grep still wins on an exact string or a symbol name. Use when the user asks what a corpus, a set of papers, the docs or a repository say about something, when a question needs a passage you can cite by path and line, when several sources must be compared and each claim tabulated with its citation, or when the answer may not be in the corpus at all and you need to know that before reading.
 ---
 
 # Silica: located evidence, no model
@@ -51,6 +51,39 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, opencode
 5. **Write only when asked.** `silica_write_note(path, body)` writes one
    note as given and lints it. Nothing is captured or summarised for you;
    undo is git.
+
+## Compare sources
+
+For "what do these documents say about X", when a reader will check the
+answer:
+
+1. State the question and the selection rule in a line each: which
+   documents count (a folder, a date, a keyword), which do not.
+2. Search two or three phrasings in the corpus's words. In each reply,
+   `candidates` counts the documents that matched at all, `documents` is
+   the head of that ranking (the first k, plus the documents the hits came
+   from) and `scope` what the search could see. Keep all three: they bound
+   what was considered, and nothing in a reply is a roster of what was
+   read.
+3. Read every passage you will cite, with the hit's `version` as
+   `expect_version`.
+4. Answer as a table, one row per claim: claim, path, section or line,
+   version. Below it, the contradictions between sources, and what the
+   corpus does not say: the queries, their `terms_absent`, and the `scope`
+   counts, since absent terms alone do not prove silence while
+   `unconverted` or `failed` is above zero.
+5. Write the file only when asked. The queries and the versions in the
+   table are the record; rerun them to check whether the corpus still
+   supports a row.
+
+A source the folder lacks comes in through the harness's own tools (web
+search, a download), saved into the corpus and searched like the rest.
+Name what was saved: the full text, an abstract, or a report someone
+derived from it; they do not cite the same. A `.md` beside a PDF was
+converted from it, and reading either path reports `source_state`:
+`stale` when the PDF changed after the conversion, `unverifiable` when the
+sidecar records no hash, and then the citation is to the `.md`, not to the
+PDF.
 
 ## Code
 
