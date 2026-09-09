@@ -59,6 +59,65 @@ def _read(full: Path) -> str:
     return full.read_text(encoding="utf-8", errors="replace")
 
 
+def _source_state(original: Path, sidecar_text: str) -> str:
+    """Whether a sidecar `.md` still describes the bytes beside it: `current`
+    when the original hashes to the `source_sha256` the conversion recorded,
+    `stale` when it does not (the original was replaced, the sidecar kept),
+    `unverifiable` when the sidecar records no hash (a conversion older than
+    the field, or a `.md` someone wrote by hand). The text's `version` says
+    nothing about this: a stale sidecar is textually stable.
+
+    ponytail: the original is hashed on every call; a folder of hundreds of
+    large PDFs with sidecars pays that per listing. Cache by (mtime, size)
+    beside the index if a listing ever shows it.
+    """
+    from silica.kernel.write.frontmatter import split
+
+    data, _raw, _body = split(sidecar_text)
+    want = data.get("source_sha256") if isinstance(data, dict) else None
+    if not isinstance(want, str) or not want:
+        return "unverifiable"
+    try:
+        return "current" if hashlib.sha256(original.read_bytes()).hexdigest() == want else "stale"
+    except OSError:
+        return "unverifiable"
+
+
+def _conversion_of(md_full: Path, text: str) -> tuple[str | None, str | None]:
+    """(root-relative original, source_state) for a `.md` a conversion wrote,
+    (None, None) for any other note. Search returns the note's path, not the
+    PDF's, so the freshness check has to start from the note: the original is
+    the `source_file` its frontmatter names when that is a file under the
+    root, else a sibling with the same stem and a convertible suffix (a vault
+    moved since the conversion); neither found is `unverifiable`."""
+    from silica.kernel.write.frontmatter import split
+    from silica.sources.convert import DOC_EXTS
+
+    data, _raw, _body = split(text)
+    if not isinstance(data, dict) or not data.get("source_sha256"):
+        return None, None
+    named = data.get("source_file")
+    root = _root()
+    for cand in ([Path(named)] if isinstance(named, str) and named else []) + [md_full.with_suffix(e) for e in DOC_EXTS]:
+        try:
+            rel = _rel(str(cand))
+        except ValueError:
+            continue
+        if (root / rel).is_file():
+            return rel, _source_state(root / rel, text)
+    return None, "unverifiable"
+
+
+def _head(full: Path, limit: int = 65536) -> str:
+    """The first `limit` characters: enough for any frontmatter, and a listing
+    must not read every note whole to ask whether it is a conversion."""
+    try:
+        with full.open(encoding="utf-8", errors="replace") as fh:
+            return fh.read(limit)
+    except OSError:
+        return ""
+
+
 def _extract_cache(rel: str) -> Path:
     return _paths.index_dir() / "extract" / f"{hashlib.sha1(rel.encode()).hexdigest()}.txt"
 
@@ -306,7 +365,10 @@ def silica_files(
     whose text layer the index could not read, or an office file with no
     extracted `.md` beside it; `reason` says which). A PDF is indexed from
     its own text layer, one section per page, unless a `.md` sits beside it —
-    that sidecar is indexed instead. `index.state` is `cold` when nothing was
+    that sidecar is indexed instead, and both rows carry `source_state`:
+    `stale` means the original changed after the conversion, `unverifiable`
+    that the sidecar records no hash of it or its original is not under the
+    root. `index.state` is `cold` when nothing was
     ever indexed: an empty listing there is not "no files"."""
     from silica.sources.convert import DOC_EXTS, IMG_EXTS
 
@@ -338,11 +400,15 @@ def silica_files(
             row.update(status="failed", reason=failed[rel])
         elif suffix == ".md":
             row["status"] = "indexed" if stamps.get(rel) == st.st_mtime else "changed"
+            src, state = _conversion_of(full, _head(full))
+            if state:  # the note a conversion wrote carries the verdict too: it is the path search returns
+                row.update(source=src, source_state=state)
         elif suffix in DOC_EXTS and suffix not in IMG_EXTS:
             sidecar = full.with_suffix(".md")
             skip = skipped.get(rel, {})
             if sidecar.is_file():
-                row.update(status="excluded", reason=f"converted: {sidecar.relative_to(root).as_posix()}")
+                row.update(status="excluded", reason=f"converted: {sidecar.relative_to(root).as_posix()}",
+                           source_state=_source_state(full, _read(sidecar)))
             elif suffix != ".pdf":
                 row["status"] = "unconverted"
             elif stamps.get(rel) == st.st_mtime:
@@ -570,10 +636,16 @@ def silica_read(
     `extract_path` is that text on disk, for grep and the harness's own
     reader (a cache, rebuilt when the PDF changes, under no `version`
     guard). A PDF or office file with a `.md` extracted beside it is served
-    from that instead. Either way `source` names the original, and a PDF
+    from that instead, and `source_state` says whether the original still
+    hashes to what the conversion recorded: `stale` means the PDF changed
+    and the `.md` did not, `unverifiable` that the sidecar records no hash or
+    its original is gone. Reading the `.md` itself, the path a search hit
+    carries, reports the same `source` and `source_state`.
+    Either way `source` names the original, and a PDF
     with no readable text layer is `error.unconverted`. Carry
     `version` forward as `expect_version` to be refused instead of reading
-    different bytes under an old citation."""
+    different bytes under an old citation; `version` is the served text's,
+    never the original's."""
     root = _root()
     try:
         rel = _rel(path)
@@ -583,15 +655,18 @@ def silica_read(
     if not full.is_file():
         return _error("not_found", f"{rel} is not a file under {root}")
     pages: list[dict] = []
-    source, paged = None, False
+    source, paged, source_state = None, False, None
     if full.suffix.lower() != ".pdf" and _is_text(full):
         text = _read(full)
+        if full.suffix.lower() == ".md":
+            source, source_state = _conversion_of(full, text)
     else:
         sidecar = full.with_suffix(".md")
         if sidecar.is_file():
+            text = _read(sidecar)
+            source_state = _source_state(full, text)
             source, full = rel, sidecar
             rel = sidecar.relative_to(root).as_posix()
-            text = _read(full)
         elif full.suffix.lower() == ".pdf":
             text, pages, reason = _pdf_text(rel, full)
             if not text:
@@ -641,7 +716,7 @@ def silica_read(
     return {"root": str(root), "path": rel, "version": version, "start": start, "end": served_end,
             "text": "\n".join(out), "truncated": truncated,
             "next_start": served_end + 1 if truncated else None,
-            "outline": outline, "source": source,
+            "outline": outline, "source": source, "source_state": source_state,
             "pages": len(page_starts) if paged else None,
             # the page the slice opens on, plus every page that starts inside it:
             # a 500-page book must not spend a page table on every read

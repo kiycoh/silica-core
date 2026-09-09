@@ -178,10 +178,11 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as e:
             return _emit(core._error("out_of_root", str(e)))
         try:
-            notes = convert(str(root / rel), str((root / rel).parent))
+            notes = convert(str(root / rel), str((root / rel).parent), beside=True)
         except Exception as e:  # converter errors are the reply, not a traceback
             return _emit(core._error("bad_argument", str(e)))
-        return _emit({"root": str(root), "source": rel, "notes": notes})
+        return _emit({"root": str(root), "source": rel, "notes": notes,
+                      "next": f"silica_read({rel!r}) now serves {notes[0]} and reports source_state"})
     p.print_help()
     return 2
 

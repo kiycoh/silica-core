@@ -59,6 +59,7 @@ import io
 import json
 import logging
 import os
+import hashlib
 import re
 import shutil
 import signal
@@ -277,7 +278,7 @@ _ASR_TIMEOUT_S = 7200
 _ASR_PARAGRAPH_GAP_S = 2.0
 
 
-def convert(target: str, dest_dir: str = "") -> list[str]:
+def convert(target: str, dest_dir: str = "", beside: bool = False) -> list[str]:
     """Convert a non-`.md` document into one or more `.md` notes in the inbox.
 
     Returns the list of created note paths. A small document is a single note; a
@@ -286,6 +287,11 @@ def convert(target: str, dest_dir: str = "") -> list[str]:
     units, not the whole book collapsed into one note. Dispatch by extension
     over ``DOC_EXTS``; anything else → ``ValueError``. Side artifacts (extracted
     figures) go to ``<dest_dir>/Images`` when given, else ``<inbox>/Images``.
+
+    ``beside`` (what `silica import` asks for) writes one `.md` next to the
+    source instead, never segmented: that sidecar is what `silica_read` and
+    the index serve in place of the PDF's own text layer, and the sidecar
+    lookup is `with_suffix(".md")`, one file.
     """
     # Strip first: a quoted path with a stray trailing space ("…book.pdf ") has
     # suffix ".pdf " — not in DOC_EXTS — and the rejection then prints ".pdf",
@@ -293,7 +299,7 @@ def convert(target: str, dest_dir: str = "") -> list[str]:
     target = target.strip()
     if Path(target).suffix.lower() not in DOC_EXTS:
         raise ValueError(f"no converter for {Path(target).suffix.lower() or 'this file type'}")
-    return _doc_to_md(target, dest_dir)
+    return _doc_to_md(target, dest_dir, beside)
 
 
 def _split_on_headings(md: str) -> list[str]:
@@ -517,33 +523,44 @@ def _respace_prose(md: str) -> str:
     return "".join(out)
 
 
-def _doc_to_md(target: str, dest_dir: str) -> list[str]:
+def _doc_to_md(target: str, dest_dir: str, beside: bool = False) -> list[str]:
     src = _resolve_input(target)
     suffix = src.suffix.lower()
+    sidecar = src.with_suffix(".md") if beside else None
+    if sidecar is not None:
+        _sidecar_guard(src, sidecar)  # before the provider runs: a refusal must not cost an OCR pass
+    # The bytes the text derives from are the bytes hashed. Hashing after the
+    # provider would stamp a PDF replaced during a long OCR pass with the new
+    # file's digest and the old file's text, and `silica_read` would call that
+    # `current`; so the digest is taken first and the file checked against it
+    # once the provider is done.
+    digest = hashlib.sha256(src.read_bytes()).hexdigest()
     # Images and OOXML have exactly one backend, so the provider seam does not
     # apply: a text-layer reader opens an image but reads no text out of it
     # (measured on MuPDF: a 1653x2339 render of a text page yields ''), and
     # neither docling nor opendataloader is a path verified here for either family.
+    # The lane's name rides into the note's `converter:` line; named here and
+    # not read off the function, which a test or a caller may have swapped.
     if suffix in _MINERU_ONLY_EXTS:
-        provider = _pdf_via_mineru
+        provider, converter = _pdf_via_mineru, "mineru"
     elif suffix in MEDIA_EXTS:
-        provider = _via_asr
+        provider, converter = _via_asr, "asr"
     elif suffix in ODF_EXTS:
-        provider = _via_odf
+        provider, converter = _via_odf, "odf"
     elif suffix == ".rtf":
-        provider = _via_rtf
+        provider, converter = _via_rtf, "rtf"
     elif suffix == ".xls":
-        provider = _via_xls
+        provider, converter = _via_xls, "xls"
     elif suffix in LEGACY_OFFICE_EXTS:
-        provider = _via_legacy_office
+        provider, converter = _via_legacy_office, "legacy_office"
     # The seam is PDF-only — docling/opendataloader/mineru take a PDF and
     # nothing else, so DOCX/EPUB/FB2 each have their own in-process reader.
     elif suffix == ".docx":
-        provider = _via_docx
+        provider, converter = _via_docx, "docx"
     elif suffix == ".epub":
-        provider = _via_epub
+        provider, converter = _via_epub, "epub"
     elif suffix == ".fb2":
-        provider = _via_fb2
+        provider, converter = _via_fb2, "fb2"
     else:
         name = resolve_pdf_provider(CONFIG.pdf_provider)
         if name not in PDF_PROVIDERS:
@@ -551,7 +568,7 @@ def _doc_to_md(target: str, dest_dir: str) -> list[str]:
                 f"unknown pdf_provider {CONFIG.pdf_provider!r} "
                 f"(known: {', '.join(PDF_PROVIDERS)})"
             )
-        provider = PDF_PROVIDERS[name]
+        provider, converter = PDF_PROVIDERS[name], name
     with tempfile.TemporaryDirectory() as tmp:
         md_text, images_src = provider(src, Path(tmp))
         if not md_text.strip():
@@ -590,6 +607,8 @@ def _doc_to_md(target: str, dest_dir: str) -> list[str]:
         renamed = _copy_images(                                  # before tmp is cleaned
             images_src, _images_dest(dest_dir), _image_prefix(src), only=referenced
         )
+    if hashlib.sha256(src.read_bytes()).hexdigest() != digest:
+        raise ValueError(f"{src.name} changed while it was being converted; run the import again")
     body = _rewrite_image_links(_respace_prose(strip_degenerate_runs(md_text)), renamed)
     from silica.driver import DRIVER
     from silica.kernel.vault_manifest import active_inbox_dir
@@ -602,7 +621,15 @@ def _doc_to_md(target: str, dest_dir: str) -> list[str]:
     # PDF is untraceable once the inbox note is archived. Plain quoted string,
     # not a link — the pointer must not enter the graph. CLEANUP carries it
     # into the source leaf when the note is later nucleated with keep_sources.
-    fm = _provenance_fm(src, body)
+    fm = _provenance_fm(src, body, converter, digest)
+    if sidecar is not None:
+        try:
+            note_rel = sidecar.resolve().relative_to(Path(CONFIG.vault_path).resolve()).as_posix()
+        except ValueError:
+            raise ValueError(f"{src} is outside the root; a sidecar can only sit beside a file under it") from None
+        _sidecar_guard(src, sidecar)  # again: the conversion took time, and the file beside may not be ours any more
+        DRIVER.upsert(note_rel, _with_text_hash(fm, body.lstrip("\n")))
+        return [note_rel]
     # Apparatus segments carry a frontmatter flag so /nucleate can skip them: a
     # reference list is citation metadata and a venue checklist is submission
     # paperwork, not content — each gets kept as raw material, never distilled
@@ -1861,11 +1888,101 @@ def _doc_citation(src: Path, md_text: str) -> dict[str, str]:
     return cite
 
 
-def _provenance_fm(src: Path, md_text: str = "") -> str:
+def _sidecar_guard(src: Path, sidecar: Path) -> None:
+    """`beside` may replace only its own earlier output. A `.md` whose
+    frontmatter names no `source_file` for `src` is someone's note; a
+    conversion whose body no longer hashes to its `text_sha256` is someone's
+    work since. Both are refused, and so is a conversion older than
+    `text_sha256`, since nothing can say whether it was edited; moving or
+    deleting the file is the override."""
+    from silica.kernel.write.frontmatter import split
+
+    if not sidecar.exists():
+        return
+    data, _raw, body = split(sidecar.read_text(encoding="utf-8", errors="replace"))
+    data = data if isinstance(data, dict) else {}
+    named = Path(str(data.get("source_file") or ""))
+    ours = bool(named.name) and (named.name == src.name or named.resolve() == src.resolve())
+    want = data.get("text_sha256")
+    if not ours or not isinstance(want, str):
+        raise ValueError(f"{sidecar.name} exists beside {src.name} and is not a conversion of it; "
+                         "move it, or delete it to convert again")
+    if want != hashlib.sha256(body.encode("utf-8")).hexdigest():
+        raise ValueError(f"{sidecar.name} was edited after its conversion; move it, or delete it to convert again")
+
+
+def _with_text_hash(fm: str, body: str) -> str:
+    """The note with `text_sha256` in its frontmatter: the hash of the body as
+    `frontmatter.split` will serve it, which is what `_sidecar_guard` compares
+    on the next import. Computed on the assembled note, since the frontmatter
+    delimiter decides where the body starts."""
+    from silica.kernel.write.frontmatter import split
+
+    _data, _raw, served = split(fm + body)
+    line = f'text_sha256: "{hashlib.sha256(served.encode("utf-8")).hexdigest()}"\n'
+    assert fm.endswith("---\n\n")
+    return fm[:-len("---\n\n")] + line + "---\n\n" + body
+
+
+def _command_version(cmd: list[str]) -> str:
+    """First line of `cmd`'s version output, `unknown` on any failure: a
+    version probe is metadata and never worth failing a conversion over."""
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout.strip().splitlines()
+        return out[0].split(" Copyright")[0].strip() if out else "unknown"
+    except Exception:  # noqa: BLE001 — a missing binary, a timeout, a test's fake runner
+        return "unknown"
+
+
+_LANE_DISTS = {"pdfium": "pypdfium2", "docling": "docling", "opendataloader": "opendataloader-pdf",
+               "docx": "mammoth", "rtf": "striprtf", "xls": "xlrd"}
+
+
+def _converter_version(converter: str) -> str:
+    """The tool that produced the text, with its version — Silica's own version
+    says nothing about what PDFium, MinerU or Docling extracted, and each of
+    them changes its output between releases. `unknown` when it cannot be
+    read; `stdlib` for the in-process parsers versioned by silica-core alone.
+    A legacy office file names soffice and the PDF lane after it; a media file
+    names ffmpeg and the speech-to-text provider and model."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    if converter in _LANE_DISTS:
+        try:
+            return f"{_LANE_DISTS[converter]} {version(_LANE_DISTS[converter])}"
+        except PackageNotFoundError:
+            return f"{_LANE_DISTS[converter]} unknown"
+    if converter == "mineru":
+        return _command_version(["mineru", "--version"]).replace(", version", "")
+    if converter == "legacy_office":
+        pdf_lane = resolve_pdf_provider(CONFIG.pdf_provider)
+        return f"{_command_version([soffice_bin() or 'soffice', '--version'])}; {pdf_lane} {_converter_version(pdf_lane)}"
+    if converter == "asr":
+        model = CONFIG.stt_whispercpp_model if CONFIG.stt_provider == "whispercpp" else CONFIG.stt_model
+        return f"{_command_version(['ffmpeg', '-version'])}; {CONFIG.stt_provider} {model or 'unknown'}"
+    if converter in ("epub", "fb2", "odf"):
+        return "stdlib"
+    return "unknown"
+
+
+def _provenance_fm(src: Path, md_text: str = "", converter: str = "", digest: str = "") -> str:
     """Frontmatter block naming the converted file's real origin (absolute
     path), the document's own creation date when it states one, and the
     citation fields it declares (doi/arxiv/authors/title) — what a researcher
-    needs to cite the source without reopening the original file."""
+    needs to cite the source without reopening the original file.
+
+    Plus the identity of the conversion itself: `source_sha256` of the
+    original's bytes (`digest`, taken by the caller before the provider read
+    them), the `converter` lane, `converter_version` — the tool that did the
+    extraction, then Silica — and `converted_at`. The text's `version` says whether the note changed; only
+    the hash says whether the original changed under it — a PDF replaced
+    with the old `.md` left beside it kept every citation textually stable
+    and derived from bytes nobody can reopen. `silica_read` and `silica_files`
+    report that as `source_state: stale`."""
+    import datetime
+
+    from silica import __version__
+
     quoted = str(src).replace("\\", "\\\\").replace('"', '\\"')
     date = _source_date(src)
     lines = [f"date: {date}\n"] if date else []
@@ -1877,7 +1994,13 @@ def _provenance_fm(src: Path, md_text: str = "") -> str:
     for key, val in _doc_citation(src, md_text).items():
         v = str(val).replace("\\", "\\\\").replace('"', '\\"')
         lines.append(f'{key}: "{v}"\n')
-    return f'---\n{"".join(lines)}source_file: "{quoted}"\n---\n\n'
+    # After `source_file`, which stays the first line of a note that declares
+    # nothing else: the conversion's identity, not the document's.
+    tail = (f'source_sha256: "{digest or hashlib.sha256(src.read_bytes()).hexdigest()}"\n'
+            f'converter: "{converter or "unknown"}"\n'
+            f'converter_version: "{_converter_version(converter)}; silica-core {__version__}"\n'
+            f'converted_at: "{datetime.datetime.now().astimezone().isoformat(timespec="seconds")}"\n')
+    return f'---\n{"".join(lines)}source_file: "{quoted}"\n{tail}---\n\n'
 
 
 def _resolve_input(target: str) -> Path:

@@ -45,7 +45,7 @@ exactly one `status`:
 | `failed` | read or conversion failed; `reason` says why |
 | `unconverted` | a PDF whose text layer the index could not read (a scan, an encrypted or broken file), or another binary source with no extracted text yet; `reason` says which |
 
-Reply: `{root, total, files: [{path, bytes, status, reason?}],
+Reply: `{root, total, files: [{path, bytes, status, reason?, source?, source_state?}],
 counts: {indexed, changed, excluded, failed, unconverted}, excluded_dirs,
 truncated, next_cursor, index}`.
 
@@ -61,7 +61,13 @@ the index is cold.
 A PDF is indexed from its own text layer, one section per page, with no
 conversion step and no file written beside it. A `.md` sitting next to the
 PDF overrides that: the sidecar is the note, the PDF reads as `excluded:
-converted`. A PDF the index has not read yet is `changed`, not
+converted`, and both rows — the PDF's and the sidecar's, which is the path
+a search hit carries — say `source_state`: `current` when the original
+still hashes to the `source_sha256` the conversion wrote into the sidecar's
+frontmatter, `stale` when it does not, `unverifiable` when the sidecar
+records no hash (a conversion older than the field, or a `.md` written by
+hand) or its original is not under the root. The sidecar's row also names
+the original as `source`. A PDF the index has not read yet is `changed`, not
 `unconverted` — the second status is a verdict, and it needs the read.
 
 ## 2. `silica_search` — ranked passages with an honest zero
@@ -150,7 +156,8 @@ one section by heading title (exact or unique prefix), or the whole file when
 it fits. The outline always comes along; it is cheap and removes a tool.
 
 Reply: `{path, version, start, end, text, truncated, next_start,
-outline: [{level, title, line}], source?, pages?, page_map?, extract_path?}`.
+outline: [{level, title, line}], source?, source_state?, pages?, page_map?,
+extract_path?}`.
 
 - `expect_version` that does not match the file returns `error.changed` with
   the current `version`. A stale citation never silently opens different
@@ -167,11 +174,23 @@ outline: [{level, title, line}], source?, pages?, page_map?, extract_path?}`.
   guard — so a citation still goes through the tool.
 - A binary source with an extracted `.md` beside it is served from that
   sidecar instead, and then `pages`, `page_map` and `extract_path` are null.
-  Either way `source` names the original. A PDF with no readable text layer,
-  or another binary source with no sidecar: `error.unconverted`.
+  Either way `source` names the original, and `source_state` says whether it
+  still hashes to what the conversion recorded (`current`, `stale`,
+  `unverifiable`, as in `silica_files`). Reading the sidecar by its own path,
+  the one a search hit carries, reports the same `source` and
+  `source_state`. `version` is the served text's and
+  moves only when the text does: a PDF replaced under an untouched sidecar is
+  `stale` at the same `version`, and the citation is to the `.md`. A PDF with
+  no readable text layer, or another binary source with no sidecar:
+  `error.unconverted`.
 - The text layer is what PDFium hands over: no OCR, no column reordering, no
   table reconstruction. `silica import` (mineru, docling) stays the upgrade
-  path, and its sidecar wins wherever it exists.
+  path, and its sidecar wins wherever it exists. It writes the sidecar beside
+  the original with `source_sha256` (taken before the extraction and checked
+  after it: a source that changed in between is refused), `converter`,
+  `converter_version` (the extracting tool, then Silica), `converted_at` and
+  `text_sha256` in the frontmatter. It refuses to replace a `.md` it did not
+  write, or one edited since; moving that file is the override.
 
 ## 4. `silica_code_pack` — one file and what it touches, inside a budget
 
@@ -252,3 +271,7 @@ optional REPL, converters beyond the built-in PDF text layer.
    matches both `borrow` and `checker`.
 4. `silica_read` with a stale `expect_version` returns `error.changed`.
 5. The default MCP tool list has exactly five entries.
+6. A PDF replaced under an untouched sidecar reads as `source_state: stale`
+   at the same `version`, by either path (`tests/test_core_contract.py`),
+   and `silica import` never replaces a `.md` it did not write
+   (`tests/test_convert.py`).

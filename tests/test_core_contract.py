@@ -190,3 +190,68 @@ def test_documents_are_the_head_of_the_ranking_with_coverage(root):
     assert r["candidates"] == 2 and len(r["documents"]) == 1, r["documents"]
     assert {h["path"] for h in r["hits"]} <= {d["path"] for d in r["documents"]}
     assert all(0 < d["coverage"] <= 1 for d in r["documents"])
+
+
+def test_a_replaced_original_reads_as_stale_under_the_same_text_version(root, tmp_path, monkeypatch, capsys):
+    """Import a PDF, replace its bytes, keep the sidecar: the served text has
+    not changed, so its `version` must hold, and the reply must say the
+    source did — the two are different facts, and only the hash the
+    conversion recorded can tell the second."""
+    import silica.driver
+    from silica.cli import main
+    from silica.config import CONFIG
+    from tests.doc_factory import pdf_bytes
+
+    monkeypatch.setattr(silica.driver, "_driver", None)
+    monkeypatch.setattr(CONFIG, "pdf_provider", "pdfium")  # the machine's SILICA_PDF_PROVIDER may say mineru: 33 s of OCR
+    (tmp_path / "docs" / "paper.pdf").write_bytes(pdf_bytes(["Compaction merges sorted runs."]))
+    assert main(["--vault", str(tmp_path), "import", "docs/paper.pdf"]) == 0
+    assert json.loads(capsys.readouterr().out)["notes"] == ["docs/paper.md"]
+    r = root.read("docs/paper.pdf")
+    assert r["path"] == "docs/paper.md" and r["source"] == "docs/paper.pdf" and r["source_state"] == "current"
+    assert "Compaction merges sorted runs." in r["text"]
+
+    (tmp_path / "docs" / "paper.pdf").write_bytes(pdf_bytes(["Compaction was rewritten."]))
+    again = root.read("docs/paper.pdf", expect_version=r["version"])
+    assert again["version"] == r["version"] and again["source_state"] == "stale"
+    row = {f["path"]: f for f in root.files(status="excluded")["files"]}["docs/paper.pdf"]
+    assert row["reason"] == "converted: docs/paper.md" and row["source_state"] == "stale"
+
+    # a `.md` nobody converted records no hash: freshness is not knowable, and
+    # a note served as itself has no source to be fresh against
+    (tmp_path / "docs" / "scan.md").write_text("# By hand\n", encoding="utf-8")
+    assert root.read("docs/scan.pdf")["source_state"] == "unverifiable"
+    assert root.read("docs/lsm.md")["source_state"] is None
+
+
+def test_the_search_to_read_path_reports_a_stale_conversion(root, tmp_path, monkeypatch):
+    """Search returns the note's path, not the PDF's; reading that path is
+    the ordinary route, and it must carry the same verdict as reading the
+    PDF. Import A, index, replace the PDF with B, search a phrase of A."""
+    import silica.driver
+    from silica.config import CONFIG
+    from silica.sources.convert import convert
+    from tests.doc_factory import pdf_bytes
+
+    monkeypatch.setattr(silica.driver, "_driver", None)
+    monkeypatch.setattr(CONFIG, "pdf_provider", "pdfium")
+    pdf = tmp_path / "docs" / "paper.pdf"
+    pdf.write_bytes(pdf_bytes(["Bloom filters skip absent keys."]))
+    assert convert(str(pdf), str(pdf.parent), beside=True) == ["docs/paper.md"]
+    root.build_index()
+    hit = root.search("bloom filters absent keys")["hits"][0]
+    assert hit["path"] == "docs/paper.md"
+    r = root.read(hit["path"], expect_version=hit["version"])
+    assert r["source"] == "docs/paper.pdf" and r["source_state"] == "current"
+
+    pdf.write_bytes(pdf_bytes(["Rewritten under the note."]))
+    again = root.read(hit["path"], expect_version=hit["version"])
+    assert again["version"] == hit["version"] and again["source_state"] == "stale"
+    assert again["source"] == "docs/paper.pdf"
+    rows = {f["path"]: f for f in root.files()["files"]}
+    assert rows["docs/paper.md"]["source_state"] == "stale" and rows["docs/paper.md"]["source"] == "docs/paper.pdf"
+    assert rows["docs/paper.pdf"]["source_state"] == "stale"
+
+    pdf.unlink()  # the original gone: the note keeps its hash, nothing to check it against
+    assert root.read("docs/paper.md")["source_state"] == "unverifiable"
+    assert "source_state" not in rows["docs/lsm.md"]

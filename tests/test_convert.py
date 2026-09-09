@@ -1690,3 +1690,91 @@ def test_a_single_segment_of_real_content_stays_unflagged(tmp_vault, monkeypatch
     head = _inbox_note(paths[0]).read_text(encoding="utf-8").split("\n---\n")[0]
     assert "references: true" not in head and "boilerplate: true" not in head
     assert not conv.is_skippable_chunk(paths[0])
+
+
+# --- the conversion's own identity, and the sidecar `silica import` leaves ----
+
+def test_beside_writes_one_sidecar_that_records_the_originals_hash(tmp_vault, monkeypatch):
+    """`silica import` leaves the `.md` next to the source: that is the file
+    `silica_read` and the index serve in place of the text layer, looked up
+    as `with_suffix('.md')`, so it is one file even for a book, and it says
+    which bytes it came from — the text's version cannot."""
+    import hashlib
+
+    monkeypatch.setattr(CONFIG, "pdf_provider", "pdfium")
+    root = Path(CONFIG.vault_path)
+    (root / "papers").mkdir()
+    (root / "papers" / "lsm.pdf").write_bytes(_pdf_bytes(["LSM trees buffer writes."]))
+
+    assert conv.convert("papers/lsm.pdf", beside=True) == ["papers/lsm.md"]
+    note = (root / "papers" / "lsm.md").read_text(encoding="utf-8")
+    head = note.split("\n---\n")[0]
+    digest = hashlib.sha256((root / "papers" / "lsm.pdf").read_bytes()).hexdigest()
+    assert f'source_sha256: "{digest}"' in head
+    assert re.search(r'^converter: "pdfium"$', head, re.M)
+    assert re.search(r'^converter_version: "pypdfium2 [^;"]+; silica-core [^"]+"$', head, re.M)
+    assert re.search(r'^converted_at: "\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', head, re.M)
+    assert "LSM trees buffer writes." in note and not (root / "Inbox").exists()
+
+    chapter = " ".join(f"w{i}" for i in range(6000))
+    monkeypatch.setattr(conv, "_via_docx", lambda src, wd: (f"# One\n\n{chapter}\n\n# Two\n\n{chapter}\n", wd))
+    tmp_vault.note("book.docx", "x")
+    assert conv.convert("book.docx") != ["book.md"]           # the inbox path segments a book
+    assert conv.convert("book.docx", beside=True) == ["book.md"]  # the sidecar never does
+    assert 'converter: "docx"' in (root / "book.md").read_text(encoding="utf-8")
+
+
+def test_beside_refuses_a_note_it_did_not_write_and_an_edited_conversion(tmp_vault, monkeypatch):
+    """`paper.md` beside `paper.docx` may be the user's notes. Only the
+    converter's own untouched output is replaced; anything else is refused
+    before the provider runs, and moving the file is the override."""
+    monkeypatch.setattr(conv, "_via_docx", lambda src, wd: ("# Doc\n\nbody", wd))
+    root = Path(CONFIG.vault_path)
+    tmp_vault.note("paper.docx", "x")
+    (root / "paper.md").write_text("# My notes\n\nkeep me\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not a conversion of it"):
+        conv.convert("paper.docx", beside=True)
+    assert (root / "paper.md").read_text(encoding="utf-8") == "# My notes\n\nkeep me\n"
+
+    (root / "paper.md").unlink()
+    assert conv.convert("paper.docx", beside=True) == ["paper.md"]
+    first = (root / "paper.md").read_text(encoding="utf-8")
+    assert 'text_sha256: "' in first
+    assert conv.convert("paper.docx", beside=True) == ["paper.md"]  # its own output: replaced
+
+    (root / "paper.md").write_text(first.replace("body", "body, edited by hand"), encoding="utf-8")
+    with pytest.raises(ValueError, match="edited after its conversion"):
+        conv.convert("paper.docx", beside=True)
+    assert "edited by hand" in (root / "paper.md").read_text(encoding="utf-8")
+
+    # a conversion older than `text_sha256` cannot say whether it was edited: refused too
+    (root / "paper.md").write_text(re.sub(r"(?m)^text_sha256: .*\n", "", first), encoding="utf-8")
+    with pytest.raises(ValueError, match="not a conversion of it"):
+        conv.convert("paper.docx", beside=True)
+
+
+def test_an_original_replaced_during_conversion_is_refused_not_stamped(tmp_vault, monkeypatch):
+    """The provider read A; the file became B before the note was written.
+    Stamping A's text with B's hash would read as `current` forever."""
+    root = Path(CONFIG.vault_path)
+    tmp_vault.note("memo.docx", "A")
+
+    def swap(src, wd):
+        src.write_text("B", encoding="utf-8")
+        return "# From A", wd
+
+    monkeypatch.setattr(conv, "_via_docx", swap)
+    with pytest.raises(ValueError, match="changed while it was being converted"):
+        conv.convert("memo.docx", beside=True)
+    assert not (root / "memo.md").exists()
+
+
+def test_converter_version_names_the_tool_not_only_silica(tmp_vault, monkeypatch):
+    from importlib.metadata import version
+
+    monkeypatch.setattr(CONFIG, "pdf_provider", "pdfium")
+    (Path(CONFIG.vault_path) / "p.pdf").write_bytes(_pdf_bytes(["text"]))
+    head = _inbox_note(conv.convert("p.pdf")[0]).read_text(encoding="utf-8").split("\n---\n")[0]
+    assert 'converter: "pdfium"' in head
+    assert f'converter_version: "pypdfium2 {version("pypdfium2")}; silica-core ' in head
+    assert conv._converter_version("epub") == "stdlib" and conv._converter_version("nope") == "unknown"
