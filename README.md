@@ -150,6 +150,13 @@ silica code-pack src/search/index.py --budget 12000
 silica mcp --extended                          # also serve the wikilink tools
 ```
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/search-hit.png" alt="silica search &quot;leveled compaction&quot; over nine LSM papers: the hit carries the file, p. 5 and the passage; beside it the PDF is open on that page with the same passage highlighted" width="900" />
+</p>
+
+Nine arXiv papers in a folder, indexed in 2.1 s. The hit names the file, the
+page and the passage — and the page beside it is the check, not a promise.
+
 ## What it reads
 
 A PDF with a text layer is searched as it is: the index reads the layer
@@ -181,6 +188,15 @@ ranked list always has a top. What tells the two apart:
   found nowhere, so absence pulls coverage down instead of vanishing from it.
 - `terms_absent`: query terms that occur nowhere in the corpus.
 - `matched_terms`: which words this hit actually contains.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/search-says-no.png" alt="silica search &quot;raft consensus log replication&quot; over the same nine papers: terms_absent lists raft and consensus, coverage falls to 0.19, and the top hit is a passage about data replication rather than Raft" width="900" />
+</p>
+
+`raft consensus log replication` over the same nine papers: `raft` and
+`consensus` occur in none of them, `coverage` falls to 0.19, and the top hit
+matched `log` and `replication` — a passage about replicating data, not about
+Raft. The ranking still has a top; the numbers beside it say what it is worth.
 
 Measured on 254 converted papers (22 MB): the answered questions scored
 0.69 to 1.00 on their top hit, a question the corpus does not cover scored
