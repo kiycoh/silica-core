@@ -9,14 +9,25 @@ Silica uses [uv](https://github.com/astral-sh/uv). Everything runs through it:
 ```bash
 git clone https://github.com/kiycoh/silica-core.git
 cd silica-core
-uv pip install -e '.[mcp]'   # drop [mcp] if you don't touch the MCP server
-uv run silica doctor         # sanity-check the environment
+uv sync --extra dev --extra mcp   # drop --extra mcp if you don't touch the MCP server
+uv run silica doctor              # sanity-check the environment
 ```
 
 ## Before you open a PR
 
 ```bash
-uv run pytest                # tests must pass
+uv run pytest -q                                                              # tests must pass
+uv run lint-imports && uv run mypy silica && uv run ruff check silica tests   # so must these
+```
+
+If you touch ranking, run the acceptance check on a corpus of your own and the
+BEIR benchmark before and after; `docs/benchmarks.md` says what each measures:
+
+```bash
+SILICA_BENCH_CORPUS=/path/to/markdown uv run pytest tests/test_retrieval_check.py -s
+uv run scripts/bench_beir.py                    # nDCG@10 on SciFact and NFCorpus, downloads them once into bench/
+uv run scripts/bench_beir.py --arm hybrid       # the dense leg, with whatever SILICA_EMBEDDING_* names
+uv run scripts/bench_beir.py --compare A B     # two saved runs, paired per query, with a 95% interval
 ```
 
 - Every change to non-trivial logic (a branch, a parser, a write/gate path) leaves at least one runnable test behind. Follow the existing `tests/test_*.py` style; no new frameworks or fixtures unless the change genuinely needs them.

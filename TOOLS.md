@@ -27,8 +27,8 @@ it yet; the refactor is done when it does and the acceptance checks pass.
 | `root` | absolute root every path in the reply is relative to |
 | `version` | short content hash of a file at read time. A caller that carries it forward detects change instead of citing different bytes under an old reference |
 | `truncated` | true when a cap cut the reply; the reply says how to fetch the rest |
-| `index` | `{state, docs, built_at}` with `state` one of `cold` (never built), `ready`, `stale` (files changed since). An empty result under `cold` is not "no match" |
-| `error` | only on failure: `{code, hint}` with `code` one of `not_found`, `out_of_root`, `changed`, `index_cold`, `unconverted`, `bad_argument` |
+| `index` | `{state, docs, built_at, pending}` with `state` one of `cold` (never built), `ready`, `stale` (behind the disk by `pending` documents: changed, new or gone). An empty result under `cold` is not "no match"; a reply under `stale` was served from the index as it was |
+| `error` | only on failure: `{code, hint}` with `code` one of `not_found`, `out_of_root`, `changed`, `index_cold`, `unconverted`, `bad_argument`, `consent_required` |
 
 ## 1. `silica_files` — inventory and index state
 
@@ -41,7 +41,7 @@ exactly one `status`:
 |---|---|
 | `indexed` | text is in the index and matches the file on disk |
 | `changed` | on disk it differs from what the index holds |
-| `excluded` | not read by the index: an ignore rule, a hidden folder, a type the index does not read, or a source already converted to a `.md` beside it (`reason` says which) |
+| `excluded` | not read by the index: an ignore rule (a built-in noise folder, or a file or folder `.silicaignore` names), a hidden name, a type the index does not read, or a source already converted to a `.md` beside it (`reason` says which) |
 | `failed` | read or conversion failed; `reason` says why |
 | `unconverted` | a PDF whose text layer the index could not read (a scan, an encrypted or broken file), or another binary source with no extracted text yet; `reason` says which |
 
@@ -53,6 +53,14 @@ The folders the walk does not enter (hidden, or an ignore rule) are a count,
 `excluded_dirs`, in every listing and rows only under `status=excluded`;
 `counts.excluded` includes them. `status` already says whether a file
 changed since the index read it, so no timestamp rides along.
+
+`<root>/.silicaignore` is what the index should not search, as distinct
+from what git should not commit (`.gitignore` is deliberately not read: a
+gitignored folder is often exactly where the notes are). One pattern per
+line, `#` comments: a bare name (`archive`, `*.draft.md`) matches a file or
+folder of that name at any depth; a pattern with a `/` (`docs/private`,
+`templates/*.md`, `/README.md`) is a root-relative path. The built-in noise
+folders (`node_modules`, `build`, `dist`, `target`, …) apply without a file.
 
 `status=` filters to one class, which is how a harness asks "what did the
 index miss" before trusting a search. `total` counts files on disk even when
@@ -72,7 +80,7 @@ the original as `source`. A PDF the index has not read yet is `changed`, not
 
 ## 2. `silica_search` — ranked passages with an honest zero
 
-`silica_search(query, folder="", k=5, per_doc=2, width=600)`
+`silica_search(query, folder="", k=5, per_doc=2, width=600, queries=[])`
 
 Ranking, in order: BM25 over whole documents; BM25 over heading-delimited
 sections inside the top documents; at most `per_doc` sections per document;
@@ -129,6 +137,19 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   of the ranking it was cut from.
 - Sections are scored inside the top documents at query time; there is no
   second index to build or to drift.
+- `queries` adds query groups. Each group is ranked on its own, over
+  documents and then over sections, and the groups are fused by reciprocal
+  rank (k=60); `score`, `matched_terms`, `coverage` and `terms_absent` then
+  read over all the groups' terms. The case it serves is one call for a
+  concept and its anchors — `query="leader election"`,
+  `queries=["Raft"]` — where one long query would let the anchor's idf
+  drown the concept, or the reverse. The reply repeats them as `queries`.
+- A search refreshes the index inline when at most 50 documents are behind
+  (`STALE_BUDGET`, ~13 ms a document measured); past that it answers from
+  the index as it is and `index` says `stale` with `pending`, so a bulk
+  drop of files never turns one search into a rebuild. `silica index`
+  catches up; a cold index is always built first, there is nothing else to
+  serve.
 - No memory lane, no second vault, no synthesis, no reranker on this path.
 
 Why this shape (measured 2026-09-08 on 254 papers, 22 MB): document-level
@@ -139,16 +160,40 @@ for a real answer and for junk, so nothing in the reply said "weak". `rg`
 reported an honest zero in one call only because the phrase was absent; on
 a query whose words exist separately it has no signal either.
 
-Optional extension: `hybrid=true` adds a dense-embedding candidate leg for
-vocabulary mismatch (paraphrase, another language) when `SILICA_EMBEDDING_BASE_URL`
-names an OpenAI-compatible `/v1/embeddings` endpoint and `silica index --embed`
-has run; otherwise the argument is refused with `bad_argument`. A document
-the dense leg adds without any lexical match arrives as a hit on its opening
-section with `coverage` 0 and a `dense` cosine, so the harness knows it is
-reading on the embedder's word alone. Exercised 2026-09-08 on the 254 papers
-with a substitute model (nomic-embed Q4, 6 s for the vectors); retrieval
-quality with the intended model is not measured yet. There is no reranker in
-the core.
+Optional extension: the dense leg, for vocabulary
+mismatch (a paraphrase; another language only with a multilingual embedder —
+nomic-embed-text left an Italian question unanswered on the paper corpus,
+measured 2026-09-09), one vector per **section** —
+embedded as `<stem> › <heading>` plus the section's first 6000 characters,
+so the leg lands on the passage, not on the document's opening. The
+embedder is either an OpenAI-compatible `/v1/embeddings` endpoint
+(`SILICA_EMBEDDING_BASE_URL`, `SILICA_EMBEDDING_MODEL`) or, with the
+`[dense]` extra, a static model2vec model that needs no endpoint
+(`SILICA_EMBEDDING_MODEL=model2vec/minishlab/potion-retrieval-32M`).
+`silica index --embed` builds the vectors (`embed.json` + `embed.f32`
+beside the lexical index, float32, unit length, re-embedding only the
+documents whose stamp changed). The leg is the user's call, made at index
+time, not the caller's: there is no parameter. It runs on every search once
+the vectors are there, and `dense` in the reply says so — `{"state":
+"ready", "docs": n}`, the documents in scope it covered — or why it did not
+run while the search stayed lexical: `off` (no embedder named),
+`no_vectors` (run `silica index --embed`), `consent_required` (the host
+below), `failed` (what the endpoint answered, in `hint`).
+
+With the leg, the document ranking fuses BM25 with each document's best
+section cosine, and inside the top documents the section ranking fuses BM25
+with the section cosines, both by reciprocal rank. A hit the dense leg alone
+found carries `dense` (its cosine), `matched_terms: []`, `coverage` 0 and
+`score` 0, so the harness knows it is reading on the embedder's word alone;
+a document's `dense` in `documents` is its best section's. Vectors of a
+document whose file changed since it was embedded are ignored until
+`silica index --embed` runs again: they describe text that is gone.
+
+Text leaves the machine only for an endpoint that is not loopback, and only
+once `silica index --embed --allow-remote` has granted that host (kept in
+`~/.silica/embedding_consent.json`); until then the build refuses with
+`consent_required` and names the host, and a search reports it in `dense`
+and stays lexical. There is no reranker in the core.
 
 ## 3. `silica_read` — a located slice, never a surprise
 
@@ -248,8 +293,9 @@ remains as a CLI command with `--json`; the `index` field on every reply
 carries what a call needs to know.
 
 Extensions, each installed and enabled separately, each off by default:
-embeddings (`hybrid` search), reranking. Adapters: the Obsidian bridge, the
-optional REPL, converters beyond the built-in PDF text layer.
+embeddings (the dense leg, through an endpoint or the `[dense]` extra),
+reranking. Adapters: the Obsidian bridge, the optional REPL, converters
+beyond the built-in PDF text layer.
 
 ## Surfaces
 
@@ -280,3 +326,18 @@ optional REPL, converters beyond the built-in PDF text layer.
    at the same `version`, by either path (`tests/test_core_contract.py`),
    and `silica import` never replaces a `.md` it did not write
    (`tests/test_convert.py`).
+7. `scripts/bench_beir.py` scores the document ranking on BEIR's SciFact
+   and NFCorpus (paper abstracts, document-level judgements, no model):
+   the lexical arm holds nDCG@10 0.66 on SciFact and 0.31 on NFCorpus, the
+   BM25 baselines of the BEIR paper being 0.665 and 0.325. The same script
+   runs the `hybrid` arm against any embedder and, with their binaries,
+   zvec-grep and ck over the same folder of files; the numbers are in the
+   README. A change to the ranking re-runs it first.
+8. A search over an index more than `STALE_BUDGET` documents behind answers
+   from the index as it is with `index.state = stale` and `pending`; an
+   interrupted build resumes where it stopped; a file `.silicaignore` names
+   is `excluded` with `reason: ignore rule` and never ranks
+   (`tests/test_index_freshness.py`). A paraphrase with no lexical match
+   lands on the section the vector points at, not on the document's
+   opening, and a non-loopback embedder is refused until granted once
+   (`tests/test_embeddings_sections.py`).

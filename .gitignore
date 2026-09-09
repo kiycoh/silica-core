@@ -86,7 +86,11 @@ Thumbs.db
 # Documentation
 docs/_build/
 /site
+# docs/ is scratch by default; the pages the README and CONTRIBUTING link to
+# are the exception, so a reader who follows a link finds the page.
 /docs/*
+!/docs/benchmarks.md
+!/docs/harnesses.md
 
 # Silica & Agent Specific
 # .agents/ is local agent tooling, except the Codex plugin marketplace, which
