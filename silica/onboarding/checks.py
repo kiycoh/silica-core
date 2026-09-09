@@ -71,10 +71,15 @@ def check_quarantine(config: Any) -> CheckResult:
 def check_embeddings(config: Any) -> CheckResult:
     from silica import embeddings
     if not embeddings.enabled():
-        return CheckResult("embeddings", "ok", "off (no SILICA_EMBEDDING_BASE_URL); search is lexical")
-    n = len(embeddings.load_store().get("vectors", {}))
-    return CheckResult("embeddings", "ok" if n else "warn", f"{config.embedding_model} @ {config.embedding_base_url}, {n} vectors",
-                       "" if n else "run `silica index --embed`")
+        return CheckResult("embeddings", "ok", "off (no SILICA_EMBEDDING_BASE_URL, no model2vec/ model); search is lexical")
+    loaded = embeddings.load()
+    n = loaded[0]["rows"] if loaded else 0
+    where = config.embedding_model if embeddings._local_model() else f"{config.embedding_model} @ {config.embedding_base_url}"
+    host = embeddings.consent_needed()
+    if host:
+        return CheckResult("embeddings", "warn", f"{where}, {n} section vectors; {host} is not on this machine and was never allowed",
+                           "run `silica index --embed --allow-remote` once, or point at a local endpoint")
+    return CheckResult("embeddings", "ok" if n else "warn", f"{where}, {n} section vectors", "" if n else "run `silica index --embed`")
 
 
 def check_model(config: Any) -> CheckResult:

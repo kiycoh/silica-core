@@ -49,7 +49,10 @@ dependencies = [
 dev = ["pytest>=8.0", "mypy>=1.10", "import-linter>=2.0", "ruff>=0.16"]
 connect = ["websockets>=16.0"]
 mcp = ["mcp>=1.0,<2"]
-all = ["silica-core[connect,mcp]"]
+# The dense leg without an endpoint: a static model2vec model (~30 MB, no torch,
+# no ONNX) and numpy for the dot products. `SILICA_EMBEDDING_MODEL=model2vec/<id>`.
+dense = ["model2vec>=0.5", "numpy>=1.26"]
+all = ["silica-core[connect,mcp,dense]"]
 
 [project.scripts]
 silica = "silica.entry:main"
@@ -137,4 +140,11 @@ module = [
     # that happened to have the extra.
     "sentence_transformers", "sentence_transformers.*",
 ]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The [dense] extra's array library ships stubs written for 3.12+ (`type`
+# statements), and this gate type-checks as 3.11: found, not followed.
+module = ["numpy", "numpy.*", "model2vec", "model2vec.*"]
+follow_imports = "skip"
 ignore_missing_imports = true

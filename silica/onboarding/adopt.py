@@ -41,12 +41,15 @@ logger = logging.getLogger(__name__)
 
 
 _SILICAIGNORE_HEADER = """\
-# .silicaignore — directory names Silica never walks when indexing this vault.
+# .silicaignore — what Silica should not search in this vault, as distinct from
+# what git should not commit.
 #
-# One name or glob per line; `#` starts a comment. Matched against the directory
-# NAME at any depth, not against a path. Hidden dirs (.git, .venv, .obsidian)
-# are always skipped, and .gitignore is deliberately NOT honoured — a gitignored
-# folder is often exactly where private notes live.
+# One pattern per line; `#` starts a comment. A bare name or glob (`archive`,
+# `*.draft.md`) matches a file or folder of that NAME at any depth; a pattern
+# with a `/` in it or in front (`docs/private`, `templates/*.md`, `/README.md`)
+# is a root-relative path. Hidden names (.git, .venv, .obsidian) are always
+# skipped, and .gitignore is deliberately NOT honoured — a gitignored folder is
+# often exactly where private notes live.
 #
 # The list below is built in. It is here to be read and extended, so
 # uncommenting a line changes nothing; add your own below it.

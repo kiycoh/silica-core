@@ -19,13 +19,21 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, cursor, 
    returns ranked passages: `path`, `section`, `line`, `score` (raw BM25,
    comparable within one call only), `matched_terms`, `coverage`, and the
    `documents` ranking behind the hits. Prefer it to grep when you want the
-   passage and not the file, or when a whole-document ranking matters.
+   passage and not the file, or when a whole-document ranking matters. Put
+   a concept in `query` and its identifiers in `queries` (one call, fused
+   by rank) instead of one long query or two calls. When the server has
+   section vectors the dense leg runs by itself, so a paraphrase the
+   corpus words do not reach can still land; `dense` in the reply says
+   `ready` and how many documents it covered, or why it did not run, and
+   that is not yours to fix — search lexically and say so.
 2. **Read the reply before the hits.** `terms_absent` lists query words the
    corpus never contains; `coverage` is the share of the query's rare-term
-   mass a hit carries. A discriminating term in `terms_absent`, or a top
-   `coverage` under about 0.5, means the corpus does not answer in these
-   words: rephrase once with the corpus's vocabulary, keeping names,
-   numbers and identifiers as they are, and if the second reply reads the
+   mass a hit carries. A discriminating term in `terms_absent`, or no hit
+   with `coverage` above about 0.5 (read the best, not the first: with the
+   dense leg the first hit is not always the best-covered one), means the
+   corpus does not answer in these words: rephrase once with the corpus's
+   vocabulary, keeping names, numbers and identifiers as they are, and if
+   the second reply reads the
    same, stop; do not read the hits into an answer. A large `candidates`
    with `coverage` flat down the hits means the query is too broad: narrow
    it with rarer words or a `folder`. `scope` counts what the
@@ -33,7 +41,10 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, cursor, 
    document may never rank, so check `silica_files(status=…)` before
    calling absence; with a `folder`, `terms_absent_in_scope` is the zero of
    that folder, not of the corpus. `index.state = cold` means nothing was
-   indexed yet; the first search builds the index.
+   indexed yet; the first search builds the index. `stale` with `pending`
+   means the reply came from an index that many documents behind — the
+   newest files may be missing from it; say so if the question is about
+   recent material.
 3. **Read before you cite.** `silica_read(path, section=…)` or
    `(path, start, end)` serves the slice with the outline and a `version`.
    Cite path and line. Every hit carries the same `version`: pass it as

@@ -133,7 +133,10 @@ def _tokens(text: str) -> list[str]:
     """Lowercased, accent-folded words and alphanumerics ("bm25", "gpt4",
     "2026" stay whole), at least two characters, function words removed. No
     stemming: proper nouns and dates match verbatim; no language detection:
-    nothing here depends on it.
+    nothing here depends on it. Emitting the Snowball stem beside each word
+    was measured 2026-09-09 (scripts/bench_beir.py): nDCG@10 0.662 -> 0.664
+    on SciFact, 0.311 -> 0.316 on NFCorpus, MRR@10 down on the second. Noise
+    for a token stream every reply would have to explain.
 
     Structured shapes (`_ATOM`) are emitted whole in addition to the
     fragments `_WORD` finds inside them, so `2026-09-08` is both one rare

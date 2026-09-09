@@ -55,7 +55,7 @@ def test_search_locates_the_section_and_names_absent_terms(root):
     assert top["path"] == "docs/lsm.md" and top["section"].startswith("2 ") and top["line"] == 7
     assert "compaction" in top["matched_terms"] and 0 < top["coverage"] <= 1
     assert r["documents"][0]["path"] == "docs/lsm.md"
-    assert root.search("anything", hybrid=True)["error"]["code"] == "bad_argument"
+    assert root.search("anything")["dense"] == {"state": "off"}, "no embedder named: the reply says so, no error"
 
 
 def test_read_by_section_and_version(root):
@@ -133,22 +133,25 @@ def test_cli_prints_the_tool_reply(root, tmp_path, capsys):
     assert main(["--vault", str(tmp_path), "read", "docs/nope.md"]) == 1
 
 
-def test_hybrid_adds_a_dense_only_document(root, monkeypatch):
+def test_the_dense_leg_runs_by_itself_and_adds_a_dense_only_document(root, monkeypatch):
     from silica import embeddings
     from silica.config import CONFIG
 
-    assert root.search("x", hybrid=True)["error"]["code"] == "bad_argument"
-    monkeypatch.setattr(CONFIG, "embedding_base_url", "http://fake")
+    assert root.search("x")["dense"] == {"state": "off"}
+    monkeypatch.setattr(CONFIG, "embedding_base_url", "http://127.0.0.1:9/v1")  # loopback: no consent to ask
+    monkeypatch.setattr(embeddings, "_CACHE", None)
     fake = {"lsm": [1.0, 0.0], "btree": [0.0, 1.0]}  # a query embeds next to btree
-    monkeypatch.setattr(embeddings, "embed_texts", lambda texts: [fake.get(t.split("\n")[0], [0.1, 0.9]) for t in texts])
-    assert root.search("x", hybrid=True)["error"]["code"] == "index_cold"
+    stem = lambda t: t.split("\n", 1)[0].split(" \u203a ")[0]  # the unit text opens with `<stem> › <heading>`
+    monkeypatch.setattr(embeddings, "embed_texts", lambda texts: [fake.get(stem(t), [0.1, 0.9]) for t in texts])
+    assert root.search("x")["dense"]["state"] == "no_vectors", "named but never built: lexical, and the reply says why"
     built = root.build_index(embed=True)
-    assert built["embeddings"]["docs"] == 2
-    r = root.search("storage structure", hybrid=True)  # no lexical overlap with either note
-    assert r["terms_absent"] == ["storage", "structure"]
+    assert built["embeddings"]["docs"] == 2 and built["embeddings"]["sections"] == 3  # `# LSM trees` alone is too short
+    r = root.search("storage structure")  # no lexical overlap with either note; no parameter: the vectors are there
+    assert r["terms_absent"] == ["storage", "structure"] and r["dense"] == {"state": "ready", "docs": 2}
     dense_only = [h for h in r["hits"] if h["path"] == "docs/btree.md"]
     assert dense_only and dense_only[0]["dense"] > 0.9 and dense_only[0]["matched_terms"] == []
     assert dense_only[0]["coverage"] == 0 and dense_only[0]["line"] == 1
+    assert r["hits"][0]["path"] == "docs/btree.md", "the section the vector points at, first"
 
 
 def test_absent_terms_weigh_on_coverage(root):

@@ -84,3 +84,35 @@ def test_absent_terms_pull_the_top_hit_down(corpus):
     r = corpus.search("kubernetes ingress controller nginx annotations")
     assert r["terms_absent"], "the control query needs words the corpus never contains"
     assert r["hits"] and r["hits"][0]["coverage"] < 0.5, r["hits"][0]
+
+
+@pytest.mark.skipif(not os.environ.get("SILICA_EMBEDDING_BASE_URL") and not os.environ.get("SILICA_EMBEDDING_MODEL", "").startswith("model2vec/"),
+                    reason="the dense leg needs an embedder (SILICA_EMBEDDING_BASE_URL or SILICA_EMBEDDING_MODEL=model2vec/…)")
+def test_dense_leg_lifts_the_paraphrase_ceiling(corpus, monkeypatch):
+    """A paraphrase with none of the paper's rare words: BM25 ranks the
+    granularity paper fourth; with the vectors built it is first and one hit is its
+    own section 5, the passage, not the abstract. Measured 2026-09-09 with
+    nomic-embed-text through Ollama. The same question in Italian stayed
+    unanswered with that English model (top cosines 0.53 on OCR papers):
+    another language needs a multilingual embedder, not a bigger one."""
+    from silica import embeddings
+    from silica.config import CONFIG
+    # the suite's isolation switches the extension off for every test; the env names the embedder here
+    for field, var in (("embedding_base_url", "SILICA_EMBEDDING_BASE_URL"), ("embedding_model", "SILICA_EMBEDDING_MODEL"),
+                       ("embedding_api_key", "SILICA_EMBEDDING_API_KEY")):
+        if os.environ.get(var):
+            monkeypatch.setattr(CONFIG, field, os.environ[var])
+    monkeypatch.setattr(embeddings, "_CACHE", None)
+    q = "should the unit that gets indexed be a passage or the whole document when the texts are long"
+    lex = corpus.search(q)
+    lex_rank = next((i for i, d in enumerate(lex["documents"]) if "dense-x-retrieval" in d["path"]), None)
+    assert lex_rank is None or lex_rank >= 1, "the lexical ceiling this test is about is gone; pick a harder paraphrase"
+    t0 = time.time()
+    built = corpus.build_index(embed=True)
+    assert "error" not in built, built.get("error")
+    print(f"\nvectors: {built['embeddings']['sections']} sections, {built['embeddings']['embedded']} embedded in {time.time() - t0:.1f}s")
+    r = corpus.search(q)
+    assert r["dense"]["state"] == "ready" and r["dense"]["docs"] > 200, r["dense"]
+    assert "dense-x-retrieval" in r["documents"][0]["path"], r["documents"][:3]
+    hit = next((h for h in r["hits"] if "dense-x-retrieval" in h["path"] and h["section"].startswith("5 ")), None)
+    assert hit is not None and hit["dense"] > 0.6, r["hits"][:3]

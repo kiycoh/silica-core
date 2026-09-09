@@ -27,6 +27,21 @@ from silica.kernel.recall.rerank import _query_terms, best_window_spans
 from silica.tools import tool
 
 K1, B = 1.5, 0.75
+# candidates the section stage scores: k hits from k*POOL_FACTOR documents
+# (never fewer than 10). scripts/bench_beir.py --pool-factor measures it.
+POOL_FACTOR = 3
+# Documents a search refreshes inline before answering. Past it the index is
+# served as it is and `index.pending` says how far behind, so a bulk drop of
+# files never turns one search into a rebuild: `silica index` catches up.
+# ~13 ms a document on the 254-paper corpus (2026-09-08), so 50 stays under
+# a second. ponytail: a count, not bytes; one 40 MB PDF still blocks.
+STALE_BUDGET = 50
+# Seconds between partial saves during a build, so Ctrl+C at 90% of a cold
+# build keeps the 90% and the next run does the rest (save() is hundreds of
+# ms on a big index, so not per document).
+_FLUSH_S = 5.0
+_NO_EMBEDDER = ("needs SILICA_EMBEDDING_BASE_URL (an OpenAI-compatible /v1/embeddings endpoint) "
+                "or SILICA_EMBEDDING_MODEL=model2vec/<id> with the [dense] extra")
 # The index this engine owns. The one line silica-internal changes when it
 # vendors this file: build_index() drops every path its own walk did not
 # produce, so sharing a store with a lane that indexes a different set would
@@ -42,8 +57,34 @@ _TEXT_SUFFIXES = frozenset({".md", ".txt", ".rst", ".csv", ".json", ".yaml", ".y
 # helpers
 # ---------------------------------------------------------------------------
 
+def _pool(k: int) -> int:
+    return max(k * POOL_FACTOR, 10)
+
+
+def _rrf(rankings: list[list[Any]], k: int = 60) -> dict[Any, float]:
+    """Reciprocal-rank fusion (Cormack 2009, k=60): one score per key over
+    several rankings, each best first. Rank is what fuses; the raw scores
+    stay what they were, in the reply."""
+    fused: dict[Any, float] = {}
+    for ranking in rankings:
+        for rank, key in enumerate(ranking):
+            fused[key] = fused.get(key, 0.0) + 1.0 / (k + rank + 1)
+    return fused
+
+
+_ROOT: tuple[str, Path] | None = None
+
+
 def _root() -> Path:
-    return Path(CONFIG.vault_path or os.getcwd()).resolve()
+    """The configured root, resolved once per value: `resolve()` on every
+    call was 2.3 s of a 3 s search over 5k files (profiled 2026-09-09).
+    ponytail: a root that is a symlink re-resolves only when the setting
+    changes."""
+    global _ROOT
+    key = CONFIG.vault_path or os.getcwd()
+    if _ROOT is None or _ROOT[0] != key:
+        _ROOT = (key, Path(key).resolve())
+    return _ROOT[1]
 
 
 def _version(text: str) -> str:
@@ -240,34 +281,51 @@ def _failures() -> dict[str, str]:
 
 
 def _walk(base: Path | None = None):
-    """(rel, Path) for every regular file under the root, plus the excluded
-    directories as (rel + "/", None). Hidden and ignored dirs are not entered."""
+    """(rel, Path) for every regular file under the root, plus what the walk
+    did not enter or list as (rel + "/", None) for a directory and (rel, None)
+    for a file: hidden names, NOISE_DIRS, and `.silicaignore`, on files and
+    directories alike. String paths and one relpath per directory: pathlib
+    per file was 5 s of a 3 s search over 5k files (profiled 2026-09-09)."""
     root = _root()
-    ignore = _paths.ignore_matcher(root)
+    root_s = str(root)
+    skip = _paths.ignore_path_matcher(root)
     for dirpath, dirnames, filenames in os.walk(base or root):
+        rel_dir = os.path.relpath(dirpath, root_s).replace(os.sep, "/")
+        prefix = "" if rel_dir == "." else rel_dir + "/"
         keep = []
         for d in sorted(dirnames):
-            if d.startswith(".") or ignore(d):
-                yield (Path(dirpath) / d).relative_to(root).as_posix() + "/", None
+            rel = prefix + d
+            if d.startswith(".") or skip(rel):
+                yield rel + "/", None
             else:
                 keep.append(d)
         dirnames[:] = keep
         for name in sorted(filenames):
-            if not name.startswith("."):
-                full = Path(dirpath) / name
-                yield full.relative_to(root).as_posix(), full
+            if name.startswith("."):
+                continue
+            rel = prefix + name
+            yield rel, (None if skip(rel) else Path(dirpath, name))
 
 
-def _note_paths() -> list[str]:
-    """Every document the index reads: notes, and PDFs with no extracted `.md`
-    beside them — that sidecar is the note, and indexing both would double it."""
-    out = []
+def _notes() -> dict[str, float]:
+    """rel -> mtime for every document the index reads: notes, and PDFs with
+    no extracted `.md` beside them — that sidecar is the note, and indexing
+    both would double it. The one stat per file happens here, so
+    `index_state` and `build_index` given this dict never walk again."""
+    out: dict[str, float] = {}
     for rel, full in _walk():
         if full is None:
             continue
         if rel.endswith(".md") or (full.suffix.lower() == ".pdf" and not full.with_suffix(".md").is_file()):
-            out.append(rel)
-    return sorted(out)
+            try:
+                out[rel] = full.stat().st_mtime
+            except OSError:
+                continue
+    return dict(sorted(out.items()))
+
+
+def _note_paths() -> list[str]:
+    return list(_notes())
 
 
 def _mtime(rel: str) -> float | None:
@@ -277,23 +335,40 @@ def _mtime(rel: str) -> float | None:
         return None
 
 
-def index_state(meta: dict | None = None) -> dict:
-    """{state: cold|stale|ready, docs, built_at}. `cold` = never built."""
+def index_state(meta: dict | None = None, live: dict[str, float] | None = None) -> dict:
+    """{state: cold|stale|ready, docs, built_at, pending}. `cold` = never
+    built. `pending` counts what the index has not caught up with: documents
+    changed or new since their stamp, and stamped documents gone from disk.
+    `live` is `_notes()` when the caller already walked."""
     meta = meta or _load_meta()
     if not _paths.index_file(INDEX).is_file() or not meta.get("built_at"):
         return {"state": "cold", "docs": 0, "built_at": None}
+    live = _notes() if live is None else live
     stamps = meta.get("stamps", {})
     skipped = meta.get("no_text", {})
-    live = _note_paths()
-    stale = any(stamps.get(r) != _mtime(r) and skipped.get(r, {}).get("mtime") != _mtime(r)
-                for r in live) or bool(set(stamps) - set(live))
-    return {"state": "stale" if stale else "ready", "docs": len(stamps), "built_at": meta.get("built_at")}
+    pending = sum(1 for r, mt in live.items()
+                  if stamps.get(r) != mt and skipped.get(r, {}).get("mtime") != mt)
+    pending += sum(1 for r in stamps if r not in live)
+    return {"state": "stale" if pending else "ready", "docs": len(stamps),
+            "built_at": meta.get("built_at"), "pending": pending}
 
 
-def build_index(rebuild: bool = False, embed: bool = False) -> dict:
+def _flush(store, meta: dict, failed: dict) -> None:
+    """Everything the build knows so far, on disk: the store, the stamps with
+    a `built_at` so the next run is incremental, the failures."""
+    store.save()
+    meta["built_at"] = time.time()
+    _paths.atomic_write_bytes(_meta_path(), orjson.dumps(meta))
+    _paths.atomic_write_bytes(_paths.index_dir() / "failures.json", orjson.dumps(failed))
+
+
+def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, float] | None = None,
+                allow_remote: bool = False) -> dict:
     """Build or refresh the document index. Incremental by mtime; `rebuild`
     re-reads everything. Never raises for one unreadable file: it lands in
-    `failed` and in the failures file `silica_files` reports from."""
+    `failed` and in the failures file `silica_files` reports from. Saves
+    every `_FLUSH_S` seconds, so an interrupted build resumes where it
+    stopped. `live` is `_notes()` when the caller already walked."""
     meta = _load_meta()
     rebuild = rebuild or not meta.get("built_at")
     if rebuild:
@@ -302,12 +377,10 @@ def build_index(rebuild: bool = False, embed: bool = False) -> dict:
     stamps: dict[str, float] = meta["stamps"]
     skipped: dict[str, dict] = meta.setdefault("no_text", {})
     root = _root()
-    live = _note_paths()
+    live = _notes() if live is None else live
     changed, failed = 0, {}
-    for rel in live:
-        mt = _mtime(rel)
-        if mt is None:
-            continue
+    last_flush = time.monotonic()
+    for rel, mt in live.items():
         if not rebuild and (stamps.get(rel) == mt or skipped.get(rel, {}).get("mtime") == mt):
             continue
         if rel.lower().endswith(".pdf"):
@@ -327,25 +400,44 @@ def build_index(rebuild: bool = False, embed: bool = False) -> dict:
         stamps[rel] = mt
         skipped.pop(rel, None)
         changed += 1
-    live_set = set(live)
-    for gone in [p for p in list(stamps) + list(skipped) if p not in live_set]:
+        if time.monotonic() - last_flush > _FLUSH_S:
+            _flush(store, meta, failed)
+            last_flush = time.monotonic()
+    for gone in [p for p in list(stamps) + list(skipped) if p not in live]:
         stamps.pop(gone, None)
         skipped.pop(gone, None)
         _extract_cache(gone).unlink(missing_ok=True)  # a deleted PDF leaves no extraction behind
-    for gone in [p for p in store.paths() if p not in live_set]:
+    for gone in [p for p in store.paths() if p not in live]:
         store.remove(gone)
-    store.save()
-    meta["built_at"] = time.time()
-    _paths.atomic_write_bytes(_meta_path(), orjson.dumps(meta))
-    _paths.atomic_write_bytes(_paths.index_dir() / "failures.json", orjson.dumps(failed))
-    out = {"docs": len(stamps), "changed": changed, "failed": failed, "index": index_state(meta)}
+    _flush(store, meta, failed)
+    # Every live document is now stamped, skipped or failed, so the state is
+    # known without another walk: only the failures are still pending.
+    state = {"state": "stale" if failed else "ready", "docs": len(stamps),
+             "built_at": meta["built_at"], "pending": len(failed)}
+    out = {"docs": len(stamps), "changed": changed, "failed": failed, "index": state}
     if embed:
         from silica import embeddings
         if not embeddings.enabled():
-            return _error("bad_argument", "embed needs SILICA_EMBEDDING_BASE_URL", **out)
-        notes = [(rel, stamps[rel], _doc_text(rel)) for rel in live if rel in stamps]
+            return _error("bad_argument", _NO_EMBEDDER, **out)
+        host = embeddings.consent_needed()
+        if host and allow_remote:
+            embeddings.grant(host)
+        elif host:
+            return _error("consent_required", f"the sections would leave this machine for {host}: "
+                          "run `silica index --embed --allow-remote` once to allow it", **out)
+        units = []
+        for rel in live:
+            if rel not in stamps:
+                continue
+            try:
+                parts = _sections_of(rel)[1]
+            except OSError:
+                continue
+            stem = Path(rel).stem
+            units.append((rel, stamps[rel], [(off, embeddings.unit_text(stem, title, part))
+                                             for off, part, _tf, dl, title in parts if dl >= 3]))
         try:
-            out["embeddings"] = embeddings.build(notes, rebuild=rebuild)
+            out["embeddings"] = embeddings.build(units, rebuild=rebuild)
         except Exception as e:
             return _error("bad_argument", f"embeddings endpoint failed: {e}", **out)
     return out
@@ -391,7 +483,7 @@ def silica_files(
     failed = _failures()
     entries: list[dict] = []
     for rel, full in _walk(base):
-        if full is None:
+        if full is None:  # a directory not entered, or a file `.silicaignore` names
             entries.append({"path": rel, "status": "excluded",
                             "reason": "hidden" if rel.rstrip("/").rsplit("/", 1)[-1].startswith(".") else "ignore rule"})
             continue
@@ -488,7 +580,7 @@ def silica_search(
     k: Annotated[int, Field(description="Max hits")] = 5,
     per_doc: Annotated[int, Field(description="Max sections per document")] = 2,
     width: Annotated[int, Field(description="Characters in each hit's window")] = 600,
-    hybrid: Annotated[bool, Field(description="Add the dense-embedding leg (embeddings extension required)")] = False,
+    queries: Annotated[list[str] | None, Field(description="More query groups, each ranked on its own and fused with `query` by rank: the concept in one, its identifiers in another")] = None,
 ) -> dict:
     """Use first for a question about what the notes, documents, papers or
     code in this folder say, when the passage matters more than the file, or
@@ -506,18 +598,39 @@ def silica_search(
     nowhere (near 1 = every rare term matched, near 0 = only the common
     words); `terms_absent` are query terms found nowhere in the corpus. No
     boolean "no answer" exists: read coverage and matched_terms
-    and decide to stop or rephrase. Builds the index on first use."""
-    if hybrid:
-        from silica import embeddings
-        if not embeddings.enabled():
-            return _error("bad_argument", "hybrid needs SILICA_EMBEDDING_BASE_URL (an OpenAI-compatible /v1/embeddings endpoint)")
-        if not embeddings.load_store()["vectors"]:
-            return _error("index_cold", "no document vectors yet: run `silica index --embed`")
-    state = index_state()
-    if state["state"] != "ready":
-        build_index(rebuild=state["state"] == "cold")
+    and decide to stop or rephrase. The dense leg (one vector per section)
+    runs by itself once `silica index --embed` built the vectors: `dense` in
+    the reply says `ready` and how many documents it covered, or why it did
+    not run (`off`, `no_vectors`, `consent_required`, `failed`) while the
+    search stayed lexical; that is the user's to fix, not the caller's. With
+    `queries` or the dense leg the order is by reciprocal rank across the
+    groups (and the vectors); `score`, `matched_terms` and `coverage` then
+    read over all the groups' terms, and a hit the dense leg alone found
+    carries `dense` and coverage 0. Builds the index on first use."""
+    groups = [query] + [q for q in (queries or []) if q.strip()]
+    # The dense leg is the user's call, made at index time, not the caller's:
+    # it runs whenever the vectors are there and the query may go to the
+    # endpoint; otherwise the reply says why and the search stays lexical.
+    from silica import embeddings
+    leg: dict[str, Any]
+    if not embeddings.enabled():
+        leg = {"state": "off"}
+    elif embeddings.load() is None:
+        leg = {"state": "no_vectors", "hint": "run `silica index --embed`"}
+    elif host := embeddings.consent_needed():
+        leg = {"state": "consent_required", "hint": f"the query would leave this machine for {host}: "
+               "run `silica index --embed --allow-remote` once to allow it"}
+    else:
+        leg = {"state": "ready"}
+    hybrid = leg["state"] == "ready"
+    live = _notes()
+    state = index_state(live=live)
+    if state["state"] == "cold" or (state["state"] == "stale" and state["pending"] <= STALE_BUDGET):
+        state = build_index(rebuild=state["state"] == "cold", live=live)["index"]
+    # else: served as it is; `index` in the reply says stale and how far behind
     store = get_store(INDEX)
-    idf = store.idf(set(_tokens(query)))
+    group_terms = [set(_tokens(q)) for q in groups]
+    idf = store.idf(set().union(*group_terms))
     known = {t: v for t, v in idf.items() if v is not None}
     absent = sorted(t for t, v in idf.items() if v is None)
     # A term found nowhere weighs what BM25 gives a term at df=0, the heaviest
@@ -526,14 +639,13 @@ def silica_search(
     # ingress controller nginx annotations" read coverage 1.0 on "annotations".
     idf_absent = math.log(1 + (len(store) + 0.5) / 0.5)
     mass = (sum(known.values()) + idf_absent * len(absent)) or 1.0
-    docs = store.bm25(query)
     scope = ""
     if folder.strip():
         try:
             scope = _rel(folder)
         except ValueError as e:
             return _error("out_of_root", str(e))
-        docs = [d for d in docs if _paths.in_folder(d[0], scope)]
+    rankings = [[d for d in store.bm25(q) if _paths.in_folder(d[0], scope)] for q in groups]
     # What the search could see: a relevant document among the unconverted or
     # the failed never ranks, and a term the corpus holds may still be absent
     # from the folder. `in_folder` with an empty folder is the whole root.
@@ -544,27 +656,36 @@ def silica_search(
                "failed": sum(1 for p in _failures() if _paths.in_folder(p, scope))}
     absent_in_scope = sorted(t for t in known
                              if not any(_paths.in_folder(p, scope) for p in store.paths_with(t)))
-    top = docs[: max(k * 3, 10)]
-    dense: dict[str, float] = {}
+    dense_docs: list[tuple[str, float]] = []
+    dense_secs: dict[tuple[str, int], float] = {}
     if hybrid:
-        from silica import embeddings
         try:
-            dense = dict(embeddings.dense_candidates(query, k=max(k * 3, 10)))
-        except Exception as e:  # the endpoint is the extension's business, the reply says so
-            return _error("bad_argument", f"embeddings endpoint failed: {e}")
-        if folder.strip():
-            dense = {p: c for p, c in dense.items() if _paths.in_folder(p, scope)}
-        # reciprocal-rank fusion of the two document rankings; a dense-only
-        # document enters `top` with no matched terms and scores 0 lexically
-        fused: dict[str, float] = {}
-        for rank, (p, _s, _m) in enumerate(top):
-            fused[p] = fused.get(p, 0.0) + 1.0 / (60 + rank + 1)
-        for rank, p in enumerate(dense):
-            fused[p] = fused.get(p, 0.0) + 1.0 / (60 + rank + 1)
-        lex = {p: (sc, m) for p, sc, m in docs}
-        top = [(p, lex.get(p, (0.0, set()))[0], lex.get(p, (0.0, set()))[1])
-               for p, _f in sorted(fused.items(), key=lambda kv: -kv[1])][: max(k * 3, 10)]
-    weights = store.query_idf(_query_terms(query))
+            dense_docs, dense_secs = embeddings.rank(query, live)
+        except Exception as e:  # the endpoint is the extension's business: the reply says so, the search stays lexical
+            leg, hybrid = {"state": "failed", "hint": f"embeddings endpoint failed: {e}"}, False
+        else:
+            dense_docs = [(p, c) for p, c in dense_docs if _paths.in_folder(p, scope)]
+            leg["docs"] = len(dense_docs)
+    fuse = hybrid or len(groups) > 1
+    if not fuse:
+        docs = rankings[0]
+    else:
+        # one ranking per group, plus the dense one: the fused order is by
+        # rank; a document keeps its best raw score and the union of its terms
+        lex: dict[str, tuple[float, set]] = {}
+        for ranking in rankings:
+            for p, sc, m in ranking:
+                sc0, m0 = lex.get(p, (0.0, set()))
+                lex[p] = (max(sc0, sc), m0 | m)
+        lists: list[list[Any]] = [[p for p, _s, _m in ranking] for ranking in rankings]
+        if hybrid:
+            lists.append([p for p, _c in dense_docs])
+        fused = _rrf(lists)
+        docs = [(p, *lex.get(p, (0.0, set()))) for p in sorted(fused, key=lambda p: (-fused[p], p))]
+    top = docs[: _pool(k)]
+    dense = dict(dense_docs)  # a document's best section cosine, for `documents`
+    text_all = " ".join(groups)
+    weights = store.query_idf(_query_terms(text_all))
     secs: list[tuple[str, int, str, Counter, int, str]] = []
     texts: dict[str, str] = {}
     for path, _score, _matched in top:
@@ -574,39 +695,56 @@ def silica_search(
             continue
         secs.extend((path, off, part, tf, dl, title) for off, part, tf, dl, title in parts)
     avg = (sum(s[4] for s in secs) / len(secs)) if secs else 1.0
-    scored = []
+
+    def bm25(tf: Counter, dl: int, terms: set) -> float:
+        return sum(known[t] * (tf[t] * (K1 + 1)) / (tf[t] + K1 * (1 - B + B * dl / avg)) for t in terms)
+
+    # every section of the pool that some leg can rank: a lexical match in any
+    # group, or (hybrid) a vector; `scored` keeps what the reply shows
+    scored: dict[tuple[str, int], tuple[float, str, set, str]] = {}
+    per_group: list[list[tuple[float, tuple[str, int]]]] = [[] for _g in groups]
     for path, off, part, tf, dl, title in secs:
         matched = {t for t in known if tf.get(t)}
-        if not matched:
+        key = (path, off)
+        if not matched and key not in dense_secs:
             continue
-        score = sum(known[t] * (tf[t] * (K1 + 1)) / (tf[t] + K1 * (1 - B + B * dl / avg)) for t in matched)
-        scored.append((score, path, off, part, matched, title))
-    scored.sort(key=lambda s: (-s[0], s[1], s[2]))
-    for p, cos in dense.items():
-        if p in texts and not any(sp == p for _sc, sp, _o, _pt, _m, _t in scored):
-            first = next(iter(_sections_of(p)[1]), None)
-            if first is not None:
-                scored.append((0.0, p, first[0], first[1], set(), first[4]))
+        scored[key] = (bm25(tf, dl, matched), part, matched, title)
+        for gi, tg in enumerate(group_terms):
+            mg = {t for t in tg if t in matched}
+            if mg:
+                per_group[gi].append((bm25(tf, dl, mg), key))
+    if not fuse:
+        order = sorted(scored, key=lambda key: (-scored[key][0], key[0], key[1]))
+    else:
+        sec_lists: list[list[Any]] = [[key for _s, key in sorted(g, key=lambda x: (-x[0], x[1]))] for g in per_group]
+        if hybrid:
+            sec_lists.append([key for key, _c in sorted(((key, c) for key, c in dense_secs.items() if key in scored),
+                                                        key=lambda kv: (-kv[1], kv[0]))])
+        fused_secs = _rrf(sec_lists)
+        order = sorted(fused_secs, key=lambda key: (-fused_secs[key], key[0], key[1]))
     hits: list[dict] = []
     seen: dict[str, int] = {}
     versions: dict[str, str] = {}  # the hash silica_read checks, from the text already in hand
-    for score, path, off, part, matched, title in scored:
+    for key in order:
+        path, off = key
+        score, part, matched, title = scored[key]
         if seen.get(path, 0) >= per_doc:
             continue
         seen[path] = seen.get(path, 0) + 1
-        o, window = best_window_spans(part, query, width, 1, weights, snap=True)[0]
+        o, window = best_window_spans(part, text_all, width, 1, weights, snap=True)[0]
         hit = {"path": path, "section": title,
                "line": texts[path].count("\n", 0, off + o) + 1,
                "version": versions.setdefault(path, _version(texts[path])),
                "score": round(score, 2), "matched_terms": sorted(matched),
                "coverage": round(sum(known[t] for t in matched) / mass, 2),
                "window": window}
-        if path in dense:
-            hit["dense"] = round(dense[path], 3)
+        if key in dense_secs:
+            hit["dense"] = round(dense_secs[key], 3)
         hits.append(hit)
         if len(hits) == k:
             break
-    return {"root": str(_root()), "query": query, "hits": hits,
+    return {"root": str(_root()), "query": query, **({"queries": groups[1:]} if len(groups) > 1 else {}),
+            "hits": hits,
             # the first k of the ranking plus any document a hit came from lower
             # down: enough to tell "right paper, wrong section" from "wrong
             # paper" without repaying the whole candidate list (43% of the reply
@@ -619,7 +757,8 @@ def silica_search(
             "terms_absent": absent,
             **({"terms_absent_in_scope": absent_in_scope} if scope else {}),
             "scope": visible,
-            "index": index_state()}
+            "dense": leg,
+            "index": state}
 
 
 # ---------------------------------------------------------------------------

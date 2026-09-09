@@ -513,38 +513,60 @@ NOISE_DIRS: frozenset[str] = frozenset({
 SILICAIGNORE_REL = ".silicaignore"
 
 
-def _ignore_patterns(vault) -> tuple[frozenset[str], tuple[str, ...]]:
-    """(exact names, globs) to prune: NOISE_DIRS plus `<vault>/.silicaignore`.
-
-    Split so the common case stays a set lookup; a missing or unreadable file
-    means the built-ins alone (an ignore file is a convenience, never a gate).
+def _ignore_patterns(vault) -> tuple[frozenset[str], tuple[str, ...], tuple[str, ...]]:
+    """(exact names, name globs, path globs) to prune: NOISE_DIRS plus
+    `<vault>/.silicaignore`. A pattern with a `/` inside or in front is a
+    root-relative path (`docs/private`, `/README.md`, `templates/*.md`); any
+    other pattern is a name, matched at any depth (`archive`, `*.egg-info`).
+    Files and directories alike. Split so the common case stays a set
+    lookup; a missing or unreadable file means the built-ins alone (an
+    ignore file is a convenience, never a gate).
     """
-    names, globs = set(NOISE_DIRS), []
+    names, globs, paths = set(NOISE_DIRS), [], []
     try:
         text = (Path(vault) / SILICAIGNORE_REL).read_text(encoding="utf-8")
     except OSError:
-        return frozenset(names), ()
+        return frozenset(names), (), ()
     for line in text.splitlines():
-        pat = line.split("#", 1)[0].strip().strip("/")
+        raw = line.split("#", 1)[0].strip()
+        pat = raw.strip("/")
         if not pat:
             continue
-        (globs.append(pat) if any(c in pat for c in "*?[") else names.add(pat))
-    return frozenset(names), tuple(globs)
+        if "/" in pat or raw.startswith("/"):
+            paths.append(pat)
+        elif any(c in pat for c in "*?["):
+            globs.append(pat)
+        else:
+            names.add(pat)
+    return frozenset(names), tuple(globs), tuple(paths)
 
 
 def ignore_matcher(vault) -> Callable[[str], bool]:
-    """Predicate over a directory NAME: True ⇒ do not walk it.
-
-    Matches by name at any depth, like NOISE_DIRS itself — not by path, so
-    `docs/private` does not work but `private` and `*.egg-info` do.
-    ponytail: name-only matching, add path anchoring when someone needs it.
-
-    Reads the file once: build the matcher before a walk, never inside it.
+    """Predicate over a directory NAME: True ⇒ do not walk it. Matches by
+    name at any depth, like NOISE_DIRS itself; the path patterns need the
+    path, see `ignore_path_matcher`. Reads the file once: build the matcher
+    before a walk, never inside it.
     """
-    names, globs = _ignore_patterns(vault)
+    names, globs, _paths = _ignore_patterns(vault)
     if not globs:
         return names.__contains__
     return lambda d: d in names or any(fnmatch(d, g) for g in globs)
+
+
+def ignore_path_matcher(vault) -> Callable[[str], bool]:
+    """Predicate over a root-relative posix PATH of a file or a directory
+    (no trailing slash): True ⇒ the index does not read it. Name patterns
+    match the last segment, path patterns the whole path.
+    ponytail: fnmatch, so `*` crosses `/` (`templates/*.md` also hides
+    `templates/a/b.md`); gitignore's exact rules when someone needs them.
+    """
+    names, globs, paths = _ignore_patterns(vault)
+
+    def skip(rel: str) -> bool:
+        name = rel.rsplit("/", 1)[-1]
+        return (name in names or any(fnmatch(name, g) for g in globs)
+                or any(fnmatch(rel, p) for p in paths))
+    return skip
 
 
 # Root-level files that mark a source tree regardless of file counts (a repo
