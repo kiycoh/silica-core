@@ -77,7 +77,10 @@ the original as `source`. A PDF the index has not read yet is `changed`, not
 Ranking, in order: BM25 over whole documents; BM25 over heading-delimited
 sections inside the top documents; at most `per_doc` sections per document;
 for each hit, the `width`-character window densest in idf-weighted query
-terms, with its line number.
+terms, with its line number. A PDF's section is a page (its text layer has
+no headings), so on a PDF hit widen `width` (1200-1500) rather than reading
+the page: five 1500-char windows cost 60% less than five page reads
+(measured 2026-09-09).
 
 Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window}],
 documents: [{path, score, matched_terms, coverage}], candidates, terms_absent,
@@ -163,7 +166,9 @@ extract_path?}`.
   the current `version`. A stale citation never silently opens different
   text.
 - A PDF is served from its own text layer, page by page: `section="p. 8"`
-  serves one page, `pages` counts them, and `outline` is empty — an extracted
+  serves one page — the whole page, ~1.2k tokens (measured 2026-09-09), so
+  ask for it to cite a passage a search located, and widen the search's
+  `width` to explore — `pages` counts them, and `outline` is empty — an extracted
   layer has no headings to trust, and scanning it for `#` would read a paper's
   own markdown examples as structure. `page_map` names only the pages the
   served slice covers (the page it opens on, plus every page starting inside

@@ -496,7 +496,10 @@ def silica_search(
     exact string or a symbol name. Ranked passages with an honest zero: BM25
     over documents, then over the heading sections of the top documents, at
     most `per_doc` per document; each hit carries its densest `width`-char
-    window and line.
+    window and line. A PDF's section is a page (its text layer has no
+    headings), so on a PDF hit widen `width` (1200-1500) rather than reading
+    the page: five 1500-char windows cost 60% less than five page reads
+    (measured 2026-09-09).
     `score` is raw BM25 (comparable within one call only). `matched_terms`
     are the query terms in the hit; `coverage` is the share of the query's
     idf mass they carry, absent terms included at the weight of a term found
@@ -636,7 +639,9 @@ def silica_read(
     `section` by heading, a PDF page, or the whole file when it fits
     `max_chars`, always with the outline and a `version`;
     `truncated` and `next_start` say how to continue. A PDF is served from
-    its own text layer, page by page: `section="p. 8"` serves one page,
+    its own text layer, page by page: `section="p. 8"` serves one page —
+    the whole page, ~1.2k tokens (measured 2026-09-09), so ask for it to cite
+    a passage a search located, and widen the search's `width` to explore —
     `pages` counts them, `page_map` gives the pages the slice covers, and
     `extract_path` is that text on disk, for grep and the harness's own
     reader (a cache, rebuilt when the PDF changes, under no `version`
