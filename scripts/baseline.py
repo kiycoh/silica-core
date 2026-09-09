@@ -24,12 +24,24 @@ a digit where a number was asked), checked case-insensitively. It measures
 whether the located evidence reached the answer, not prose quality. The
 absence task (D3) is scored on an absence phrase and must be read by hand:
 a rubric cannot tell a fabricated citation from a real one.
+
+Every invocation appends one line to `manifest.jsonl` in the results
+folder: the runner's own hash and the checkout it ran from, the arguments,
+the client's version, the SKILL.md arm A loads, the allowlists and prompt
+preambles, each task with its rubric, and the identity of every folder a
+task ran in: a hash over the paths and bytes of every file under it, hidden
+folders aside, whatever git tracks, ignores or has never seen (a corpus of
+papers sits in an ignored folder; the 2026-09-09 grids ran on dirty trees),
+plus HEAD and the porcelain status when the folder is a checkout, for the
+reader. A hash detects a change; rereading the old corpus takes the kept
+files or the git revision.
 """
 from __future__ import annotations
 
 import argparse
 import collections
 import concurrent.futures
+import hashlib
 import json
 import os
 import re
@@ -156,6 +168,93 @@ HARD_TASKS = [
                "does 'weak' mean? Cite the code.",
      "all_of": ["confidence.py"], "any_of": [["dominant", "runner-up", "runner up"]]},
 ]
+
+
+def _git(cwd: Path, *args: str) -> str:
+    try:
+        # rstrip, not strip: a porcelain line opens with its index column (" M a.md")
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
+                              timeout=60).stdout.rstrip("\n")
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def identity(folder: Path) -> dict:
+    """What a run read in `folder`: `sha256` over the path and bytes of every
+    regular file under it, hidden folders and symlinks aside, whether git
+    tracks it, ignores it or never saw it — a task reads the folder, not the
+    index. HEAD and the porcelain status ride along when the folder is a
+    checkout, for the reader; neither is the identity, since an ignored
+    corpus or an untracked folder changes under an unchanged HEAD and a
+    status line names a folder, not its bytes. Measured 2026-09-09: 1.0 s
+    for the 7,115-file paper corpus, under 0.7 s for each code checkout."""
+    h, n = hashlib.sha256(), 0
+    for dirpath, dirnames, filenames in os.walk(folder):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for name in sorted(filenames):
+            p = Path(dirpath) / name
+            if name.startswith(".") or p.is_symlink() or not p.is_file():
+                continue
+            h.update(p.relative_to(folder).as_posix().encode() + b"\0" + p.read_bytes() + b"\0")
+            n += 1
+    out = {"path": str(folder), "files": n, "sha256": h.hexdigest()}
+    head = _git(folder, "rev-parse", "HEAD")
+    if head:
+        status = _git(folder, "status", "--porcelain", "--", ".")
+        out.update(head=head, dirty=bool(status), changed=status.splitlines())
+    return out
+
+
+def skill_loaded(plugin_dir: str) -> dict | None:
+    """The SKILL.md arm A loads: the checkout's under `--plugin-dir`, else the
+    install Claude Code records in installed_plugins.json; None when neither
+    exists, which is itself a finding."""
+    if plugin_dir:
+        path = Path(plugin_dir) / "silica" / "skills" / "silica" / "SKILL.md"
+    else:
+        reg = Path.home() / ".claude" / "plugins" / "installed_plugins.json"
+        try:
+            entries = json.loads(reg.read_text()).get("plugins", {}).get(PLUGIN_KEY, [])
+        except (OSError, ValueError):
+            entries = []
+        if not entries:
+            return None
+        path = Path(entries[-1]["installPath"]) / "silica" / "skills" / "silica" / "SKILL.md"
+    try:
+        return {"path": str(path), "sha256": _sha256(path.read_bytes())}
+    except OSError:
+        return None
+
+
+def write_manifest(out: Path, args: dict, tasks: list[dict]) -> Path:
+    """One line per invocation: a results folder grows over several (E1–E3
+    each added arms to one), so the manifest is a log, never the last
+    invocation overwriting the first."""
+    def plain(d: dict) -> dict:
+        return {k: (str(v) if isinstance(v, Path) else v) for k, v in d.items()}
+
+    try:
+        client = subprocess.run(["claude", "--version"], capture_output=True, text=True,
+                                timeout=60).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        client = ""
+    m = {"started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+         "runner": {"path": Path(__file__).resolve().relative_to(REPO).as_posix(),
+                    "sha256": _sha256(Path(__file__).read_bytes()), "repo": identity(REPO)},
+         "client": client, "args": plain(args),
+         "skill": None if args.get("no_skills") else skill_loaded(args.get("plugin_dir") or ""),
+         "tools": {"native": NATIVE_TOOLS, "silica": SILICA_TOOLS},
+         "preamble": PREAMBLE, "forced": FORCED,
+         "corpora": {str(c): identity(Path(c)) for c in sorted({str(t["cwd"]) for t in tasks})},
+         "tasks": [plain(t) for t in tasks]}
+    path = out / "manifest.jsonl"
+    with path.open("a") as fh:
+        fh.write(json.dumps(m, ensure_ascii=False) + "\n")
+    return path
 
 
 def command(arm: str, model: str, max_turns: int, budget: float,
@@ -297,6 +396,8 @@ def main() -> int:
     grid = [(t, arm, rep) for t in wanted for rep in range(1, a.reps + 1)
             for arm in a.arms.split(",") if (t["id"], arm, rep) not in done]
     print(f"{len(grid)} runs -> {runs}  (model {a.model}, jobs {a.jobs})", flush=True)
+    if grid:
+        print(f"manifest -> {write_manifest(out, vars(a), wanted)}", flush=True)
     lock = threading.Lock()
 
     def job(t, arm, rep):
