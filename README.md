@@ -16,8 +16,8 @@
 ---
 
 Point Silica at a folder of markdown, code, PDFs or office files. The harness
-you already use — [twenty of them](#harnesses), from Claude Code to Cursor to
-a bare shell — gets five tools that return located evidence: a path, a
+you already use — [Claude Code, Cursor, Zed, a bare shell, and every other
+one below](#harnesses) — gets five tools that return located evidence: a path, a
 section, a line, a window of text, and the numbers to judge it by. Silica
 never answers, summarises, plans or remembers for you. The harness owns the
 loop.
@@ -42,58 +42,19 @@ network.
 ## Install
 
 ```bash
-uv tool install 'silica-core[mcp]'   # or: pipx install 'silica-core[mcp]'
-silica setup claude                  # or: codex, cursor, zed, goose, … (silica setup --list)
-npx skills add kiycoh/silica-core    # optional, and after the two above: the skill
+uv tool install 'silica-core[mcp]'   # the command and the server
+silica setup claude                  # register it — see Harnesses
+npx skills add kiycoh/silica-core    # optional: the skill
 ```
+
+`pipx install 'silica-core[mcp]'` works for the first line just as well. The
+second registers the server at user scope, so every session serves the folder
+the client was opened in; to serve another root, pass `--vault DIR` in the
+server entry or export `SILICA_VAULT` in the client's `env` block, since a
+`.env` file is not enough on purpose.
 
 The package is `silica-core`, the command is `silica`, the tools are
 `silica_*`: the distribution carries the name, the code keeps the namespace.
-
-Leave the choice to the harness. Measured with Opus on 2026-09-09, 144 runs,
-every run correct: no arm of any experiment separated on the answer, so what
-moves is the work spent reaching it. Twelve questions over a 5.5M-token
-corpus of papers, Silica reached for spontaneously, against the same harness
-without the plugin: 3.9 turns instead of 5.0, 2.9 tool calls instead of 4.0,
-$0.20 instead of $0.22 a task at a warm cache. The same answers for a
-quarter fewer calls. On code the model never reaches for `silica_search`,
-because the questions name identifiers and the descriptions say grep wins
-there: the two resident schemas cost 13% on those tasks and return nothing.
-Told to use the tools instead of grep it is worse everywhere: 49% over
-spontaneous use on the papers, 1.7 times a plain grep on code, 3.2 times at
-the worst task.
-
-Put the pair in front of the model instead: `silica mcp` marks
-`silica_search` and `silica_read` `anthropic/alwaysLoad`, so a client that
-defers MCP tools behind its own tool search keeps those two in the list and
-the other three ride behind them. On the same twelve document tasks the model
-reached for a deferred search once, and a resident one twelve times. The
-marker is declared, never inferred, and it has to reach the wire as `_meta`:
-a wrapper that rebuilds the tool list carries it over itself.
-
-`setup` registers the MCP server in the client's own config at user scope.
-Every session then serves the folder the client was opened in. To serve
-another root, pass `--vault DIR` in the server entry, or export
-`SILICA_VAULT` in the client's `env` block; a `.env` file is not enough on
-purpose.
-
-A PDF with a text layer is searched as it is: the index reads the layer
-itself, one section per page, so a hit reads `p. 7` and `silica_read` serves
-that page alone. No conversion, no `.md` written beside it. The reply also
-carries `extract_path`, the extracted text on disk, for `grep` and the
-harness's own reader — the line numbers there are the ones `silica_read`
-serves. A scan has no text layer and reads as `unconverted` until you
-convert it. `silica import` writes that conversion beside the original,
-refuses to replace a `.md` it did not write, and records the original's
-SHA-256 and the extracting tool's version in the frontmatter; `silica_read`
-and `silica_files` then report `source_state: stale` on either path when
-the PDF changed under a `.md` that did not.
-
-Extras: `[connect]` adds the Obsidian bridge, `[all]` both. The converters
-for PDF (headings, figures), DOCX, EPUB, FB2, RTF, XLS and ODF need no extra.
-Scanned PDFs, images, PPTX and XLSX go through [MinerU](https://github.com/opendatalab/MinerU)
-when it is on your PATH; audio and video need `ffmpeg` and a speech-to-text
-endpoint (`SILICA_STT_BASE_URL`). `silica doctor` says which lanes you have.
 
 ### Harnesses
 
@@ -137,25 +98,23 @@ instead of failing:
 | `generic` | Void, Jan, Factory Droid, Antigravity, Hermes — the MCP block to paste |
 
 Cursor and Windsurf also read a project rule file (`.cursor/rules/silica.mdc`,
-`.windsurfrules`). Those belong to your repository, not your home, so `setup`
-names them rather than writing them; the content is `silica/skills/silica/SKILL.md`.
+`.windsurfrules`). Those are yours, not your home's, so `setup` names them
+rather than writing them; the content is `silica/skills/silica/SKILL.md`.
 
-The skill is a separate question from the server. `silica setup codex` and
-`silica setup dsh` copy `SKILL.md` into the root each one reads — those two
-roots differ (`$CODEX_HOME/skills`, `~/.agents/skills`), and a skill in the
-wrong one is silently never read. For any other harness,
-[`npx skills`](https://github.com/vercel-labs/skills) knows 79 skill roots to
-this repository's two — Antigravity, Droid, Hermes and the project-scoped
-`.claude/skills` among them:
+### The skill
+
+`SKILL.md` is the wording that tells an agent when to reach for the tools.
+`setup` installs it for the two harnesses whose skill root it knows (`codex`,
+`dsh`). For every other one, [`npx skills`](https://github.com/vercel-labs/skills)
+knows 79 of them:
 
 ```bash
 npx skills add kiycoh/silica-core
 ```
 
-It reads `silica/skills/silica/SKILL.md` from this repository as it stands, and
-it installs the skill and nothing else: no server is registered, no package is
-installed. Run it after the two commands above, not instead of them — a skill
-without the server is instructions for tools that are not there.
+It installs the skill and nothing else — no package, no server. So it is the
+third line of the install, not a shortcut past the first two: on its own it
+leaves an agent holding instructions for tools that are not there.
 
 ### Docker
 
@@ -191,6 +150,26 @@ silica code-pack src/search/index.py --budget 12000
 silica mcp --extended                          # also serve the wikilink tools
 ```
 
+## What it reads
+
+A PDF with a text layer is searched as it is: the index reads the layer
+itself, one section per page, so a hit reads `p. 7` and `silica_read` serves
+that page alone. No conversion, no `.md` written beside it. The reply also
+carries `extract_path`, the extracted text on disk, for `grep` and the
+harness's own reader — the line numbers there are the ones `silica_read`
+serves. A scan has no text layer and reads as `unconverted` until you
+convert it. `silica import` writes that conversion beside the original,
+refuses to replace a `.md` it did not write, and records the original's
+SHA-256 and the extracting tool's version in the frontmatter; `silica_read`
+and `silica_files` then report `source_state: stale` on either path when
+the PDF changed under a `.md` that did not.
+
+Extras: `[connect]` adds the Obsidian bridge, `[all]` both. The converters
+for PDF (headings, figures), DOCX, EPUB, FB2, RTF, XLS and ODF need no extra.
+Scanned PDFs, images, PPTX and XLSX go through [MinerU](https://github.com/opendatalab/MinerU)
+when it is on your PATH; audio and video need `ffmpeg` and a speech-to-text
+endpoint (`SILICA_STT_BASE_URL`). `silica doctor` says which lanes you have.
+
 ## How search says no
 
 A search returns hits even when the corpus does not answer, because a
@@ -219,6 +198,29 @@ Ranking is BM25 over documents, then over the heading sections of the top
 documents, at most two sections per document, with each hit's densest
 window. The index is one JSON file per root under `~/.silica/index`, built
 in seconds and refreshed by mtime.
+
+## What the measurements say
+
+Leave the choice to the harness. Measured with Opus on 2026-09-09, 144 runs,
+every run correct: no arm of any experiment separated on the answer, so what
+moves is the work spent reaching it. Twelve questions over a 5.5M-token
+corpus of papers, Silica reached for spontaneously, against the same harness
+without the plugin: 3.9 turns instead of 5.0, 2.9 tool calls instead of 4.0,
+$0.20 instead of $0.22 a task at a warm cache. The same answers for a
+quarter fewer calls. On code the model never reaches for `silica_search`,
+because the questions name identifiers and the descriptions say grep wins
+there: the two resident schemas cost 13% on those tasks and return nothing.
+Told to use the tools instead of grep it is worse everywhere: 49% over
+spontaneous use on the papers, 1.7 times a plain grep on code, 3.2 times at
+the worst task.
+
+Put the pair in front of the model instead: `silica mcp` marks
+`silica_search` and `silica_read` `anthropic/alwaysLoad`, so a client that
+defers MCP tools behind its own tool search keeps those two in the list and
+the other three ride behind them. On the same twelve document tasks the model
+reached for a deferred search once, and a resident one twelve times. The
+marker is declared, never inferred, and it has to reach the wire as `_meta`:
+a wrapper that rebuilds the tool list carries it over itself.
 
 ## The optional REPL
 
