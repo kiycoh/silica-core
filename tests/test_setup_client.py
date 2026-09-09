@@ -164,15 +164,28 @@ def test_dsh_default_path_honours_dsh_home(monkeypatch):
     assert setup_client._default_path("dsh") == Path("/srv/dsh/cordis.patch.yml")
 
 
-def test_skill_lands_in_the_shared_agents_root(tmp_path, monkeypatch):
-    # Codex and DeepSeek Harness both discover ~/.agents/skills, so one copy
-    # serves both; Claude Code gets the skill from the plugin instead.
+def test_the_skill_lands_in_the_root_each_client_actually_reads(tmp_path, monkeypatch):
+    """Codex reads $CODEX_HOME/skills (default ~/.codex/skills), DeepSeek
+    Harness the shared ~/.agents/skills. They are not the same root — an
+    earlier version of this file copied both to ~/.agents and Codex never saw
+    it. Claude Code gets the skill from the plugin instead.
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
-    for client, cfg in (("codex", "config.toml"), ("dsh", "cordis.patch.yml")):
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    wanted = setup_client.skill_path().read_text(encoding="utf-8")
+    for client, cfg, root in (("codex", "config.toml", ".codex/skills"),
+                              ("dsh", "cordis.patch.yml", ".agents/skills")):
         assert setup_client.run_setup([client, "--config", str(tmp_path / cfg)]) == 0
-        installed = tmp_path / ".agents" / "skills" / "silica" / "SKILL.md"
-        assert installed.read_text(encoding="utf-8") == setup_client.skill_path().read_text(encoding="utf-8")
-        installed.unlink()
+        assert (tmp_path / root / "silica" / "SKILL.md").read_text(encoding="utf-8") == wanted
+    assert not (tmp_path / ".agents" / "skills" / "silica-core").exists()
+
+
+def test_codex_home_moves_the_skill_with_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "elsewhere"))
+    assert setup_client.run_setup(["codex", "--config", str(tmp_path / "config.toml")]) == 0
+    assert (tmp_path / "elsewhere" / "skills" / "silica" / "SKILL.md").exists()
+    assert not (tmp_path / ".codex").exists()
 
 
 def test_dry_run_installs_no_skill(tmp_path, monkeypatch):

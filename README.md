@@ -44,6 +44,7 @@ network.
 ```bash
 uv tool install 'silica-core[mcp]'   # or: pipx install 'silica-core[mcp]'
 silica setup claude                  # or: codex, cursor, zed, goose, … (silica setup --list)
+npx skills add kiycoh/silica-core    # optional, and after the two above: the skill
 ```
 
 The package is `silica-core`, the command is `silica`, the tools are
@@ -105,9 +106,9 @@ prints the block without writing, `--config PATH` writes somewhere else,
 | `silica setup …` | Harness | Writes |
 |---|---|---|
 | `claude` | Claude Code | delegates to `claude mcp add --scope user` |
-| `codex` | Codex CLI | `~/.codex/config.toml`, and the skill into `~/.agents/skills` |
+| `codex` | Codex CLI | `~/.codex/config.toml`, and the skill into `~/.codex/skills` |
 | `opencode` | opencode | `~/.config/opencode/opencode.json` |
-| `dsh` | DeepSeek Harness | `~/.dsh/cordis.patch.yml`, and the skill |
+| `dsh` | DeepSeek Harness | `~/.dsh/cordis.patch.yml`, and the skill into `~/.agents/skills` |
 | `goose` | Goose | `~/.config/goose/config.yaml` |
 | `openhands` | OpenHands | `config.toml`, in the folder OpenHands runs from |
 | `gemini` | Gemini CLI | `~/.gemini/settings.json` |
@@ -138,6 +139,23 @@ instead of failing:
 Cursor and Windsurf also read a project rule file (`.cursor/rules/silica.mdc`,
 `.windsurfrules`). Those belong to your repository, not your home, so `setup`
 names them rather than writing them; the content is `silica/skills/silica/SKILL.md`.
+
+The skill is a separate question from the server. `silica setup codex` and
+`silica setup dsh` copy `SKILL.md` into the root each one reads — those two
+roots differ (`$CODEX_HOME/skills`, `~/.agents/skills`), and a skill in the
+wrong one is silently never read. For any other harness,
+[`npx skills`](https://github.com/vercel-labs/skills) knows 79 skill roots to
+this repository's two — Antigravity, Droid, Hermes and the project-scoped
+`.claude/skills` among them:
+
+```bash
+npx skills add kiycoh/silica-core
+```
+
+It reads `silica/skills/silica/SKILL.md` from this repository as it stands, and
+it installs the skill and nothing else: no server is registered, no package is
+installed. Run it after the two commands above, not instead of them — a skill
+without the server is instructions for tools that are not there.
 
 ### Docker
 

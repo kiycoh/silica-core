@@ -112,6 +112,19 @@ def _xdg(*parts: str) -> Callable[[], Path]:
     return lambda: Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config").joinpath(*parts)
 
 
+def _codex_skills() -> Path:
+    """Codex reads $CODEX_HOME/skills, ~/.codex/skills when that is unset.
+
+    Verified against the codex-cli 0.153.4 binary, which carries both
+    "Installs into `$CODEX_HOME/skills/<skill-name>` (defaults to
+    `~/.codex/skills`)" and "create discoverable skills in `$CODEX_HOME/skills`".
+    `.agents/skills` occurs in that binary only among the external-agent
+    migration strings, next to `.cursorrules` and `claude-code` — a root it
+    reads *from*, not one it serves skills out of.
+    """
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "skills"
+
+
 def _dsh_path() -> Path:
     # resolveDshHome in the harness: $DSH_HOME, else ~/.dsh. The home-level
     # patch file is the layer applied over every profile.
@@ -167,14 +180,14 @@ class Spec:
     entry: Callable[[], dict] | None = None    # json/yaml: the value to merge in
     block: Callable[[], str] | None = None     # toml: text to append instead
     kind: str = "map"                          # map -> keyed by NAME; list -> appended
-    skill: bool = False                        # also copy SKILL.md to ~/.agents/skills
+    skills: Callable[[], Path] | None = None   # this client's skill root, if it reads one
     note: str = ""                             # one line printed after a write
 
 
 CLIENTS: dict[str, Spec] = {
     # --- terminal agents ------------------------------------------------------
     "codex": Spec("Codex CLI", "toml", _home(".codex", "config.toml"),
-                  ("mcp_servers",), block=_codex_block, skill=True),
+                  ("mcp_servers",), block=_codex_block, skills=_codex_skills),
     "opencode": Spec("opencode", "json", _xdg("opencode", "opencode.json"), ("mcp",),
                      entry=lambda: {"type": "local", "command": mcp_command(), "enabled": True}),
     "goose": Spec("Goose", "yaml", _xdg("goose", "config.yaml"), ("extensions",), entry=_goose_entry),
@@ -253,13 +266,19 @@ def skill_path() -> Path:
     return Path(str(files("silica") / "skills" / "silica" / "SKILL.md"))
 
 
-def install_skill() -> Path:
-    """Copy the skill to ~/.agents/skills, the user root both Codex and
-    DeepSeek Harness scan, so one copy serves both. Claude Code gets the skill
-    from the plugin instead. A copy and not a symlink: the package path moves
-    on upgrade and symlinks need privileges on Windows; rerunning setup
-    refreshes it."""
-    dest = Path.home() / ".agents" / "skills" / "silica" / "SKILL.md"
+# DeepSeek Harness scans the shared ~/.agents root. Codex does not, whatever
+# an earlier version of this file claimed: its own root is $CODEX_HOME/skills.
+def _dsh_skills() -> Path:
+    return Path.home() / ".agents" / "skills"
+
+
+def install_skill(root: Path) -> Path:
+    """Copy the skill into one client's skill root. Claude Code gets it from
+    the plugin instead. A copy and not a symlink: the package path moves on
+    upgrade and symlinks need privileges on Windows; rerunning setup refreshes
+    it. For every other harness `npx skills add kiycoh/silica-core` knows more
+    roots than this file ever will."""
+    dest = root / "silica" / "SKILL.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(skill_path(), dest)
     return dest
@@ -361,7 +380,7 @@ def _setup_config(spec: Spec, path: Path, dry_run: bool) -> int:
         new = existing + ("" if not existing or existing.endswith("\n") else "\n") + block
     else:
         entry = spec.entry()  # type: ignore[misc]
-        if spec.kind == "list":
+        if isinstance(container, list):
             container.append(entry)
         else:
             container[NAME] = entry
@@ -513,13 +532,14 @@ def run_setup(args: list[str]) -> int:
         i = args.index("--config")
         override = args[i + 1] if i + 1 < len(args) else ""
     path = Path(override).expanduser() if override else _default_path(client)
+    skills: Callable[[], Path] | None
     if client == "dsh":
-        rc, skill = _setup_dsh(path, dry_run), True
+        rc, skills = _setup_dsh(path, dry_run), _dsh_skills
     else:
         spec = CLIENTS[client]
-        rc, skill = _setup_config(spec, path, dry_run), spec.skill
+        rc, skills = _setup_config(spec, path, dry_run), spec.skills
     # Also on "already configured": rerunning setup is how the skill copy
     # follows a package upgrade.
-    if rc == 0 and not dry_run and skill:
-        _say(f"  ✓ skill installed at {escape(str(install_skill()))}")
+    if rc == 0 and not dry_run and skills is not None:
+        _say(f"  ✓ skill installed at {escape(str(install_skill(skills())))}")
     return rc
