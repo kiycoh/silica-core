@@ -314,6 +314,23 @@ def get_lexical_store() -> "LexicalStore":
     return store
 
 
+def get_store(name: str) -> "LexicalStore":
+    """The store behind index file ``<name>.json``; ``lexical`` is the one above.
+
+    One index per consumer. The retrieval engine (silica/core.py) builds by
+    walking the vault and drops every path that walk did not produce, so a
+    store it shares with another lane would lose that lane's entries on the
+    next build.
+    """
+    if name == "lexical":
+        return get_lexical_store()
+    from silica.kernel.recall.paths import index_file, path_keyed_singleton
+    path = index_file(name)
+    store = path_keyed_singleton(_STORE_CACHE, str(path), lambda: LexicalStore.load(path))
+    store.sync_from_disk()
+    return store
+
+
 def clear() -> None:
     """Drop all cached stores (test isolation; frees memory on /vault switch)."""
     _STORE_CACHE.clear()

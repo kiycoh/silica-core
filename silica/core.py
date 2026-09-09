@@ -22,11 +22,16 @@ from pydantic import Field
 from silica.config import CONFIG
 from silica.kernel.link.ast import parse_headings
 from silica.kernel.recall import paths as _paths
-from silica.kernel.recall.lexical import TOKENIZER_VERSION, _tokens, get_lexical_store
+from silica.kernel.recall.lexical import TOKENIZER_VERSION, _tokens, get_store
 from silica.kernel.recall.rerank import _query_terms, best_window_spans
 from silica.tools import tool
 
 K1, B = 1.5, 0.75
+# The index this engine owns. The one line silica-internal changes when it
+# vendors this file: build_index() drops every path its own walk did not
+# produce, so sharing a store with a lane that indexes a different set would
+# have each build prune the other's entries.
+INDEX = "lexical"
 _HEADING = re.compile(r"(?m)^(?=#{1,4} )")
 _PAGE = re.compile(r"p\.?\s*(\d+)", re.I)
 _WIKILINK = re.compile(r"\[\[([^\]|#]+)")
@@ -275,7 +280,7 @@ def _mtime(rel: str) -> float | None:
 def index_state(meta: dict | None = None) -> dict:
     """{state: cold|stale|ready, docs, built_at}. `cold` = never built."""
     meta = meta or _load_meta()
-    if not _paths.index_file("lexical").is_file() or not meta.get("built_at"):
+    if not _paths.index_file(INDEX).is_file() or not meta.get("built_at"):
         return {"state": "cold", "docs": 0, "built_at": None}
     stamps = meta.get("stamps", {})
     skipped = meta.get("no_text", {})
@@ -293,7 +298,7 @@ def build_index(rebuild: bool = False, embed: bool = False) -> dict:
     rebuild = rebuild or not meta.get("built_at")
     if rebuild:
         meta = {"built_at": None, "stamps": {}, "no_text": {}, "tokenizer": TOKENIZER_VERSION}
-    store = get_lexical_store()
+    store = get_store(INDEX)
     stamps: dict[str, float] = meta["stamps"]
     skipped: dict[str, dict] = meta.setdefault("no_text", {})
     root = _root()
@@ -508,7 +513,7 @@ def silica_search(
     state = index_state()
     if state["state"] != "ready":
         build_index(rebuild=state["state"] == "cold")
-    store = get_lexical_store()
+    store = get_store(INDEX)
     idf = store.idf(set(_tokens(query)))
     known = {t: v for t, v in idf.items() if v is not None}
     absent = sorted(t for t, v in idf.items() if v is None)
