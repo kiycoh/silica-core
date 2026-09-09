@@ -13,6 +13,10 @@
   <a href="https://github.com/kiycoh/silica-core/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/kiycoh/silica-core/ci.yml?branch=main&label=ci" alt="CI" /></a>
 </p>
 
+<!-- The MCP registry proves ownership of the PyPI package by finding this
+     string in the description PyPI renders, which is this file. -->
+<!-- mcp-name: io.github.kiycoh/silica-core -->
+
 ---
 
 Point Silica at a folder of markdown, code, PDFs or office files. The harness

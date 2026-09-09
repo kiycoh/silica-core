@@ -54,6 +54,31 @@ def test_both_marketplaces_offer_the_same_plugin_from_the_repo_root():
     assert x_entry["source"] in ("./", {"source": "local", "path": "./"})
 
 
+def test_the_registry_entry_is_launchable_and_owns_its_package():
+    # server.json is a fourth manifest of the same launch, and it fails in ways
+    # the others cannot. Ownership: the MCP registry proves the PyPI package is
+    # ours by finding an `mcp-name` marker in the description PyPI renders,
+    # which is README.md, so a README rewrite can revoke the right to publish.
+    # Launch: a client builds `uvx <runtimeArguments> <identifier> <args>`, and
+    # `identifier` is the PyPI name, so the command it spells is `silica-core`,
+    # not `silica` — the alias in [project.scripts] is what keeps it resolvable.
+    server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    (pkg,) = server["packages"]
+
+    assert f"<!-- mcp-name: {server['name']} -->" in (ROOT / "README.md").read_text(encoding="utf-8")
+    assert pkg["identifier"] == project["name"]
+    assert pkg["identifier"] in project["scripts"]
+    # A package version the registry cannot find on PyPI is rejected, and the
+    # release job holds both of these to the tag.
+    assert server["version"] == pkg["version"]
+
+    # Same shape as the block `silica setup <client>` writes, executable aside.
+    named = {a["name"]: a["value"] for a in pkg["runtimeArguments"]}
+    assert [pkg["runtimeHint"], "--from", named["--from"]] == MCP_COMMAND[:3]
+    assert [a["value"] for a in pkg["packageArguments"]] == MCP_COMMAND[4:]
+
+
 
 
 

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.kiycoh/silica-core",
+  "title": "Silica Core",
+  "description": "Retrieval over the folder the session opened: files, search, read, code_pack, write_note.",
+  "version": "0.7.3",
+  "repository": {
+    "url": "https://github.com/kiycoh/silica-core",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/kiycoh/silica-core#readme",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "silica-core",
+      "version": "0.7.3",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "silica-core[mcp]",
+          "description": "The server lives behind the [mcp] extra; without it the install carries the CLI and no server.",
+          "isRequired": true
+        }
+      ],
+      "packageArguments": [
+        {
+          "type": "positional",
+          "valueHint": "subcommand",
+          "value": "mcp",
+          "description": "Serve files, search, read, code_pack and write_note over stdio.",
+          "isRequired": true
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "SILICA_VAULT",
+          "description": "Folder to index and serve. Unset means the directory the client launched the server in.",
+          "format": "filepath",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

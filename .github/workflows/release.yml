@@ -3,8 +3,8 @@ name: release
 # Cut a release by bumping the plugin manifests, then pushing a SemVer tag:
 #   v=0.7.2
 #   sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$v\"/" \
-#     .claude-plugin/plugin.json .codex-plugin/plugin.json
-#   git commit -am "chore(plugin): both manifests declare $v"
+#     .claude-plugin/plugin.json .codex-plugin/plugin.json server.json
+#   git commit -am "chore(plugin): the manifests and the registry entry declare $v"
 #   git tag "v$v" && git push origin main "v$v"
 # setuptools-scm reads the tag to stamp the version; git-cliff builds the notes.
 # The manifests stay hand-bumped because a harness reads them from the commit,
@@ -56,6 +56,24 @@ jobs:
             [ "$got" = "$want" ] || { echo "$m declares $got, tag is $want"; exit 1; }
           done
 
+      # The same drift, one registry further out: server.json carries the
+      # version twice (the server's and the PyPI package's) and the registry
+      # rejects a package version PyPI does not have, so both track the tag.
+      # The marker travels with them — ownership is proven by finding it in the
+      # description PyPI renders, and a README edit can drop it silently.
+      - name: Verify the registry entry matches the tag
+        run: |
+          python3 - "${GITHUB_REF_NAME#v}" <<'PY'
+          import json, sys
+          want = sys.argv[1]
+          d = json.load(open("server.json"))
+          got = [d["version"], d["packages"][0]["version"]]
+          if got != [want, want]:
+              sys.exit(f"server.json declares {got}, tag is {want}")
+          if f"<!-- mcp-name: {d['name']} -->" not in open("README.md").read():
+              sys.exit("README.md lost the mcp-name marker the registry validates against")
+          PY
+
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
         with:
           python-version: "3.11"
@@ -104,3 +122,40 @@ jobs:
           body: ${{ steps.notes.outputs.content }}
           files: dist/*
           fail_on_unmatched_files: true
+
+  # The registry is the feed Glama, the client directories and PulseMCP ingest,
+  # so the tag that reaches PyPI should reach it too. Its own job rather than a
+  # step above: the registry is in preview and flakes, and a failed job can be
+  # re-run alone, while re-running `release` would try to publish a version PyPI
+  # already has and die on the first irreversible step.
+  registry:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC login to the registry (no token in secrets)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # Pinned by release for the reason the actions above are pinned by commit:
+      # this binary runs holding a token that can publish under io.github.kiycoh.
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz \
+            | tar xz mcp-publisher
+
+      - name: Authenticate to the MCP registry
+        run: ./mcp-publisher login github-oidc
+
+      # Validation reads the mcp-name marker out of the description PyPI renders
+      # for THIS version, and PyPI takes a moment to serve a release it has just
+      # accepted. Three tries, then it is a real failure: re-run this job, or run
+      # `mcp-publisher publish` from a checkout of the tag.
+      - name: Publish to the MCP registry
+        run: |
+          for attempt in 1 2 3; do
+            ./mcp-publisher publish && exit 0
+            echo "attempt $attempt failed; giving PyPI time to serve the new version"
+            sleep 20
+          done
+          exit 1
