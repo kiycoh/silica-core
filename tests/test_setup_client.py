@@ -301,24 +301,28 @@ def test_list_names_every_harness_the_docs_claim(capsys):
         assert client in out
 
 
-def test_the_harness_census_and_the_command_agree():
-    """docs/agent-harnesses.md is the census the setup table implements.
+@pytest.mark.parametrize("page", ["README.md", "docs/agent-harnesses.md"])
+def test_the_harness_census_and_the_command_agree(page):
+    """The pages that list the harnesses are the census the table implements.
 
-    Both directions: a client with no entry in the doc is undiscoverable, and a
-    `silica setup X` in the doc that X does not answer is a broken instruction
-    printed to a user who then has nowhere to go.
+    Both directions: a client absent from the page is one nobody finds, and a
+    `silica setup X` on the page that X does not answer is a broken instruction
+    printed to a reader who then has nowhere to go.
 
-    /docs is gitignored — the census does not ship in the distribution — so this
-    guards the drift for whoever holds the file and stands down in a clone that
-    does not.
+    README.md ships; /docs is gitignored, so that half of the check guards the
+    drift for whoever holds the file and stands down in a clone that does not.
     """
     import re
 
-    census = Path(__file__).resolve().parent.parent / "docs" / "agent-harnesses.md"
+    census = Path(__file__).resolve().parent.parent / page
     if not census.exists():
-        pytest.skip("docs/agent-harnesses.md is not in this checkout")
+        pytest.skip(f"{page} is not in this checkout")
     doc = census.read_text(encoding="utf-8")
     known = {"claude", "dsh", *setup_client.CLIENTS, *setup_client.RECIPES}
-    named = {m for m in re.findall(r"silica setup ([a-z][a-z-]*)", doc)}
-    assert known <= named, f"not in the doc: {sorted(known - named)}"
-    assert named <= known, f"doc promises a client that does not exist: {sorted(named - known)}"
+    # The README names clients in table cells, the census in prose, so the
+    # forward check takes either; only the unambiguous phrasing can be read
+    # backwards, since a page is full of backticks that are not client names.
+    spelled = set(re.findall(r"silica setup ([a-z][a-z-]*)", doc))
+    named = spelled | set(re.findall(r"`([a-z][a-z-]*)`", doc))
+    assert known <= named, f"{page} does not name: {sorted(known - named)}"
+    assert spelled <= known, f"{page} promises a client that does not exist: {sorted(spelled - known)}"

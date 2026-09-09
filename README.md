@@ -16,10 +16,11 @@
 ---
 
 Point Silica at a folder of markdown, code, PDFs or office files. The harness
-you already use (Claude Code, Codex, opencode, DeepSeek Harness, or a shell)
-gets five tools that return located evidence: a path, a section, a line, a
-window of text, and the numbers to judge it by. Silica never answers,
-summarises, plans or remembers for you. The harness owns the loop.
+you already use — [twenty of them](#harnesses), from Claude Code to Cursor to
+a bare shell — gets five tools that return located evidence: a path, a
+section, a line, a window of text, and the numbers to judge it by. Silica
+never answers, summarises, plans or remembers for you. The harness owns the
+loop.
 
 | Tool | Returns |
 |---|---|
@@ -92,6 +93,51 @@ for PDF (headings, figures), DOCX, EPUB, FB2, RTF, XLS and ODF need no extra.
 Scanned PDFs, images, PPTX and XLSX go through [MinerU](https://github.com/opendatalab/MinerU)
 when it is on your PATH; audio and video need `ffmpeg` and a speech-to-text
 endpoint (`SILICA_STT_BASE_URL`). `silica doctor` says which lanes you have.
+
+### Harnesses
+
+`silica setup <client>` writes the registration into the client's own config.
+It backs the file up first, leaves an existing `silica-core` entry alone, and
+refuses a file that does not parse rather than overwriting it. `--dry-run`
+prints the block without writing, `--config PATH` writes somewhere else,
+`--from SPEC` swaps the release for a checkout.
+
+| `silica setup …` | Harness | Writes |
+|---|---|---|
+| `claude` | Claude Code | delegates to `claude mcp add --scope user` |
+| `codex` | Codex CLI | `~/.codex/config.toml`, and the skill into `~/.agents/skills` |
+| `opencode` | opencode | `~/.config/opencode/opencode.json` |
+| `dsh` | DeepSeek Harness | `~/.dsh/cordis.patch.yml`, and the skill |
+| `goose` | Goose | `~/.config/goose/config.yaml` |
+| `openhands` | OpenHands | `config.toml`, in the folder OpenHands runs from |
+| `gemini` | Gemini CLI | `~/.gemini/settings.json` |
+| `cursor` | Cursor | `~/.cursor/mcp.json` |
+| `windsurf` | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| `cline` | Cline | `cline_mcp_settings.json` in the extension's storage |
+| `roo` | Roo Code | `mcp_settings.json` in the extension's storage |
+| `continue` | Continue.dev | `~/.continue/config.yaml` |
+| `zed` | Zed | `~/.config/zed/settings.json` |
+| `claude-desktop` | Claude Desktop | `claude_desktop_config.json` |
+| `lmstudio` | LM Studio | `~/.lmstudio/mcp.json` |
+| `anythingllm` | AnythingLLM | `anythingllm_mcp_servers.json` |
+| `librechat` | LibreChat | `librechat.yaml`, in the current folder |
+
+Desktop paths follow the OS convention: `~/.config` on Linux, `~/Library/Application
+Support` on macOS, `%APPDATA%` on Windows. `silica setup --list` prints this table
+with every path resolved on your machine.
+
+The rest install by instruction rather than by file, so `setup` prints the recipe
+instead of failing:
+
+| `silica setup …` | Covers |
+|---|---|
+| `shell` | Aider, SWE-agent, Plandex, Devin, SWE-bench — anything with a bash tool |
+| `python` | LangGraph, smolagents, CrewAI, AutoGen, Inspect, METR |
+| `generic` | Void, Jan, Factory Droid, Antigravity, Hermes — the MCP block to paste |
+
+Cursor and Windsurf also read a project rule file (`.cursor/rules/silica.mdc`,
+`.windsurfrules`). Those belong to your repository, not your home, so `setup`
+names them rather than writing them; the content is `silica/skills/silica/SKILL.md`.
 
 ### Docker
 
