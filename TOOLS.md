@@ -169,7 +169,12 @@ so the leg lands on the passage, not on the document's opening. The
 embedder is either an OpenAI-compatible `/v1/embeddings` endpoint
 (`SILICA_EMBEDDING_BASE_URL`, `SILICA_EMBEDDING_MODEL`) or, with the
 `[dense]` extra, a static model2vec model that needs no endpoint
-(`SILICA_EMBEDDING_MODEL=model2vec/minishlab/potion-retrieval-32M`).
+(`SILICA_EMBEDDING_MODEL=model2vec/minishlab/potion-retrieval-32M`). A
+model that wants a task prefix gets it from `SILICA_EMBEDDING_DOC_PREFIX`
+(in front of every section) and `SILICA_EMBEDDING_QUERY_PREFIX` (in front
+of the query): nomic-embed-text needs `search_document: ` and
+`search_query: `, potion and qwen3 need neither, and nothing is added
+unless named.
 `silica index --embed` builds the vectors (`embed.json` + `embed.f32`
 beside the lexical index, float32, unit length, re-embedding only the
 documents whose stamp changed). The leg is the user's call, made at index

@@ -135,3 +135,38 @@ def test_cli_also_adds_a_query_group(root, tmp_path, capsys):
     assert main(["--vault", str(tmp_path), "search", "memtable", "--also", "hound", "-k", "5"]) == 0
     r = json.loads(capsys.readouterr().out)
     assert r["queries"] == ["hound"] and {h["path"] for h in r["hits"]} == {"b.md", "c.md"}
+
+
+def test_prefixes_reach_the_embedder_on_both_sides(root, monkeypatch):
+    """nomic-embed-text wants `search_document: ` on what is indexed and
+    `search_query: ` on the question (its card says the prefix must be
+    there); potion and qwen3 want neither, so both are empty by default and
+    named per model. A changed document prefix means the stored vectors
+    describe other text: they are rebuilt."""
+    from silica.config import CONFIG
+    from silica import embeddings
+
+    seen: list[str] = []
+
+    def spy(texts):
+        seen.extend(texts)
+        return fake_embed(texts)
+
+    monkeypatch.setattr(embeddings, "embed_texts", spy)
+    monkeypatch.setattr(CONFIG, "embedding_doc_prefix", "search_document: ")
+    monkeypatch.setattr(CONFIG, "embedding_query_prefix", "search_query: ")
+    assert root.build_index(embed=True)["embeddings"]["embedded"] == 4
+    assert seen and all(t.startswith("search_document: ") for t in seen)
+    assert sorted(t.split(" › ")[0] for t in seen) == ["search_document: a", "search_document: a", "search_document: b", "search_document: c"]
+    seen.clear()
+    assert root.search("car")["hits"][0]["path"] == "a.md"
+    assert seen == ["search_query: car"]
+    # the same files under another document prefix are embedded again
+    monkeypatch.setattr(CONFIG, "embedding_doc_prefix", "")
+    assert root.build_index(embed=True)["embeddings"]["embedded"] == 4
+    # and until then, a store built under another model or prefix is not served
+    monkeypatch.setattr(CONFIG, "embedding_doc_prefix", "search_document: ")
+    assert root.search("car")["dense"] == {"state": "no_vectors", "hint": "run `silica index --embed`"}
+    monkeypatch.setattr(CONFIG, "embedding_doc_prefix", "")
+    monkeypatch.setattr(CONFIG, "embedding_model", "other")
+    assert root.search("car")["dense"]["state"] == "no_vectors"

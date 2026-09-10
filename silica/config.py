@@ -99,6 +99,11 @@ class SilicaConfig:
     embedding_base_url: str = _env("SILICA_EMBEDDING_BASE_URL")
     embedding_model: str = _env("SILICA_EMBEDDING_MODEL", "text-embedding-qwen3-embedding-4b")
     embedding_api_key: str = _env("SILICA_EMBEDDING_API_KEY", "lm-studio")
+    # what the model wants in front of a document and of a query: nomic-embed-text
+    # needs "search_document: " / "search_query: " (its card: the prefix must be
+    # there), potion and qwen3 want neither, so both are empty until named
+    embedding_doc_prefix: str = _env("SILICA_EMBEDDING_DOC_PREFIX")
+    embedding_query_prefix: str = _env("SILICA_EMBEDDING_QUERY_PREFIX")
 
     # the optional REPL's model: "provider/model" or a bare id served by SILICA_PROVIDER_BASE_URL
     model: str = _env("SILICA_MODEL")

@@ -123,6 +123,7 @@ OpenAI-compatible `/v1/embeddings` endpoint:
 ```bash
 ollama pull nomic-embed-text
 export SILICA_EMBEDDING_BASE_URL=http://localhost:11434/v1 SILICA_EMBEDDING_MODEL=nomic-embed-text
+export SILICA_EMBEDDING_DOC_PREFIX='search_document: ' SILICA_EMBEDDING_QUERY_PREFIX='search_query: '  # what nomic's card asks for
 silica index --embed
 ```
 

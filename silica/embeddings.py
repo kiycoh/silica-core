@@ -13,7 +13,10 @@ at which row, `embed.f32` holds the rows, unit length, float32. A section
 is embedded as `<stem> › <heading>` plus its first `_UNIT_CHARS` characters,
 so the dense leg lands on the passage, not on the document's opening —
 measured 2026-09-09: one vector per document found the paper and handed
-back its introduction.
+back its introduction. `SILICA_EMBEDDING_DOC_PREFIX` goes in front of every
+section and `SILICA_EMBEDDING_QUERY_PREFIX` in front of the query, for a
+model that wants them (nomic: `search_document: ` / `search_query: `);
+neither is added on its own.
 
 Text leaves the machine only for a non-loopback endpoint, and only after
 `silica index --embed --allow-remote` granted that host once (kept in
@@ -158,7 +161,7 @@ def load() -> tuple[dict, array] | None:
         return None
     stamp = (st.st_mtime_ns, st.st_size)
     if _CACHE is not None and _CACHE[0] == stamp:
-        return _CACHE[1], _CACHE[2]
+        return _current(_CACHE[1], _CACHE[2])
     try:
         meta = orjson.loads(_meta_path().read_bytes())
         rows = array("f")
@@ -168,6 +171,15 @@ def load() -> tuple[dict, array] | None:
     if meta.get("unit") != "section" or not meta.get("docs") or len(rows) != meta.get("rows", 0) * meta.get("dim", 0):
         return None
     _CACHE = (stamp, meta, rows)
+    return _current(meta, rows)
+
+
+def _current(meta: dict, rows: array) -> tuple[dict, array] | None:
+    """The store, or None when it was embedded by another model or under
+    another document prefix: those vectors describe other text, and serving
+    them beside this query's would rank noise (`silica index --embed` rebuilds)."""
+    if meta.get("model") != CONFIG.embedding_model or meta.get("doc_prefix", "") != CONFIG.embedding_doc_prefix:
+        return None
     return meta, rows
 
 
@@ -178,8 +190,8 @@ def build(units: list[tuple[str, float, list[tuple[int, str]]]], *, rebuild: boo
     loaded = None if rebuild else load()
     meta: dict = loaded[0] if loaded else {}
     rows: array = loaded[1] if loaded else array("f")
-    if meta.get("model") != CONFIG.embedding_model:
-        meta, rows = {"dim": 0, "docs": {}}, array("f")
+    if not meta:
+        meta, rows = {"dim": 0, "docs": {}}, array("f")  # nothing yet, or another model's or prefix's vectors: `load` said None
     dim: int = meta["dim"]
     keep = {rel: d for rel, d in meta["docs"].items()
             if any(rel == u[0] and d["mtime"] == u[1] for u in units)}
@@ -187,7 +199,7 @@ def build(units: list[tuple[str, float, list[tuple[int, str]]]], *, rebuild: boo
     texts, owners = [], []
     for rel, _mt, secs in todo:
         for off, text in secs:
-            texts.append(text)
+            texts.append(CONFIG.embedding_doc_prefix + text)
             owners.append((rel, off))
     vecs = [_unit(v) for v in embed_texts(texts)] if texts else []
     if vecs:
@@ -211,7 +223,8 @@ def build(units: list[tuple[str, float, list[tuple[int, str]]]], *, rebuild: boo
         for _off, vec in vs:
             out_rows.extend(vec)
         row += len(vs)
-    meta = {"model": CONFIG.embedding_model, "unit": "section", "dim": dim, "docs": docs, "rows": row, "built_at": time.time()}
+    meta = {"model": CONFIG.embedding_model, "doc_prefix": CONFIG.embedding_doc_prefix, "unit": "section",
+            "dim": dim, "docs": docs, "rows": row, "built_at": time.time()}
     _paths.atomic_write_bytes(_rows_path(), out_rows.tobytes())
     _paths.atomic_write_bytes(_meta_path(), orjson.dumps(meta))
     return {"docs": len(docs), "sections": row, "embedded": len(texts), "model": meta["model"]}
@@ -239,7 +252,7 @@ def rank(query: str, live: dict[str, float]) -> tuple[list[tuple[str, float]], d
     if loaded is None:
         return [], {}
     meta, rows = loaded
-    q = _unit(embed_texts([query])[0])
+    q = _unit(embed_texts([CONFIG.embedding_query_prefix + query])[0])
     if len(q) != meta["dim"]:
         raise RuntimeError(f"the endpoint answered {len(q)} dimensions, the store holds {meta['dim']}: run `silica index --embed --rebuild`")
     scores = _scores(rows, meta["dim"], q)

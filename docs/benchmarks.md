@@ -81,12 +81,45 @@ uv run scripts/bench_beir.py --compare 'scifact-zg-full-*' 'scifact-hybrid-secti
 # n=300  diff nDCG@10 = -0.0034  95% CI [-0.0186, +0.0121]  -> noise
 ```
 
-Inside Silica the dense leg is worth +0.014 and +0.017 with the static
-model, +0.052 and +0.038 with nomic. Measured and dropped: one vector per
-document instead of per section (0.721 on SciFact, where a document *is* one
-abstract, at 1,391 ms a query against 239 ms; on real documents it returns
-the introduction, not the passage), and Snowball stemming (+0.002 and
-+0.005, MRR@10 down on the second). Query latency is not tabulated because
+Inside Silica the dense leg is worth +0.052 and +0.038 with nomic, both
+clear of zero. With the static model it is +0.017 on NFCorpus, clear, and
++0.014 on SciFact, which is noise: the interval runs from -0.010 to +0.037,
+so potion is shown to help on one corpus of the two. Measured and dropped:
+one vector per document instead of per section (0.721 on SciFact, where a
+document *is* one abstract, a +0.008 over the sections that is noise too,
+at 1,391 ms a query against 239 ms; on real documents it returns the
+introduction, not the passage), Snowball stemming (+0.002 and +0.005,
+MRR@10 down on the second), and nomic's task prefixes (measured 2026-09-10:
+`search_document: ` on every section and `search_query: ` on the query, as
+its model card requires, moved nDCG@10 by -0.004 on SciFact and +0.002 on
+NFCorpus, both inside the interval; the knobs stay,
+`SILICA_EMBEDDING_DOC_PREFIX` and `SILICA_EMBEDDING_QUERY_PREFIX`, empty by
+default, and the README's example sets them because the card asks for
+them, not because a number does).
+
+**What the fusion adds to the embedder**, measured 2026-09-10 with
+`--arm dense`, the same nomic vectors ranked alone, best section per
+document, no BM25 and no RRF:
+
+| Arm | nDCG@10: SciFact · NFCorpus |
+|---|---|
+| BM25 | 0.662 · 0.311 |
+| nomic alone | 0.702 · 0.347 |
+| BM25 + nomic, RRF | 0.709 · 0.351 |
+
+Paired, the hybrid is +0.007 and +0.003 over nomic alone, both inside the
+interval (without prefixes +0.015 and +0.010, inside it too): on abstracts
+the fusion is not shown to beat the embedder, and not shown to be no worse
+either. It wins more queries than it loses (64/44 and 104/88), it loses
+some, and the intervals admit a small loss in the mean. The lexical leg
+stays for what only it does, `terms_absent` and an identifier: a reason to
+keep BM25 running, not a measurement of the fusion. Prefixes on the vectors
+alone: +0.003 on SciFact, +0.008 on NFCorpus with an interval of -0.000 to
++0.017 and MRR@10 from 0.533 to 0.551, a small effect the hybrid did not
+show; that the rank fusion attenuates it is a plausible reading, not a
+measured cause. None of it moves the choice: hybrid, prefixes on, and no
+further sweep of prefixes, fusion weights or unit on these two corpora. The
+next experiment starts from a failure on new queries. Query latency is not tabulated because
 zvec-grep ran in `direct` mode, one process and one model load per query.
 
 ## What the harness measurements say

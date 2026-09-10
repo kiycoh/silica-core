@@ -11,6 +11,7 @@ and with whatever embedder the hybrid arm is pointed at.
 
     scripts/bench_beir.py                          # lexical arm, both datasets
     scripts/bench_beir.py --arm hybrid             # needs SILICA_EMBEDDING_BASE_URL
+    scripts/bench_beir.py --arm dense              # the vectors alone, no BM25, no fusion: the ablation
     scripts/bench_beir.py --arm zg --bin ~/tools/node_modules/.bin/zg
     scripts/bench_beir.py --arm ck --bin ~/tools/node_modules/.bin/ck
     scripts/bench_beir.py --dataset scifact --pool-factor 10
@@ -120,12 +121,15 @@ def recall(ranked: list[str], rel: dict[str, int], k: int) -> float:
 # arms
 # ---------------------------------------------------------------------------
 
-def silica_arm(md: Path, idx: Path, queries, *, hybrid: bool, pool: int, k: int):
+def silica_arm(md: Path, idx: Path, queries, *, hybrid: bool, pool: int, k: int, dense_only: bool = False):
     """`core.search` over the folder; the ranking is `documents`, the pool is
     what the section stage scored. `pool` overrides the pool multiplier for
-    the experiment on its width."""
+    the experiment on its width. `dense_only` ranks by the vectors alone
+    (`embeddings.rank`, best section per document), the ablation that says
+    what the fusion adds to the embedder."""
     from silica.config import CONFIG
     from silica.kernel.recall import lexical, paths
+    from silica import embeddings
     import silica.core as core
 
     CONFIG.vault_path = str(md)
@@ -143,8 +147,14 @@ def silica_arm(md: Path, idx: Path, queries, *, hybrid: bool, pool: int, k: int)
     t_index = time.time() - t0
     store = lexical.get_store(core.INDEX)
     per_query, t_q = [], 0.0
+    live = core._notes()
     for qid, text, rel in queries:
         t1 = time.time()
+        if dense_only:
+            ranked = [Path(p).stem for p, _c in embeddings.rank(text, live)[0][:k]]  # (documents, sections): the documents
+            t_q += time.time() - t1
+            per_query.append({"qid": qid, "ranked": ranked, "rel": rel})
+            continue
         r = core.search(text, k=k)
         t_q += time.time() - t1
         if "error" in r:
@@ -277,7 +287,7 @@ def summarise(per_query, k: int) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dataset", choices=DATASETS + ("all",), default="all")
-    ap.add_argument("--arm", choices=("lexical", "hybrid", "zg", "ck"), default="lexical")
+    ap.add_argument("--arm", choices=("lexical", "hybrid", "dense", "zg", "ck"), default="lexical")
     ap.add_argument("--mode", default="", help="zg: hybrid|fts|vector; ck: hybrid|sem|lex")
     ap.add_argument("--bin", default="", help="path to the zg or ck binary")
     ap.add_argument("--embedding", default="local/potion-retrieval-32m", help="zg model")
@@ -303,9 +313,9 @@ def main() -> int:
         queries = load_queries(d)
         if a.limit:
             queries = queries[: a.limit]
-        if a.arm in ("lexical", "hybrid"):
+        if a.arm in ("lexical", "hybrid", "dense"):
             per_query, timing = silica_arm(md, d / f"idx-{a.label or a.arm}", queries,
-                                           hybrid=a.arm == "hybrid", pool=a.pool_factor, k=a.k)
+                                           hybrid=a.arm != "lexical", pool=a.pool_factor, k=a.k, dense_only=a.arm == "dense")
         elif a.arm == "zg":
             per_query, timing = zg_arm(md, queries, binary=a.bin or "zg", mode=a.mode or "hybrid", k=a.k, embedding=a.embedding, transport=a.transport)
         else:
