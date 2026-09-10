@@ -44,7 +44,7 @@ In any folder of markdown, code, PDFs or office files:
 ```bash
 silica init                               # adopt the folder and build the first index
 silica search "leveled compaction" -k 5  # return the best located passages
-silica setup claude                      # register the same tools as an MCP server
+silica setup claude                      # register the MCP server, write the guidance block into ~/.claude/CLAUDE.md
 ```
 
 <p align="center">
@@ -67,9 +67,32 @@ queries. Scores are nDCG@10 (higher is better), shown as SciFact · NFCorpus.
 
 Silica's lexical index needs no model; the competitors serve lexical search
 from an index that also includes embeddings. BEIR's published BM25 baselines
-are 0.665 · 0.325. The hybrid difference between Silica and zvec-grep is
-statistical noise at the 95% interval. See [benchmarks](docs/benchmarks.md) for
-corpora, methods, intervals and commands.
+are 0.665 · 0.325. On the hybrid row Silica and zvec-grep tie at the 95%
+interval: the same vectors rank the same, with no daemon, no vector store and
+no bundled model. See [benchmarks](public/benchmarks.md) for corpora, methods,
+intervals and commands.
+
+On code, grep then `silica_code_pack` as the only reader was measured against
+grep and file reads: twelve repository questions with Haiku 4.5, the four
+hardest again with Sonnet 5, and no task separated the two arms on the answer,
+as none did with Opus 5 the day before. Where the answer is one symbol's body
+in a file not worth reading whole the pack halves the cost, two constants in
+two files at $0.067 against $0.034 and a twelve-line label function at $0.054
+against $0.033, and on the local task Sonnet pays a third less with it
+($0.200 against $0.134) because it finds the symbol inside the pack. Numbers
+per model and per task in
+[benchmarks](public/benchmarks.md#what-the-harness-measurements-say).
+
+Searching code, not only reading it: with the code index on
+(`SILICA_INDEX_CODE`, one unit per function, method, class or constant),
+Silica ranks the answering file ahead of zvec-grep on zvec-grep's own twenty
+SWE-QA questions with the same embedder, file MRR 0.68 against 0.54, the
+interval clear of zero, and ties on twelve local ones. Asked for the way the
+plugin now asks (an imperative description, a prompt hook, a CLAUDE.md block),
+Sonnet ran the search in 17 of 20 runs and closed the question in 4.7 turns
+instead of 6.5, at the same cost, the judge up nine points inside its
+interval. Numbers in
+[benchmarks](public/benchmarks.md#code-search-against-zvec-grep).
 
 ## Tools
 
@@ -81,12 +104,16 @@ corpora, methods, intervals and commands.
 | `silica_code_pack` | `silica code-pack` | an AST context pack for one source file inside a character budget |
 | `silica_write_note` | `silica write-note` | one atomic write, linted for structure and unresolved wikilinks |
 
-Search indexes markdown and the PDFs that carry a text layer. Source files are
-not in the index: `silica_files` lists a `.py` as `excluded`, `silica_read`
-serves it by line and `silica_code_pack` by file. To find a symbol in a
-repository, grep wins. The contract, the reply shapes and the acceptance checks
-are in [TOOLS.md](TOOLS.md); nothing there needs an API key, a model or a
-network.
+Search indexes markdown and the PDFs that carry a text layer, and, with
+`SILICA_INDEX_CODE` set, source files one unit per function, method, class or
+constant: a hit's `section` is the symbol, `span` its lines, and
+`silica_read(path, section=…)` serves the body. Without the switch a `.py` is
+`excluded` in `silica_files` and served by `silica_read` by line. For a symbol
+whose name is known, grep wins; for a question that names none, the search
+comes first, and the plugin's prompt hook asks the model to say so before it
+greps (measured 2026-09-10: with the ask in place the search ran in 17 of 20
+runs). The contract, the reply shapes and the acceptance checks are in
+[TOOLS.md](TOOLS.md); nothing there needs an API key, a model or a network.
 
 ## How search says no
 
@@ -153,7 +180,9 @@ Obsidian bridge, `[dense]` the local embedder, `[all]` everything.
 ## Harnesses
 
 `silica setup <client>` writes the registration into the client's own config.
-It backs up existing config and refuses malformed files. `silica setup --list`
+It backs up existing config and refuses malformed files; for `claude` it also
+puts a guidance block between markers into `~/.claude/CLAUDE.md`, when to
+search before grep, replaced on a second run and nothing else touched. `silica setup --list`
 shows paths for `claude`, `codex`, `cursor`, `windsurf`, `zed`, `cline`, `roo`,
 `continue`, `goose`, `opencode`, `openhands`, `gemini`, `dsh`, `hermes`,
 `openclaw`, `agent-zero`, `claude-desktop`, `lmstudio`, `anythingllm` and

@@ -82,10 +82,20 @@ the original as `source`. A PDF the index has not read yet is `changed`, not
 
 `silica_search(query, folder="", k=5, per_doc=2, width=600, queries=[])`
 
-Ranking, in order: BM25 over whole documents; BM25 over heading-delimited
-sections inside the top documents; at most `per_doc` sections per document;
-for each hit, the `width`-character window densest in idf-weighted query
-terms, with its line number. A PDF's section is a page (its text layer has
+For a question that names no identifier, this comes before Grep, Read or
+Glob; grep is for an exact string or a symbol name already known (the
+description says so in those words, and the plugin's `UserPromptSubmit`
+hook asks the model to say whether the search applies before such a
+question; measured 2026-09-10, that ask took Sonnet from 0 to 17 searches
+in 20 questions). Ranking, in order: BM25 over whole documents; BM25 over
+heading-delimited sections inside the top documents; at most `per_doc`
+sections per document; for each hit, the `width`-character window densest
+in idf-weighted query terms, with its line number. With `SILICA_INDEX_CODE`
+set a source file is indexed one unit per function, method, class or
+constant (module-level code between them as its own unit, 80-line windows
+where no parser applies), each unit a document to BM25 and a vector to the
+dense leg: the hit's `section` is the qualified symbol, `span` its first and
+last line, and `silica_read(path, section=<symbol>)` serves the body. A PDF's section is a page (its text layer has
 no headings), so on a PDF hit widen `width` (1200-1500) rather than reading
 the page: five 1500-char windows cost 60% less than five page reads
 (measured 2026-09-09).

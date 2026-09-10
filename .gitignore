@@ -86,10 +86,10 @@ Thumbs.db
 # Documentation
 docs/_build/
 /site
-# docs/ is scratch by default; the pages the README and CONTRIBUTING link to
-# are the exception, so a reader who follows a link finds the page.
+# docs/ is scratch and studies by default; the published benchmark lives in
+# public/, and the one page under docs/ that the README links to is the
+# exception, so a reader who follows a link finds it.
 /docs/*
-!/docs/benchmarks.md
 !/docs/harnesses.md
 
 # Silica & Agent Specific
@@ -128,3 +128,6 @@ DESIGN.md
 # Research corpus: papers pulled for design decisions, kept out of the tree.
 # Silica still indexes them — .gitignore is deliberately not an index rule.
 docs/research/
+
+# zvec-grep workspace index (arm Z of scripts/baseline.py)
+.zvec-grep/

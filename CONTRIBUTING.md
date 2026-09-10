@@ -21,7 +21,7 @@ uv run lint-imports && uv run mypy silica && uv run ruff check silica tests   # 
 ```
 
 If you touch ranking, run the acceptance check on a corpus of your own and the
-BEIR benchmark before and after; `docs/benchmarks.md` says what each measures:
+BEIR benchmark before and after; `public/benchmarks.md` says what each measures:
 
 ```bash
 SILICA_BENCH_CORPUS=/path/to/markdown uv run pytest tests/test_retrieval_check.py -s
