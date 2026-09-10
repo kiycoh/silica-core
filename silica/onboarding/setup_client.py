@@ -10,9 +10,10 @@ look up. This writes that block instead.
 
 Nearly every harness in docs/agent-harnesses.md wants the same object at a
 different path under a different key, so the clients are a table (CLIENTS) read
-by one writer, not one function each. Only three need their own: Claude Code
+by one writer, not one function each. Only four need their own: Claude Code
 (ships `claude mcp add`), DeepSeek Harness (a list of Cordis patches, not a map
-of servers) and the TOML files, which are appended as text.
+of servers), Agent Zero (a map serialised into a *string* field) and the TOML
+files, which are appended as text.
 
 Never clobbers: an existing silica-core entry is left alone (the user may have tuned
 it), the file is backed up before any write, and `--dry-run` prints what would
@@ -131,6 +132,24 @@ def _dsh_path() -> Path:
     return Path(os.environ.get("DSH_HOME") or Path.home() / ".dsh") / "cordis.patch.yml"
 
 
+def _hermes_home() -> Path:
+    # get_hermes_home() in hermes_constants: $HERMES_HOME, else ~/.hermes.
+    # config.yaml holds the servers, skills/ the SKILL.md tree it scans.
+    return Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+
+
+def _openclaw_path() -> Path:
+    # The gateway reads ~/.openclaw/openclaw.json and watches it, unless
+    # OPENCLAW_CONFIG_PATH moves the file.
+    return Path(os.environ.get("OPENCLAW_CONFIG_PATH") or Path.home() / ".openclaw" / "openclaw.json")
+
+
+def _agent_zero_path() -> Path:
+    # SETTINGS_FILE in its helpers/settings.py is usr/settings.json under the
+    # install root, which is the folder Agent Zero runs from.
+    return Path("usr") / "settings.json"
+
+
 # ---------------------------------------------------------------- what goes in them
 
 def _stdio() -> dict:
@@ -141,6 +160,12 @@ def _stdio() -> dict:
 
 def _cline_entry() -> dict:
     return {**_stdio(), "disabled": False, "autoApprove": list(AUTO_APPROVE)}
+
+
+def _openclaw_entry() -> dict:
+    # transport and enabled are what the gateway checks before it dials: a
+    # definition missing either is stored and never connected.
+    return {**_stdio(), "transport": "stdio", "enabled": True}
 
 
 def _goose_entry() -> dict:
@@ -196,6 +221,16 @@ CLIENTS: dict[str, Spec] = {
                       note="config.toml is read from the folder OpenHands runs in — "
                            "pass --config for another one"),
     "gemini": Spec("Gemini CLI", "json", _home(".gemini", "settings.json"), ("mcpServers",), entry=_stdio),
+    "hermes": Spec("Hermes Agent", "yaml", lambda: _hermes_home() / "config.yaml", ("mcp_servers",),
+                   entry=_stdio, skills=lambda: _hermes_home() / "skills",
+                   note="Hermes watches config.yaml and reconnects MCP on change — no restart"),
+    # openclaw.json is JSON5 by convention (comments, trailing commas). Plain
+    # JSON is the common case and round-trips here; a file that uses the JSON5
+    # part is refused by _setup_config rather than flattened, and
+    # `openclaw mcp add silica-core --command uvx --arg …` writes the same entry.
+    "openclaw": Spec("OpenClaw", "json", _openclaw_path, ("mcp", "servers"), entry=_openclaw_entry,
+                     note="the gateway hot-reloads the file; "
+                          "`openclaw mcp doctor silica-core --probe` proves the server answers"),
     # --- IDEs and editors -----------------------------------------------------
     "cursor": Spec("Cursor", "json", _home(".cursor", "mcp.json"), ("mcpServers",), entry=_stdio,
                    note="for the agent rule too: copy silica/skills/silica/SKILL.md "
@@ -246,7 +281,7 @@ RECIPES = {
         "  from silica.core import search, read   # same payloads, no subprocess",
     ),
     "generic": (
-        "Any other MCP client (Void, Jan, Factory Droid, Antigravity, Hermes) —",
+        "Any other MCP client (Void, Jan, Factory Droid, Antigravity) —",
         "paste this into its server registry:",
         '  {"command": "uvx", "args": ["--from", "silica-core[mcp]", "silica", "mcp"]}',
         "Harnesses that also read skills: copy silica/skills/silica/SKILL.md into their",
@@ -256,7 +291,7 @@ RECIPES = {
 }
 
 # Kept for the usage line and for callers that only want the automated ones.
-CLIENT_NAMES = ("claude", "dsh", *sorted(CLIENTS), *RECIPES)
+CLIENT_NAMES = ("claude", "dsh", "agent-zero", *sorted(CLIENTS), *RECIPES)
 
 
 def skill_path() -> Path:
@@ -287,6 +322,8 @@ def install_skill(root: Path) -> Path:
 def _default_path(client: str) -> Path:
     if client == "dsh":
         return _dsh_path()
+    if client == "agent-zero":
+        return _agent_zero_path()
     return CLIENTS[client].path()
 
 
@@ -397,7 +434,7 @@ def _setup_config(spec: Spec, path: Path, dry_run: bool) -> int:
     return rc
 
 
-# ---------------------------------------------------------------- the three exceptions
+# ---------------------------------------------------------------- the exceptions
 
 def _dsh_row() -> dict:
     return {
@@ -450,6 +487,68 @@ def _setup_dsh(path: Path, dry_run: bool) -> int:
     return _report(path, block, False, backup)
 
 
+# What the settings tab starts with, and what a file without the field means.
+AGENT_ZERO_EMPTY = '{\n    "mcpServers": {}\n}'
+
+
+def _setup_agent_zero(path: Path, dry_run: bool) -> int:
+    """Add the server to Agent Zero's settings file.
+
+    `mcp_servers` is not a map in settings.json: it is a *string* carrying the
+    `{"mcpServers": {...}}` JSON the MCP/A2A tab edits, so the table writer
+    cannot reach it — this parses that string, adds the entry, and serialises
+    it back. Agent Zero drops keys it does not know and fills the ones it is
+    missing from its defaults when it reads the file (normalize_settings), so a
+    settings.json carrying nothing but this field is still a valid one.
+
+    ponytail: only the documented `{"mcpServers": {…}}` shape is edited. Their
+    parser also takes a bare list of servers; a file in that shape is refused
+    rather than converted, because rewriting a user's config into another legal
+    shape is the one thing this module never does.
+    """
+    where = escape(str(path))
+    settings: dict = {}
+    if path.exists():
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except json.JSONDecodeError as e:
+            _say(f"  ✗ {where} is not valid JSON ({escape(str(e))}) — not touching it")
+            return 1
+        if not isinstance(settings, dict):
+            _say(f"  ✗ {where} is not a JSON object — not touching it")
+            return 1
+    raw = settings.get("mcp_servers") or AGENT_ZERO_EMPTY
+    if not isinstance(raw, str):
+        _say(f"  ✗ {where}: mcp_servers is not a JSON string — not touching it")
+        return 1
+    try:
+        config = json.loads(raw)
+    except json.JSONDecodeError as e:
+        _say(f"  ✗ {where}: mcp_servers does not parse ({escape(str(e))}) — not touching it")
+        return 1
+    servers = config.get("mcpServers") if isinstance(config, dict) else None
+    if not isinstance(servers, dict):
+        _say(f'  ✗ {where}: mcp_servers is not a {{"mcpServers": …}} object — not touching it')
+        return 1
+    if NAME in servers:
+        _say(f"  {NAME} is already configured in {where} — nothing to do")
+        return 0
+
+    servers[NAME] = _stdio()
+    settings["mcp_servers"] = json.dumps(config, indent=4)
+    block = json.dumps(settings, indent=4) + "\n"
+    if dry_run:
+        return _report(path, block, True, None)
+    backup = _backup(path) if path.exists() else None
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(block, encoding="utf-8")
+    rc = _report(path, block, False, backup)
+    _say("  Agent Zero spawns the server inside its own container: install silica in that "
+         "image and point SILICA_VAULT at a mounted path, or it indexes the container")
+    _say("  then Settings → MCP/A2A → Apply now (or restart) to connect it")
+    return rc
+
+
 def _setup_claude(dry_run: bool) -> int:
     """Delegate to `claude mcp add`.
 
@@ -493,6 +592,8 @@ def _list_clients() -> int:
     _say("  writes the config for you — silica setup <client>:", markup=False)
     _say("    claude            Claude Code (delegates to `claude mcp add`)", markup=False)
     _say("    dsh               DeepSeek Harness (Cordis patch)", markup=False)
+    _say(f"    {'agent-zero':<17} Agent Zero — {escape(str(_agent_zero_path()))} under its install root",
+         markup=False)
     for name in sorted(CLIENTS):
         spec = CLIENTS[name]
         _say(f"    {name:<17} {spec.label} — {escape(str(spec.path()))}", markup=False)
@@ -509,7 +610,7 @@ def run_setup(args: list[str]) -> int:
         return _list_clients()
     positional = [a for a in args if not a.startswith("-")]
     client = positional[0] if positional else ""
-    known = client == "claude" or client == "dsh" or client in CLIENTS or client in RECIPES
+    known = client in ("claude", "dsh", "agent-zero") or client in CLIENTS or client in RECIPES
     if not known:
         _say("  Usage: silica setup <client> [--dry-run] [--config PATH] [--from SPEC]", markup=False)
         _say("         silica setup --list   every harness this knows how to wire up", markup=False)
@@ -535,6 +636,8 @@ def run_setup(args: list[str]) -> int:
     skills: Callable[[], Path] | None
     if client == "dsh":
         rc, skills = _setup_dsh(path, dry_run), _dsh_skills
+    elif client == "agent-zero":
+        rc, skills = _setup_agent_zero(path, dry_run), None
     else:
         spec = CLIENTS[client]
         rc, skills = _setup_config(spec, path, dry_run), spec.skills

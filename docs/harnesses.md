@@ -20,6 +20,9 @@ prints the block without writing, `--config PATH` writes somewhere else,
 | `dsh` | DeepSeek Harness | `~/.dsh/cordis.patch.yml`, and the skill into `~/.agents/skills` |
 | `goose` | Goose | `~/.config/goose/config.yaml` |
 | `openhands` | OpenHands | `config.toml`, in the folder OpenHands runs from |
+| `hermes` | Hermes Agent | `~/.hermes/config.yaml`, and the skill into `~/.hermes/skills` |
+| `openclaw` | OpenClaw | `~/.openclaw/openclaw.json` |
+| `agent-zero` | Agent Zero | `usr/settings.json`, in its install root |
 | `gemini` | Gemini CLI | `~/.gemini/settings.json` |
 | `cursor` | Cursor | `~/.cursor/mcp.json` |
 | `windsurf` | Windsurf | `~/.codeium/windsurf/mcp_config.json` |
@@ -48,7 +51,17 @@ instead of failing:
 |---|---|
 | `shell` | Aider, SWE-agent, Plandex, Devin, SWE-bench, anything with a bash tool |
 | `python` | LangGraph, smolagents, CrewAI, AutoGen, Inspect, METR |
-| `generic` | Void, Jan, Factory Droid, Antigravity, Hermes: the MCP block to paste |
+| `generic` | Void, Jan, Factory Droid, Antigravity: the MCP block to paste |
+
+Three of those need a word after the write. Hermes watches `config.yaml` and
+reconnects on change, so nothing has to be restarted. OpenClaw's file is JSON5
+by convention: plain JSON round-trips, but a file that actually uses comments or
+trailing commas is refused rather than flattened, and `openclaw mcp add
+silica-core --command uvx --arg …` writes the same entry. Agent Zero keeps the
+server map serialised into a *string* field of `usr/settings.json`, spawns it
+inside its own container, and connects on **Settings → MCP/A2A → Apply now**: so
+`silica` has to be in that image, and `SILICA_VAULT` has to name a mounted path
+or it indexes the container.
 
 Cursor and Windsurf also read a project rule file (`.cursor/rules/silica.mdc`,
 `.windsurfrules`). Those are yours, not your home's, so `setup` names them

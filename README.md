@@ -154,9 +154,9 @@ Obsidian bridge, `[dense]` the local embedder, `[all]` everything.
 `silica setup <client>` writes the registration into the client's own config.
 It backs up existing config and refuses malformed files. `silica setup --list`
 shows paths for `claude`, `codex`, `cursor`, `windsurf`, `zed`, `cline`, `roo`,
-`continue`, `goose`, `opencode`, `openhands`, `gemini`, `dsh`,
-`claude-desktop`, `lmstudio`, `anythingllm` and `librechat`; `shell`, `python`
-and `generic` print recipes for anything else. By default the server serves the
+`continue`, `goose`, `opencode`, `openhands`, `gemini`, `dsh`, `hermes`,
+`openclaw`, `agent-zero`, `claude-desktop`, `lmstudio`, `anythingllm` and
+`librechat`; `shell`, `python` and `generic` print recipes for anything else. By default the server serves the
 folder the client opens in; use `--vault DIR` or `SILICA_VAULT` for a fixed root.
 
 `npx skills add kiycoh/silica-core` installs the skill that tells an agent

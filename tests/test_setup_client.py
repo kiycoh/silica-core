@@ -286,6 +286,76 @@ def test_list_shaped_registries_append_instead_of_keying(tmp_path):
     assert [rows[0]["command"], *rows[0]["args"]] == setup_client.MCP_COMMAND
 
 
+def test_hermes_keys_the_server_map_in_config_yaml(tmp_path):
+    """Hermes reads mcp_servers as a map in ~/.hermes/config.yaml, and the rest
+    of that file is the whole harness's settings — it has to survive."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("model: sonnet\nmcp_servers:\n  other:\n    command: echo\n", encoding="utf-8")
+    assert setup_client.run_setup(["hermes", "--config", str(cfg)]) == 0
+    data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
+    assert data["model"] == "sonnet" and "other" in data["mcp_servers"]
+    entry = data["mcp_servers"]["silica-core"]
+    assert [entry["command"], *entry["args"]] == setup_client.MCP_COMMAND
+
+
+def test_openclaw_nests_the_entry_under_mcp_servers(tmp_path):
+    """The gateway dials a definition only when transport and enabled are on it."""
+    cfg = tmp_path / "openclaw.json"
+    cfg.write_text(json.dumps({"agents": {}}), encoding="utf-8")
+    assert setup_client.run_setup(["openclaw", "--config", str(cfg)]) == 0
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert "agents" in data
+    entry = data["mcp"]["servers"]["silica-core"]
+    assert [entry["command"], *entry["args"]] == setup_client.MCP_COMMAND
+    assert (entry["transport"], entry["enabled"]) == ("stdio", True)
+
+
+def test_agent_zero_writes_into_the_serialised_settings_field(tmp_path):
+    """`mcp_servers` is a string holding {"mcpServers": {...}}, not a map: the
+    entry has to survive a parse of that string, and a second run must not add
+    a second copy."""
+    cfg = tmp_path / "settings.json"
+    assert setup_client.run_setup(["agent-zero", "--config", str(cfg)]) == 0
+    assert setup_client.run_setup(["agent-zero", "--config", str(cfg)]) == 0
+    settings = json.loads(cfg.read_text(encoding="utf-8"))
+    servers = json.loads(settings["mcp_servers"])["mcpServers"]
+    assert list(servers) == ["silica-core"]
+    assert [servers["silica-core"]["command"], *servers["silica-core"]["args"]] == setup_client.MCP_COMMAND
+
+
+def test_agent_zero_keeps_the_settings_it_did_not_write(tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text(json.dumps({
+        "chat_model_name": "gpt-5",
+        "mcp_servers": json.dumps({"mcpServers": {"other": {"command": "echo"}}}),
+    }), encoding="utf-8")
+    assert setup_client.run_setup(["agent-zero", "--config", str(cfg)]) == 0
+    settings = json.loads(cfg.read_text(encoding="utf-8"))
+    assert settings["chat_model_name"] == "gpt-5"
+    assert set(json.loads(settings["mcp_servers"])["mcpServers"]) == {"other", "silica-core"}
+
+
+def test_agent_zero_refuses_what_it_cannot_parse(tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text("not json at all", encoding="utf-8")
+    assert setup_client.run_setup(["agent-zero", "--config", str(cfg)]) == 1
+    assert cfg.read_text(encoding="utf-8") == "not json at all"
+
+    # A settings file whose mcp_servers holds their other legal shape (a bare
+    # list) is left alone rather than rewritten into the map shape.
+    listed = tmp_path / "listed.json"
+    body = json.dumps({"mcp_servers": json.dumps([{"name": "other", "command": "echo"}])})
+    listed.write_text(body, encoding="utf-8")
+    assert setup_client.run_setup(["agent-zero", "--config", str(listed)]) == 1
+    assert listed.read_text(encoding="utf-8") == body
+
+
+def test_agent_zero_dry_run_writes_nothing(tmp_path):
+    cfg = tmp_path / "settings.json"
+    assert setup_client.run_setup(["agent-zero", "--config", str(cfg), "--dry-run"]) == 0
+    assert not cfg.exists()
+
+
 def test_a_registry_of_the_wrong_shape_is_refused(tmp_path):
     cfg = tmp_path / "mcp.json"
     cfg.write_text('{"mcpServers": []}', encoding="utf-8")
@@ -310,7 +380,7 @@ def test_recipes_answer_the_harnesses_with_no_config_file(capsys):
 
 def test_list_names_every_harness_the_docs_claim(capsys):
     out = _printed(["--list"], capsys)
-    for client in (*setup_client.CLIENTS, "claude", "dsh", *setup_client.RECIPES):
+    for client in (*setup_client.CLIENTS, "claude", "dsh", "agent-zero", *setup_client.RECIPES):
         assert client in out
 
 
@@ -331,7 +401,7 @@ def test_the_harness_census_and_the_command_agree(page):
     if not census.exists():
         pytest.skip(f"{page} is not in this checkout")
     doc = census.read_text(encoding="utf-8")
-    known = {"claude", "dsh", *setup_client.CLIENTS, *setup_client.RECIPES}
+    known = {"claude", "dsh", "agent-zero", *setup_client.CLIENTS, *setup_client.RECIPES}
     # The README names clients in table cells, the census in prose, so the
     # forward check takes either; only the unambiguous phrasing can be read
     # backwards, since a page is full of backticks that are not client names.
