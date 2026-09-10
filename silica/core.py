@@ -20,6 +20,9 @@ import yaml
 from pydantic import Field
 
 from silica.config import CONFIG
+from silica.kernel.code.codeast.base import language_for
+from silica.kernel.code.codeunits import outline as _code_outline
+from silica.kernel.code.codeunits import units as _code_units
 from silica.kernel.link.ast import parse_headings
 from silica.kernel.recall import paths as _paths
 from silica.kernel.recall.lexical import TOKENIZER_VERSION, _tokens, get_store
@@ -51,6 +54,11 @@ _HEADING = re.compile(r"(?m)^(?=#{1,4} )")
 _PAGE = re.compile(r"p\.?\s*(\d+)", re.I)
 _WIKILINK = re.compile(r"\[\[([^\]|#]+)")
 _TEXT_SUFFIXES = frozenset({".md", ".txt", ".rst", ".csv", ".json", ".yaml", ".yml", ".toml", ".xml", ".html"})
+# What the index reads as code when SILICA_INDEX_CODE is set: the languages
+# codeast parses, one unit per symbol, and these as windows of lines.
+_CODE_SUFFIXES = frozenset({".rs", ".go", ".rb", ".php", ".kt", ".swift", ".scala", ".sh", ".sql", ".cfg",
+                            ".ini", ".rst", ".txt", ".yaml", ".yml", ".toml", ".json"})
+_CODE_MAX_BYTES = 512 * 1024  # a lockfile, a minified bundle, a fixture dump: not read
 
 
 # ---------------------------------------------------------------------------
@@ -93,6 +101,22 @@ def _version(text: str) -> str:
 
 def _error(code: str, hint: str, **extra: Any) -> dict:
     return {"error": {"code": code, "hint": hint}, **extra}
+
+
+def _is_code(rel: str) -> bool:
+    if not CONFIG.index_code:
+        return False
+    name = rel.rsplit("/", 1)[-1]
+    suffix = name[name.rfind("."):].lower() if "." in name else ""
+    return suffix in _CODE_SUFFIXES or (language_for(rel) is not None and suffix not in (".html", ".css"))
+
+
+def _split_key(key: str) -> tuple[str, int | None]:
+    """A unit key `path#offset` -> (path, offset); a document key -> (path, None).
+    A code file is indexed one unit per symbol, each its own document to
+    the store, so BM25 ranks units directly and idf is over units."""
+    rel, sep, off = key.rpartition("#")
+    return (rel, int(off)) if sep and rel and off.isdigit() else (key, None)
 
 
 def _rel(path: str) -> str:
@@ -321,6 +345,13 @@ def _notes() -> dict[str, float]:
                 out[rel] = full.stat().st_mtime
             except OSError:
                 continue
+        elif _is_code(rel):
+            try:
+                st = full.stat()
+            except OSError:
+                continue
+            if st.st_size <= _CODE_MAX_BYTES:
+                out[rel] = st.st_mtime
     return dict(sorted(out.items()))
 
 
@@ -374,8 +405,12 @@ def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, floa
     if rebuild:
         meta = {"built_at": None, "stamps": {}, "no_text": {}, "tokenizer": TOKENIZER_VERSION}
     store = get_store(INDEX)
+    if rebuild:  # a unit key of a rebuilt file would otherwise outlive the offset it names
+        for p in store.paths():
+            store.remove(p)
     stamps: dict[str, float] = meta["stamps"]
     skipped: dict[str, dict] = meta.setdefault("no_text", {})
+    units: dict[str, list[str]] = meta.setdefault("units", {})  # code file -> its unit keys
     root = _root()
     live = _notes() if live is None else live
     changed, failed = 0, {}
@@ -390,6 +425,22 @@ def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, floa
                 if stamps.pop(rel, None) is not None:
                     store.remove(rel)
                 continue
+        elif _is_code(rel):
+            try:
+                parts = _sections_of(rel)[1]
+            except OSError as e:
+                failed[rel] = str(e)
+                continue
+            keys = [f"{rel}#{off}" for off, *_rest in parts]
+            for old in units.get(rel, []):
+                if old not in keys:
+                    store.remove(old)
+            for (off, part, _tf, _dl, title), key in zip(parts, keys):
+                store.upsert(key, title, part)
+            units[rel] = keys
+            stamps[rel] = mt
+            changed += 1
+            continue
         else:
             try:
                 text = _read(root / rel)
@@ -406,8 +457,9 @@ def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, floa
     for gone in [p for p in list(stamps) + list(skipped) if p not in live]:
         stamps.pop(gone, None)
         skipped.pop(gone, None)
+        units.pop(gone, None)
         _extract_cache(gone).unlink(missing_ok=True)  # a deleted PDF leaves no extraction behind
-    for gone in [p for p in store.paths() if p not in live]:
+    for gone in [p for p in store.paths() if _split_key(p)[0] not in live]:
         store.remove(gone)
     _flush(store, meta, failed)
     # Every live document is now stamped, skipped or failed, so the state is
@@ -425,7 +477,7 @@ def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, floa
         elif host:
             return _error("consent_required", f"the sections would leave this machine for {host}: "
                           "run `silica index --embed --allow-remote` once to allow it", **out)
-        units = []
+        to_embed = []
         for rel in live:
             if rel not in stamps:
                 continue
@@ -433,11 +485,11 @@ def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, floa
                 parts = _sections_of(rel)[1]
             except OSError:
                 continue
-            stem = Path(rel).stem
-            units.append((rel, stamps[rel], [(off, embeddings.unit_text(stem, title, part))
-                                             for off, part, _tf, dl, title in parts if dl >= 3]))
+            stem = rel[:-len(Path(rel).suffix)] if _is_code(rel) else Path(rel).stem
+            to_embed.append((rel, stamps[rel], [(off, embeddings.unit_text(stem, title, part))
+                                                for off, part, _tf, dl, title in parts if dl >= 3]))
         try:
-            out["embeddings"] = embeddings.build(units, rebuild=rebuild)
+            out["embeddings"] = embeddings.build(to_embed, rebuild=rebuild)
         except Exception as e:
             return _error("bad_argument", f"embeddings endpoint failed: {e}", **out)
     return out
@@ -515,6 +567,11 @@ def silica_files(
                 row.update(status="unconverted", reason=skip.get("reason") or "no text layer")
             else:
                 row["status"] = "changed"
+        elif _is_code(rel):
+            if st.st_size > _CODE_MAX_BYTES:
+                row.update(status="excluded", reason=f"not indexed: over {_CODE_MAX_BYTES // 1024} KB")
+            else:
+                row["status"] = "indexed" if stamps.get(rel) == st.st_mtime else "changed"
         else:
             row.update(status="excluded", reason=f"not indexed: {suffix or 'no extension'}")
         entries.append(row)
@@ -547,18 +604,24 @@ def silica_files(
 _section_cache: dict[tuple[str, float], tuple[str, list[tuple[int, str, Counter, int, str]]]] = {}
 
 
-def _sections_of(rel: str) -> tuple[str, list[tuple[int, str, Counter, int, str]]]:
+def _sections_of(key: str) -> tuple[str, list[tuple[int, str, Counter, int, str]]]:
     """Text and (offset, section, term counts, length, title) per section — a
-    heading section in a note, a page in a PDF — cached by mtime so a second
-    query over the same top documents does not retokenize (nor re-extract)."""
+    heading section in a note, a page in a PDF, a symbol in a source file —
+    cached by mtime so a second query over the same top documents does not
+    retokenize (nor re-extract). For a unit key (`path#offset`) the one unit,
+    with the whole file's text, so a line is counted from the file's start."""
+    rel, unit = _split_key(key)
     full = _root() / rel
-    key = (rel, full.stat().st_mtime)
-    if key not in _section_cache:
+    stamp = (rel, full.stat().st_mtime)
+    if stamp not in _section_cache:
         if full.suffix.lower() == ".pdf":
             text, pages, _reason = _pdf_text(rel, full)
             bounds = [p["offset"] for p in pages] + [len(text)]
             parts = [(p["offset"], text[p["offset"]:bounds[i + 1]], f"p. {p['page']}")
                      for i, p in enumerate(pages)]
+        elif _is_code(rel):
+            text = _read(full)
+            parts = _code_units(rel, text)
         else:
             text = _read(full)
             parts = [(off, part, part.splitlines()[0].lstrip("#").strip() if part.startswith("#") else "")
@@ -569,29 +632,30 @@ def _sections_of(rel: str) -> tuple[str, list[tuple[int, str, Counter, int, str]
             secs.append((off, part, tf, sum(tf.values()), title))
         if len(_section_cache) > 64:
             _section_cache.clear()
-        _section_cache[key] = (text, secs)
-    return _section_cache[key]
+        _section_cache[stamp] = (text, secs)
+    text, secs = _section_cache[stamp]
+    return text, (secs if unit is None else [s for s in secs if s[0] == unit])
 
 
 @tool(cls="atomic")
 def silica_search(
-    query: Annotated[str, Field(description="Words to look for; the corpus vocabulary, not a question")],
+    query: Annotated[str, Field(description="Concise question or description of the concept or behavior to find; preserve known names and identifiers")],
     folder: Annotated[str, Field(description="Only documents under this root-relative folder")] = "",
     k: Annotated[int, Field(description="Max hits")] = 5,
     per_doc: Annotated[int, Field(description="Max sections per document")] = 2,
     width: Annotated[int, Field(description="Characters in each hit's window")] = 600,
     queries: Annotated[list[str] | None, Field(description="More query groups, each ranked on its own and fused with `query` by rank: the concept in one, its identifiers in another")] = None,
 ) -> dict:
-    """Use first for a question about what the notes, documents, papers or
-    code in this folder say, when the passage matters more than the file, or
-    when the query is a concept rather than an identifier; grep wins for an
-    exact string or a symbol name. Ranked passages with an honest zero: BM25
-    over documents, then over the heading sections of the top documents, at
-    most `per_doc` per document; each hit carries its densest `width`-char
-    window and line. A PDF's section is a page (its text layer has no
-    headings), so on a PDF hit widen `width` (1200-1500) rather than reading
-    the page: five 1500-char windows cost 60% less than five page reads
-    (measured 2026-09-09).
+    """For a question that names no identifier (what a behaviour is, where
+    it is decided, why), call this before Grep, Read or Glob: it ranks
+    passages and, with the code index on (`SILICA_INDEX_CODE`), the
+    functions, methods, classes and constants themselves, by the question's
+    words and their vectors. Do not grep for the words of a question; grep
+    for an exact string or a symbol name you already know. Ranked passages
+    with an honest zero: BM25 over documents, then over the heading sections
+    of the top documents, at most `per_doc` per document; each hit carries
+    its densest `width`-char window and line. A PDF's section is a page, so
+    on a PDF hit widen `width` (1200-1500) rather than reading the page.
     `score` is raw BM25 (comparable within one call only). `matched_terms`
     are the query terms in the hit; `coverage` is the share of the query's
     idf mass they carry, absent terms included at the weight of a term found
@@ -606,7 +670,12 @@ def silica_search(
     `queries` or the dense leg the order is by reciprocal rank across the
     groups (and the vectors); `score`, `matched_terms` and `coverage` then
     read over all the groups' terms, and a hit the dense leg alone found
-    carries `dense` and coverage 0. Builds the index on first use."""
+    carries `dense` and coverage 0. With `SILICA_INDEX_CODE` set, source
+    files are indexed one unit per function, method, class or constant
+    (windows of lines where no parser applies), ranked beside the notes: a
+    hit's `section` is the symbol, `span` its lines, and
+    `silica_read(path, section=<symbol>)` serves its body. Builds the index
+    on first use."""
     groups = [query] + [q for q in (queries or []) if q.strip()]
     # The dense leg is the user's call, made at index time, not the caller's:
     # it runs whenever the vectors are there and the query may go to the
@@ -651,7 +720,7 @@ def silica_search(
     # from the folder. `in_folder` with an empty folder is the whole root.
     meta = _load_meta()
     visible = {"folder": scope,
-               "docs": sum(1 for p in store.paths() if _paths.in_folder(p, scope)),
+               "docs": len({_split_key(p)[0] for p in store.paths() if _paths.in_folder(p, scope)}),
                "unconverted": sum(1 for p in meta.get("no_text", {}) if _paths.in_folder(p, scope)),
                "failed": sum(1 for p in _failures() if _paths.in_folder(p, scope))}
     absent_in_scope = sorted(t for t in known
@@ -664,8 +733,15 @@ def silica_search(
         except Exception as e:  # the endpoint is the extension's business: the reply says so, the search stays lexical
             leg, hybrid = {"state": "failed", "hint": f"embeddings endpoint failed: {e}"}, False
         else:
-            dense_docs = [(p, c) for p, c in dense_docs if _paths.in_folder(p, scope)]
-            leg["docs"] = len(dense_docs)
+            # the dense ranking at the store's granularity: a note by its best
+            # section, a code file unit by unit, so the fusion ranks like keys
+            best: dict[str, float] = {}
+            for (r, o), c in dense_secs.items():
+                dk = f"{r}#{o}" if _is_code(r) else r
+                if c > best.get(dk, -2.0) and _paths.in_folder(dk, scope):
+                    best[dk] = c
+            dense_docs = sorted(best.items(), key=lambda kv: (-kv[1], kv[0]))
+            leg["docs"] = len({_split_key(dk)[0] for dk in best})
     fuse = hybrid or len(groups) > 1
     if not fuse:
         docs = rankings[0]
@@ -689,11 +765,12 @@ def silica_search(
     secs: list[tuple[str, int, str, Counter, int, str]] = []
     texts: dict[str, str] = {}
     for path, _score, _matched in top:
+        rel = _split_key(path)[0]
         try:
-            texts[path], parts = _sections_of(path)
+            texts[rel], parts = _sections_of(path)
         except OSError:
             continue
-        secs.extend((path, off, part, tf, dl, title) for off, part, tf, dl, title in parts)
+        secs.extend((rel, off, part, tf, dl, title) for off, part, tf, dl, title in parts)
     avg = (sum(s[4] for s in secs) / len(secs)) if secs else 1.0
 
     def bm25(tf: Counter, dl: int, terms: set) -> float:
@@ -738,6 +815,9 @@ def silica_search(
                "score": round(score, 2), "matched_terms": sorted(matched),
                "coverage": round(sum(known[t] for t in matched) / mass, 2),
                "window": window}
+        if _is_code(path):  # the unit's lines, for a read of the whole symbol
+            first = texts[path].count("\n", 0, off) + 1
+            hit["span"] = [first, first + part.rstrip("\n").count("\n")]
         if key in dense_secs:
             hit["dense"] = round(dense_secs[key], 3)
         hits.append(hit)
@@ -749,10 +829,12 @@ def silica_search(
             # down: enough to tell "right paper, wrong section" from "wrong
             # paper" without repaying the whole candidate list (43% of the reply
             # at 15 entries, measured 2026-09-08)
-            "documents": [{"path": p, "score": round(sc, 2), "matched_terms": sorted(m),
+            "documents": [{"path": _split_key(p)[0], "score": round(sc, 2), "matched_terms": sorted(m),
                            "coverage": round(sum(known[t] for t in m) / mass, 2),
+                           **({"line": texts[_split_key(p)[0]].count("\n", 0, _split_key(p)[1]) + 1}
+                              if _split_key(p)[1] is not None and _split_key(p)[0] in texts else {}),
                            **({"dense": round(dense[p], 3)} if p in dense else {})}
-                          for i, (p, sc, m) in enumerate(top) if i < k or p in versions],
+                          for i, (p, sc, m) in enumerate(top) if i < k or _split_key(p)[0] in versions],
             "candidates": len(docs),
             "terms_absent": absent,
             **({"terms_absent_in_scope": absent_in_scope} if scope else {}),
@@ -830,9 +912,17 @@ def silica_read(
     # An extracted text layer is not markdown: its pages are the structure, and
     # scanning it for `#` would read a paper's own markdown examples as headings.
     page_starts = [(p["page"], p["line"]) for p in pages] if paged else []
-    outline = [] if paged else [
-        {"level": h["level"], "title": h["text"], "line": text.count("\n", 0, h["pos"]) + 1}
-        for h in parse_headings(text)]
+    if paged:
+        outline = []
+    elif _is_code(rel):
+        # symbols, methods included while the file is small enough that the
+        # table stays a fraction of the read (a 500-symbol module lists its classes)
+        outline = _code_outline(rel, text)
+        if len(outline) > 150:
+            outline = [h for h in outline if h["level"] == 1]
+    else:
+        outline = [{"level": h["level"], "title": h["text"], "line": text.count("\n", 0, h["pos"]) + 1}
+                   for h in parse_headings(text)]
     if section.strip() and paged:
         m = _PAGE.fullmatch(section.strip())
         if not m or not 1 <= int(m.group(1)) <= len(page_starts):
@@ -850,7 +940,7 @@ def silica_read(
             return _error("bad_argument", f"{len(idx)} headings match {section!r}; be exact", outline=outline)
         h = outline[idx[0]]
         start = h["line"]
-        end = next((o["line"] - 1 for o in outline[idx[0] + 1:] if o["level"] <= h["level"]), len(lines))
+        end = h.get("end_line") or next((o["line"] - 1 for o in outline[idx[0] + 1:] if o["level"] <= h["level"]), len(lines))
     start = max(1, start)
     end = len(lines) if end <= 0 else min(end, len(lines))
     out: list[str] = []

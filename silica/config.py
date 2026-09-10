@@ -82,6 +82,8 @@ class SilicaConfig:
     # tokenizer language for the index ("auto" detects per text)
     lang: str = _env("SILICA_LANG", "auto", "SILICA_COOCCURRENCE_LANG")
     debug_logging: bool = field(default_factory=lambda: env_flag("SILICA_VERBOSE", False))
+    # index source files too, one unit per symbol (core._is_code says which files)
+    index_code: bool = field(default_factory=lambda: env_flag("SILICA_INDEX_CODE", False))
 
     # converters
     pdf_provider: str = _env("SILICA_PDF_PROVIDER", "pdfium")
