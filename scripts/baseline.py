@@ -13,6 +13,17 @@ whole task (schema, searches, reads, retries, the answer), not one reply.
 Arm A: the plugin as installed, tools and skill. Arm B: the plugin
 disabled through a settings override (`enabledPlugins`), everything else
 identical, so the only difference between the arms is Silica itself.
+Arm S is arm A with the code index on (one unit per symbol, potion
+vectors); arm Z is arm B plus zvec-grep's MCP search and its guidance, the
+three-arm comparison of docs/2026-09-10-zvec-parity-plan.md; both leave
+every native tool in and order nothing, and `--prepare` builds both
+indexes first so a run measures queries, not indexing. Every run's stream
+is kept under `streams/`.
+Arm F names the three tools in the prompt. Arm P exposes `silica_code_pack`
+alone beside the native tools and asks for grep to locate and code_pack to
+read: the second variant of docs/2026-09-10-code-retrieval-research.md,
+what the structure the code graph already keeps is worth once grep has
+found the symbol.
 `--no-skills` turns every skill off in both arms and measures the tools
 alone: in a smoke run with skills off Sonnet never called Silica and
 answered both tasks with Grep (2026-09-09). Tasks run in the folder they
@@ -69,6 +80,44 @@ PREAMBLE = ("Work only from the files in the current folder. Cite file paths wit
 FORCED = ("Silica tools are available in this session: use silica_search to search, "
           "silica_read to read a passage, and silica_code_pack for a source file, instead "
           "of grep and file reads.\n\n")
+# Arm P: grep to locate, code_pack to read. The pack is the only reader:
+# Read, cat, sed, head and tail go in `--disallowedTools`, because Read, Grep
+# and Glob never ask permission and an allowlist alone leaves Read in
+# (measured 2026-09-10: a Read outside the allowlist went through). Search
+# and read are outside the allowlist, so a call to them is refused. The arm
+# measures what the pack serves once grep has found the symbol, not whether
+# the model prefers it (haiku did not, with Read allowed). `rg -C` still
+# shows lines, which is grep's job here. The preamble names the `target`
+# argument: without it haiku passed `path` on every call and every call
+# failed schema validation (6 of 6 on the first grid).
+# The wording is an order, like arm F's: with the readers refused and the
+# pack merely offered, haiku read through `Grep -C` and never called it
+# (smoke of 2026-09-10, 0 calls). Agent is refused too: without permission it
+# spawns an Explore subagent whose reads escape the arm.
+PACK = ("File reads are disabled in this session: Read, cat, sed, head, tail, subagents, "
+        "silica_search and silica_read are refused. Work in two steps. First locate the symbol "
+        "with Grep, rg, Glob, ls or find. Then, before answering, read it with silica_code_pack: "
+        "its `target` argument is the root-relative path narrowed with `#Class`, `#Class.member` "
+        "or `#L<line>` (the symbol whose declaration spans that line); it returns the declaration "
+        "together with its callers, hierarchy and importers inside a character budget. Cite from "
+        "the pack, not from grep output alone.\n\n")
+PACK_TOOLS = [t for t in SILICA_TOOLS if t.endswith("code_pack")]
+# Arm S: the plugin as arm A, with the code index on: one unit per symbol
+# and the potion vectors, through the server's environment (a stdio MCP
+# server inherits this process's). Arm Z: the plugin off and zvec-grep's
+# MCP search beside the native tools, its daemon serving the workspace index
+# `zg index` built beforehand (`--prepare` builds both sides' indexes and
+# records the seconds), the guidance `zg install` writes for Claude Code
+# appended to the system prompt from scripts/zvec-guidance.md. Neither arm
+# forbids a native tool or orders the search: what is measured is the
+# choice, as in docs/2026-09-10-zvec-parity-plan.md.
+CODE_ENV = {"SILICA_INDEX_CODE": "1", "SILICA_EMBEDDING_MODEL": "model2vec/minishlab/potion-retrieval-32M"}
+ZG = os.environ.get("ZG_BIN", str(Path.home() / "tools" / "node_modules" / ".bin" / "zg"))
+ZG_TOOLS = ["mcp__zvec-grep__zvec_grep_search"]
+ZG_MCP = json.dumps({"mcpServers": {"zvec-grep": {"command": ZG, "args": ["server", "--stdio"]}}})
+ZG_GUIDANCE = REPO / "scripts" / "zvec-guidance.md"
+PACK_DISALLOWED = ["Read", "Bash(cat:*)", "Bash(sed:*)", "Bash(head:*)", "Bash(tail:*)", "Agent"]
+PACK_NATIVE = [t for t in NATIVE_TOOLS if t not in PACK_DISALLOWED]
 INSPIRATION = REPO.parent / "silica-core_inspiration"
 
 # any_of: every group needs one of its alternatives; all_of: every string;
@@ -170,6 +219,16 @@ HARD_TASKS = [
 ]
 
 
+# The 20 SWE-QA questions zvec-grep publishes (bench/swe-qa/tasks.json, the
+# checkouts pinned at the commits selection.json names), no rubric: the
+# reference answers are long and judge-scored in their protocol, so a run
+# records the answer and scripts/judge.py scores it blind to the arm.
+SWE_TASKS = [
+    {"id": t["task_id"], "cwd": Path(t["root"]), "kind": "swe", "prompt": t["question"]}
+    for t in json.loads((REPO / "bench" / "swe-qa" / "tasks.json").read_text())
+] if (REPO / "bench" / "swe-qa" / "tasks.json").is_file() else []
+
+
 def _git(cwd: Path, *args: str) -> str:
     try:
         # rstrip, not strip: a porcelain line opens with its index column (" M a.md")
@@ -247,8 +306,11 @@ def write_manifest(out: Path, args: dict, tasks: list[dict]) -> Path:
                     "sha256": _sha256(Path(__file__).read_bytes()), "repo": identity(REPO)},
          "client": client, "args": plain(args),
          "skill": None if args.get("no_skills") else skill_loaded(args.get("plugin_dir") or ""),
-         "tools": {"native": NATIVE_TOOLS, "silica": SILICA_TOOLS},
-         "preamble": PREAMBLE, "forced": FORCED,
+         "tools": {"native": NATIVE_TOOLS, "silica": SILICA_TOOLS, "pack": PACK_NATIVE + PACK_TOOLS,
+                   "pack_disallowed": PACK_DISALLOWED, "zg": ZG_TOOLS, "zg_mcp": ZG_MCP, "code_env": CODE_ENV,
+                   "zg_guidance": _sha256(ZG_GUIDANCE.read_bytes()) if ZG_GUIDANCE.is_file() else None,
+                   "guidance": _sha256(Path(GUIDANCE_FILE).read_bytes()) if GUIDANCE_FILE else None},
+         "preamble": PREAMBLE, "forced": FORCED, "pack": PACK,
          "corpora": {str(c): identity(Path(c)) for c in sorted({str(t["cwd"]) for t in tasks})},
          "tasks": [plain(t) for t in tasks]}
     path = out / "manifest.jsonl"
@@ -257,21 +319,35 @@ def write_manifest(out: Path, args: dict, tasks: list[dict]) -> Path:
     return path
 
 
+GUIDANCE_FILE = ""  # --guidance: appended to the system prompt of arms A and S, as arm Z gets zvec's
+
+
 def command(arm: str, model: str, max_turns: int, budget: float,
             skills: bool = True, plugin_dir: str = "") -> list[str]:
     base = ["claude", "-p", "--model", model, "--max-turns", str(max_turns),
             "--max-budget-usd", str(budget), "--output-format", "stream-json", "--verbose",
             "--no-session-persistence"] + ([] if skills else ["--disable-slash-commands"])
     off = ["--settings", json.dumps({"enabledPlugins": {PLUGIN_KEY: False}})]
-    if arm in ("A", "F"):
+    if arm == "Z":
+        return base + off + ["--mcp-config", ZG_MCP, "--allowedTools", ",".join(NATIVE_TOOLS + ZG_TOOLS)] + (
+            ["--append-system-prompt-file", str(ZG_GUIDANCE)] if ZG_GUIDANCE.is_file() else [])
+    if arm in ("A", "F", "P", "S"):
         # With --plugin-dir the installed plugin (the marketplace cache, 0.6.1 on
         # this machine on 2026-09-09) is replaced by the working tree.
-        return base + (off + ["--plugin-dir", plugin_dir] if plugin_dir else []) + \
-            ["--allowedTools", ",".join(NATIVE_TOOLS + SILICA_TOOLS)]
+        # Resolve before subprocess changes cwd to the task's repository.
+        out = base + (off + ["--plugin-dir", str(Path(plugin_dir).resolve())] if plugin_dir else [])
+        if arm == "P":
+            return out + ["--disallowedTools", ",".join(PACK_DISALLOWED),
+                          "--allowedTools", ",".join(PACK_NATIVE + PACK_TOOLS)]
+        if GUIDANCE_FILE and arm in ("A", "S"):
+            out += ["--append-system-prompt-file", GUIDANCE_FILE]
+        return out + ["--allowedTools", ",".join(NATIVE_TOOLS + SILICA_TOOLS)]
     return base + off + ["--allowedTools", ",".join(NATIVE_TOOLS)]
 
 
-def score(task: dict, answer: str) -> tuple[int, list[str]]:
+def score(task: dict, answer: str) -> tuple[int | None, list[str]]:
+    if not any(k in task for k in ("all_of", "any_of", "digits")):
+        return None, []  # no rubric: judged afterwards
     low = answer.lower()
     missing: list[str] = []
     for s in task.get("all_of", []):
@@ -286,15 +362,25 @@ def score(task: dict, answer: str) -> tuple[int, list[str]]:
 
 
 def run_one(task: dict, arm: str, rep: int, model: str, max_turns: int, budget: float,
-            timeout: int, skills: bool = True, plugin_dir: str = "") -> dict:
+            timeout: int, skills: bool = True, plugin_dir: str = "", out: Path | None = None) -> dict:
     # The prompt goes on stdin: `--allowedTools` is variadic and would swallow
     # a trailing positional prompt (measured 2026-09-09: "Input must be provided").
     t0 = time.time()
     proc = subprocess.run(command(arm, model, max_turns, budget, skills, plugin_dir),
                           cwd=task["cwd"],
-                          input=(FORCED if arm == "F" else "") + PREAMBLE + task["prompt"],
+                          input=(FORCED if arm == "F" else PACK if arm == "P" else "")
+                          + PREAMBLE + task["prompt"],
+                          env={**os.environ, **CODE_ENV} if arm == "S" else None,
                           capture_output=True, text=True, timeout=timeout)
+    if out is not None:  # the whole stream: every tool's input and output, for the reader of a miss
+        (out / "streams").mkdir(exist_ok=True)
+        (out / "streams" / f"{task['id']}-{arm}-{rep}.jsonl").write_text(proc.stdout)
     tools: collections.Counter = collections.Counter()
+    # tool results flagged is_error, by tool: a call outside the allowlist
+    # counts as a call and fails, and so does a call that fails the schema
+    # (the 2026-09-10 grids could not tell the two apart; this can)
+    errors_by: collections.Counter = collections.Counter()
+    names: dict[str, str] = {}  # tool_use_id -> tool name
     result: dict = {}
     for line in proc.stdout.splitlines():
         try:
@@ -305,18 +391,32 @@ def run_one(task: dict, arm: str, rep: int, model: str, max_turns: int, budget: 
             for c in d.get("message", {}).get("content", []):
                 if c.get("type") == "tool_use":
                     tools[c["name"]] += 1
+                    names[c.get("id", "")] = c["name"]
+        elif d.get("type") == "user":
+            content = d.get("message", {}).get("content", [])
+            for c in content if isinstance(content, list) else []:
+                if isinstance(c, dict) and c.get("type") == "tool_result" and c.get("is_error"):
+                    errors_by[names.get(c.get("tool_use_id", ""), "?")] += 1
         elif d.get("type") == "result":
             result = d
     answer = result.get("result", "") or ""
     usage = result.get("usage", {}) or {}
     ok, missing = score(task, answer)
+    # the subscription's session cap answers in place of the model (measured
+    # 2026-09-10: exit 1, subtype success, "You've hit your session limit"):
+    # not a run, so it is neither scored nor kept as done when resuming
+    limit = answer.startswith("You've hit your session limit") or "session limit" in proc.stderr[-400:]
+    if limit:
+        result["subtype"], result["is_error"], ok = "limit", True, None
     return {"task": task["id"], "kind": task["kind"], "arm": arm, "rep": rep, "model": model,
             "exit": proc.returncode, "subtype": result.get("subtype"),
             "is_error": bool(result.get("is_error")),
             "cost_usd": result.get("total_cost_usd"), "duration_s": round(time.time() - t0, 1),
             "turns": result.get("num_turns"), "tools": dict(tools),
-            "tool_calls": sum(tools.values()),
+            "tool_calls": sum(tools.values()), "tool_errors": sum(errors_by.values()),
+            "tool_errors_by": dict(errors_by),
             "silica_calls": sum(v for k, v in tools.items() if "silica" in k),
+            "mcp_calls": sum(v for k, v in tools.items() if k.startswith("mcp__")),
             "input_tokens": usage.get("input_tokens"),
             "cache_read": usage.get("cache_read_input_tokens"),
             "cache_write": usage.get("cache_creation_input_tokens"),
@@ -327,18 +427,20 @@ def run_one(task: dict, arm: str, rep: int, model: str, max_turns: int, budget: 
 
 def summarize(out: Path) -> str:
     rows = [json.loads(l) for l in (out / "runs.jsonl").read_text().splitlines() if l.strip()]
+    rows = [r for r in rows if r.get("subtype") != "limit"]  # a capped session is not a run
     by: dict[tuple[str, str], list[dict]] = collections.defaultdict(list)
     for r in rows:
+        r.setdefault("mcp_calls", r.get("silica_calls", 0))  # rows written before arm Z
         by[(r["task"], r["arm"])].append(r)
 
     def mean(rs, key):
         vals = [r[key] for r in rs if isinstance(r.get(key), (int, float))]
         return statistics.mean(vals) if vals else float("nan")
 
-    lines = ["| task | arm | n | score | cost $ | turns | tool calls | silica calls | "
-             "context tok (in+cache) | out tok | s |", "|---|---|---|---|---|---|---|---|---|---|---|"]
-    for task in TASKS + HARD_TASKS:
-        for arm in ("A", "F", "B"):
+    lines = ["| task | arm | n | score | cost $ | turns | tool calls | tool errors | mcp calls | "
+             "context tok (in+cache) | out tok | s |", "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for task in TASKS + HARD_TASKS + SWE_TASKS:
+        for arm in ("A", "S", "F", "P", "Z", "B"):
             rs = by.get((task["id"], arm), [])
             if not rs:
                 continue
@@ -346,11 +448,12 @@ def summarize(out: Path) -> str:
                                    + (r.get("cache_write") or 0) for r in rs])
             lines.append(f"| {task['id']} | {arm} | {len(rs)} | {mean(rs, 'score'):.2f} | "
                          f"{mean(rs, 'cost_usd'):.3f} | {mean(rs, 'turns'):.1f} | "
-                         f"{mean(rs, 'tool_calls'):.1f} | {mean(rs, 'silica_calls'):.1f} | "
+                         f"{mean(rs, 'tool_calls'):.1f} | {mean(rs, 'tool_errors'):.1f} | "
+                         f"{mean(rs, 'mcp_calls'):.1f} | "
                          f"{ctx:,.0f} | {mean(rs, 'output_tokens'):,.0f} | {mean(rs, 'duration_s'):.0f} |")
     lines.append("")
-    for kind in ("code", "docs", "all"):
-        for arm in ("A", "F", "B"):
+    for kind in ("code", "docs", "hard", "swe", "all"):
+        for arm in ("A", "S", "F", "P", "Z", "B"):
             rs = [r for r in rows if r["arm"] == arm and (kind == "all" or r["kind"] == kind)]
             if rs:
                 lines.append(f"{kind:4s} {arm}: n={len(rs)} score={mean(rs, 'score'):.2f} "
@@ -372,16 +475,21 @@ def main() -> int:
     ap.add_argument("--budget", type=float, default=3.0, help="max USD per run")
     ap.add_argument("--timeout", type=int, default=900, help="seconds per run")
     ap.add_argument("--tasks", default="", help="comma-separated ids; empty = all")
-    ap.add_argument("--arms", default="A,B")
+    ap.add_argument("--arms", default="A,B", help="any of A (plugin), S (plugin, code index on), B (no plugin), "
+                    "Z (no plugin, zvec-grep MCP), F (forced), P (grep then code_pack)")
+    ap.add_argument("--prepare", action="store_true", help="build both sides' indexes per task root first and record the seconds")
+    ap.add_argument("--guidance", default="", help="a file appended to the system prompt of arms A and S (the block silica setup claude writes)")
     ap.add_argument("--out", default="", help="results folder; default docs/baseline/<stamp>")
     ap.add_argument("--no-skills", action="store_true", help="disable every skill in both arms")
     ap.add_argument("--plugin-dir", default="", help="load the plugin from this checkout instead of the installed one")
-    ap.add_argument("--set", default="base", choices=["base", "hard"], help="task set")
+    ap.add_argument("--set", default="base", choices=["base", "hard", "swe"], help="task set")
     ap.add_argument("--summary", default="", help="only summarise this results folder")
     a = ap.parse_args()
     if a.summary:
         print(summarize(Path(a.summary)))
         return 0
+    global GUIDANCE_FILE
+    GUIDANCE_FILE = str(Path(a.guidance).resolve()) if a.guidance else ""
     out = Path(a.out) if a.out else REPO / "docs" / "baseline" / time.strftime("%Y-%m-%d-%H%M")
     out.mkdir(parents=True, exist_ok=True)
     runs = out / "runs.jsonl"
@@ -390,12 +498,26 @@ def main() -> int:
         for l in runs.read_text().splitlines():
             if l.strip():
                 r = json.loads(l)
-                done.add((r["task"], r["arm"], r["rep"]))
-    pool_tasks = TASKS if a.set == "base" else HARD_TASKS
+                if r.get("subtype") != "limit":  # a capped run is redone
+                    done.add((r["task"], r["arm"], r["rep"]))
+    pool_tasks = {"base": TASKS, "hard": HARD_TASKS, "swe": SWE_TASKS}[a.set]
     wanted = [t for t in pool_tasks if not a.tasks or t["id"] in a.tasks.split(",")]
     grid = [(t, arm, rep) for t in wanted for rep in range(1, a.reps + 1)
             for arm in a.arms.split(",") if (t["id"], arm, rep) not in done]
     print(f"{len(grid)} runs -> {runs}  (model {a.model}, jobs {a.jobs})", flush=True)
+    if a.prepare:
+        prep = {}
+        for cwd in sorted({str(t["cwd"]) for t in wanted}):
+            t0 = time.time()
+            s = subprocess.run(["uv", "run", "--project", str(REPO), "--extra", "dense", "silica", "index", "--embed"],
+                               cwd=cwd, env={**os.environ, **CODE_ENV, "SILICA_VAULT": cwd}, capture_output=True, text=True)
+            t1 = time.time()
+            z = subprocess.run([ZG, "index", cwd, "--embedding", "local/potion-retrieval-32m", "--mode", "direct"],
+                               cwd=cwd, capture_output=True, text=True)
+            prep[cwd] = {"silica_s": round(t1 - t0, 1), "silica_rc": s.returncode, "zg_s": round(time.time() - t1, 1),
+                         "zg_rc": z.returncode}
+            print(f"prepared {cwd}: silica {prep[cwd]['silica_s']} s, zg {prep[cwd]['zg_s']} s", flush=True)
+        (out / "prepare.json").write_text(json.dumps(prep, indent=1))
     if grid:
         print(f"manifest -> {write_manifest(out, vars(a), wanted)}", flush=True)
     lock = threading.Lock()
@@ -403,19 +525,19 @@ def main() -> int:
     def job(t, arm, rep):
         try:
             r = run_one(t, arm, rep, a.model, a.max_turns, a.budget, a.timeout, not a.no_skills,
-                        a.plugin_dir)
+                        a.plugin_dir, out)
         except subprocess.TimeoutExpired:
             r = {"task": t["id"], "kind": t["kind"], "arm": arm, "rep": rep, "model": a.model,
                  "exit": -1, "subtype": "timeout", "is_error": True, "cost_usd": None,
                  "duration_s": a.timeout, "turns": None, "tools": {}, "tool_calls": 0,
-                 "silica_calls": 0, "input_tokens": None, "cache_read": None,
+                 "tool_errors": 0, "tool_errors_by": {}, "silica_calls": 0, "mcp_calls": 0, "input_tokens": None, "cache_read": None,
                  "cache_write": None, "output_tokens": None, "score": 0, "missing": ["timeout"],
                  "answer": "", "stderr_tail": ""}
         with lock:
             with runs.open("a") as fh:
                 fh.write(json.dumps(r, ensure_ascii=False) + "\n")
             print(f"{r['task']} {r['arm']} rep{r['rep']}: score={r['score']} cost={r['cost_usd']} "
-                  f"turns={r['turns']} tools={r['tool_calls']} silica={r['silica_calls']} "
+                  f"turns={r['turns']} tools={r['tool_calls']} mcp={r['mcp_calls']} "
                   f"{r['duration_s']}s {r['subtype'] or ''}", flush=True)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as pool:

@@ -104,3 +104,24 @@ def test_identity_follows_bytes_git_never_saw(tmp_path):
     assert untracked["changed"] == ["?? new/"] and untracked["sha256"] != ignored["sha256"]
     (repo / "new" / "note.md").write_text("n2", encoding="utf-8")
     assert b.identity(repo)["sha256"] != untracked["sha256"]
+
+
+def test_relative_plugin_path_survives_task_working_directory(tmp_path, monkeypatch):
+    b = _baseline()
+    plugin = tmp_path / "plugin"
+    corpus = tmp_path / "corpus"
+    plugin.mkdir()
+    corpus.mkdir()
+    monkeypatch.chdir(plugin)
+
+    def run(cmd, **kwargs):
+        assert kwargs["cwd"] == corpus
+        assert cmd[cmd.index("--plugin-dir") + 1] == str(plugin)
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({
+            "type": "result", "result": "ok", "usage": {},
+        }), stderr="")
+
+    monkeypatch.setattr(b.subprocess, "run", run)
+    task = {"id": "T1", "cwd": corpus, "kind": "code", "prompt": "q", "all_of": ["ok"]}
+    for arm in ("A", "F", "P", "S"):
+        assert b.run_one(task, arm, 1, "sonnet", 10, 1.0, 10, plugin_dir=".")["score"] == 1
