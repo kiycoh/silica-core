@@ -3,7 +3,7 @@
   "name": "io.github.kiycoh/silica-core",
   "title": "Silica Core",
   "description": "Retrieval over the folder the session opened: files, search, read, code_pack, write_note.",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "repository": {
     "url": "https://github.com/kiycoh/silica-core",
     "source": "github"
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "silica-core",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
