@@ -81,7 +81,7 @@ def _fold(word: str) -> str:
 # set or every Italian note indexes its own function words.
 STOPWORDS_FOLDED = frozenset(_fold(w) for w in STOPWORDS)
 
-TOKENIZER_VERSION = 7  # bumped when the token stream changes; the index rebuilds
+TOKENIZER_VERSION = 8  # bumped when the token stream changes; the index rebuilds
 
 
 _WORD = re.compile(r"[^\W_]+")
@@ -129,6 +129,30 @@ _ATOM = re.compile(r"""
 # back per-vault, if at all.
 
 
+# An identifier is two terms: the whole and the words inside it. `_WORD`
+# already yields the words of `best_window_spans` (it splits on `_`) and the
+# whole of `getUserProfile` (nothing to split on), so what is added is the
+# snake whole, `best_window_spans`, and the camel words, get/user/profile: a
+# grep-style query reaches the exact name, a prose query reaches the words.
+# Measured 2026-09-10 on the BEIR abstracts (scripts/bench_beir.py): see
+# public/benchmarks.md.
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_HUMP = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z0-9]+|[A-Z]+")
+_CAMEL = re.compile(r"[a-z][A-Z]|[A-Z]{2}[a-z]")
+
+
+def _identifiers(text: str):
+    for m in _IDENT.finditer(text):
+        s = m.group(0).strip("_")
+        if "_" in s:
+            yield s.lower()
+        elif len(s) > 3 and _CAMEL.search(s):
+            for w in _HUMP.findall(s):
+                w = w.lower()
+                if len(w) >= 2 and w not in STOPWORDS_FOLDED:
+                    yield w
+
+
 def _tokens(text: str) -> list[str]:
     """Lowercased, accent-folded words and alphanumerics ("bm25", "gpt4",
     "2026" stay whole), at least two characters, function words removed. No
@@ -144,6 +168,7 @@ def _tokens(text: str) -> list[str]:
     """
     out = [m.group(0).lower() for m in _ATOM.finditer(text)]
     out.extend(_fold((m.group(1) + m.group(2)).lower()) for m in _SOFT_BREAK.finditer(text))
+    out.extend(_identifiers(text))
     for m in _WORD.finditer(text):
         word = _fold(m.group(0).lower())
         if len(word) >= 2 and word not in STOPWORDS_FOLDED:

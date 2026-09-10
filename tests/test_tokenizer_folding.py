@@ -28,13 +28,14 @@ def test_folded_stopword_set_covers_the_raw_one():
     assert "perche" in STOPWORDS_FOLDED and "piu" in STOPWORDS_FOLDED
 
 
-def test_camel_case_is_not_segmented():
-    """Measured, not an oversight. Segments let a prose query reach a name,
-    which is right in a code vault; on the 254-paper bench corpus abstracts
-    and introductions name every concept, so segments inflated the front
-    matter and pushed the answering section out of a `per_doc` of 2."""
-    assert _tokens("the OrderStateMachine broke") == ["orderstatemachine", "broke"]
-    assert _tokens("HTMLParser") == ["htmlparser"]
+def test_camel_case_is_indexed_whole_and_segmented():
+    """The whole is a term, for an exact name, and so is each word, for a
+    prose query. Segmentation was kept out until 2026-09-10 on a
+    measurement over the 254-paper corpus (front matter inflated); the
+    BEIR replay of that day (public/benchmarks.md) is the measurement that
+    let it in for the code index."""
+    assert set(_tokens("the OrderStateMachine broke")) == {"orderstatemachine", "broke", "order", "state", "machine"}
+    assert set(_tokens("HTMLParser")) == {"htmlparser", "html", "parser"}
 
 
 def test_atoms_still_work():
