@@ -1,6 +1,6 @@
 ---
 name: silica
-description: Search a folder of documents or code with located evidence instead of grep. Use it for a question about what the files in the current folder say, when the answer is a passage and not a string; grep still wins on an exact string or a symbol name. Use when the user asks what a corpus, a set of papers, the docs or a repository say about something, when a question needs a passage you can cite by path and line, when several sources must be compared and each claim tabulated with its citation, or when the answer may not be in the corpus at all and you need to know that before reading.
+description: Search local documents for cited passages, compare sources, or investigate whether the corpus supports a claim. With code indexing enabled, use first to locate a behavior or implementation when its symbol name is unknown. Use grep for exact strings or known symbol names; read directly when the relevant path and section are already known.
 ---
 
 # Silica: located evidence, no model
@@ -15,28 +15,29 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, cursor, 
 
 ## The loop
 
-1. **Search with the corpus's words, not a question.** `silica_search`
+1. **Search for the concept or behavior.** When its location is unknown,
+   start with `silica_search`: a concise natural-language question or
+   description belongs in `query`. Keep known names and identifiers exact;
+   put additional identifier groups in `queries` when useful (one call,
+   fused by rank). Use grep for an exact string or symbol name, and read
+   directly when the relevant path and section are already known. Search
    returns ranked passages: `path`, `section`, `line`, `score` (raw BM25,
    comparable within one call only), `matched_terms`, `coverage`, and the
-   `documents` ranking behind the hits. Prefer it to grep when you want the
-   passage and not the file, or when a whole-document ranking matters. Put
-   a concept in `query` and its identifiers in `queries` (one call, fused
-   by rank) instead of one long query or two calls. When the server has
-   section vectors the dense leg runs by itself, so a paraphrase the
+   `documents` ranking behind the hits. When the server has section vectors
+   the dense leg runs by itself, so a paraphrase the
    corpus words do not reach can still land; `dense` in the reply says
    `ready` and how many documents it covered, or why it did not run, and
    that is not yours to fix — search lexically and say so.
-2. **Read the reply before the hits.** `terms_absent` lists query words the
-   corpus never contains; `coverage` is the share of the query's rare-term
-   mass a hit carries. A discriminating term in `terms_absent`, or no hit
-   with `coverage` above about 0.5 (read the best, not the first: with the
-   dense leg the first hit is not always the best-covered one), means the
-   corpus does not answer in these words: rephrase once with the corpus's
-   vocabulary, keeping names, numbers and identifiers as they are, and if
-   the second reply reads the
-   same, stop; do not read the hits into an answer. A large `candidates`
-   with `coverage` flat down the hits means the query is too broad: narrow
-   it with rarer words or a `folder`. `scope` counts what the
+2. **Judge the passages, using lexical signals as diagnostics.**
+   `terms_absent` lists query words the corpus never contains; `coverage`
+   is the share of the query's rare-term
+   mass a hit carries. Neither proves relevance or absence. A dense hit
+   can answer the question with `coverage` 0; inspect its text rather than
+   rejecting it at a lexical threshold. If the passages provide no useful
+   evidence, rephrase once using vocabulary from plausible hits, preserving
+   names, numbers and identifiers. Narrow by `folder` when the scope is
+   known. If evidence is still insufficient, report what remains unfound;
+   do not infer that the corpus contains no answer. `scope` counts what the
    search could see: `unconverted` or `failed` above zero means a relevant
    document may never rank, so check `silica_files(status=…)` before
    calling absence; with a `folder`, `terms_absent_in_scope` is the zero of
@@ -45,12 +46,15 @@ uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, cursor, 
    means the reply came from an index that many documents behind — the
    newest files may be missing from it; say so if the question is about
    recent material.
-3. **Read before you cite.** `silica_read(path, section=…)` or
-   `(path, start, end)` serves the slice with the outline and a `version`.
-   Cite path and line. Every hit carries the same `version`: pass it as
-   `expect_version` on the read, and again on a later read, so a file that
-   changed in between is refused instead of quoted under an old citation.
-4. **Check coverage when the task is exhaustive.** `silica_files` lists
+3. **Read further only when evidence is incomplete.** A returned passage
+   that supports the claim with enough context can be cited by path and
+   line without another call. If it is cut off, ambiguous or missing the
+   relevant context, use `silica_read(path, section=…)` or
+   `(path, start, end)`. Pass the hit's `version` as `expect_version` when
+   reading, so changed content is refused instead of silently mixed with
+   old evidence. Stop retrieving once the question is supported; an answer
+   about several files needs evidence for each part.
+4. **Check corpus completeness when the task is exhaustive.** `silica_files` lists
    every file with what the index did to it; `status=unconverted` names
    the scans and office files with no extracted text, `status=failed` the
    ones that could not be read. Top-k does not certify coverage. A PDF with
@@ -70,19 +74,21 @@ answer:
 
 1. State the question and the selection rule in a line each: which
    documents count (a folder, a date, a keyword), which do not.
-2. Search two or three phrasings in the corpus's words. In each reply,
+2. Search the concept; add alternative phrasings when needed to cover the
+   selection rule. In each reply,
    `candidates` counts the documents that matched at all, `documents` is
    the head of that ranking (the first k, plus the documents the hits came
    from) and `scope` what the search could see. Keep all three: they bound
    what was considered, and nothing in a reply is a roster of what was
    read.
-3. Read every passage you will cite, with the hit's `version` as
+3. Inspect every passage you will cite. Search windows count as evidence
+   when sufficient; fetch missing context with the hit's `version` as
    `expect_version`.
 4. Answer as a table, one row per claim: claim, path, section or line,
    version. Below it, the contradictions between sources, and what the
-   corpus does not say: the queries, their `terms_absent`, and the `scope`
-   counts, since absent terms alone do not prove silence while
-   `unconverted` or `failed` is above zero.
+   search did not establish: the queries, their `terms_absent`, and the
+   `scope` counts. Absent terms alone do not prove silence, even when all
+   files were indexed.
 5. Write the file only when asked. The queries and the versions in the
    table are the record; rerun them to check whether the corpus still
    supports a row.
@@ -98,11 +104,18 @@ PDF.
 
 ## Code
 
+When the server indexes source files (`SILICA_INDEX_CODE`), `silica_search`
+ranks them one unit per function, method, class or constant beside the
+notes: a hit's `section` is the symbol, `span` its lines, and
+`silica_read(path, section=<symbol>)` serves the body when the hit lacks
+the needed context. Without code indexing, search covers documents;
+use native repository tools to locate source code.
+
 `silica_code_pack(target, budget_chars)` gives one source file with its
 supertypes, extenders, the signatures it names, external dependencies and
-importers inside a budget. Use it before rewriting or porting a file,
-instead of ten greps. Check `truncated` before treating the target as
-complete.
+importers inside a budget. Use it for a known target when the task needs
+those relationships; a sufficient search hit or direct read needs no pack.
+Check `truncated` before treating the target as complete.
 
 ## What Silica is not
 

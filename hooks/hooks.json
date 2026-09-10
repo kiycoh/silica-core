@@ -1,0 +1,16 @@
+{
+  "description": "Before a question that names no identifier, ask the model to say whether silica_search applies; nothing is blocked.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

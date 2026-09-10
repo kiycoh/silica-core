@@ -583,7 +583,26 @@ def _setup_claude(dry_run: bool) -> int:
         "claude plugin marketplace add kiycoh/silica-core && "
         "claude plugin install silica-core@silica-core"
     )
+    _write_claude_guidance(dry_run)
     return 0
+
+
+def _write_claude_guidance(dry_run: bool) -> None:
+    """The block of guidance.py into the user-level CLAUDE.md, between
+    markers: when to search before grep. Consultive by nature, so the
+    plugin's prompt hook carries the same ask per question; measured
+    2026-09-10, neither the description nor a skill alone moved Sonnet."""
+    from silica.onboarding.guidance import claude_md_path, write_guidance
+    path = claude_md_path()
+    if dry_run:
+        _say(f"  would write the silica-core block into {escape(str(path))}", markup=False)
+        return
+    try:
+        what = write_guidance(path)
+    except OSError as e:
+        _say(f"  ✗ could not write {escape(str(path))}: {escape(str(e))}")
+        return
+    _say(f"  ✓ guidance block {what} in {escape(str(path))}", markup=False)
 
 
 # ---------------------------------------------------------------- entry point
