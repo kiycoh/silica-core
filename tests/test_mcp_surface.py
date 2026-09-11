@@ -60,6 +60,9 @@ def test_plugin_manifest_launches_silica_mcp():
     servers = json.loads((ROOT / plugin["mcpServers"]).read_text(encoding="utf-8"))["mcpServers"]
     args = servers["silica-core"]["args"]
     assert args[args.index("silica"):args.index("silica") + 2] == ["silica", "mcp"]
+    # the official plugin is local-hybrid: the [dense] extra installed, potion
+    # in-process, index and vectors warmed up at start; the package stays lexical
+    assert "dense" in args[args.index("--extra"):] and args[-2:] == ["--retrieval", "local-hybrid"]
 
 
 def test_plugin_serves_its_own_tree_not_the_published_wheel():

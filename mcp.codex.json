@@ -2,7 +2,7 @@
   "mcp_servers": {
     "silica-core": {
       "command": "uvx",
-      "args": ["--from", "silica-core[mcp]", "silica", "mcp"]
+      "args": ["--from", "silica-core[mcp,dense]", "silica", "mcp", "--retrieval", "local-hybrid"]
     }
   }
 }

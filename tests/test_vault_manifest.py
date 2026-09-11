@@ -129,3 +129,38 @@ def test_apply_manifest_clears_lang_on_switch_to_plain_vault(tmp_path, monkeypat
     assert CONFIG.lang == "auto"  # not leaked from vault a; "auto" is the real default
 
 
+
+
+def test_apply_manifest_turns_code_on_when_sources_declare_it(tmp_path, monkeypatch):
+    (tmp_path / "vault.yaml").write_text("sources: [prose, code]\n", encoding="utf-8")
+    monkeypatch.delenv("SILICA_INDEX_CODE", raising=False)
+    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
+    monkeypatch.setattr(CONFIG, "index_code", False)
+    apply_manifest_to_config()
+    assert CONFIG.index_code is True
+
+
+def test_apply_manifest_keeps_a_prose_vault_prose_only(tmp_path, monkeypatch):
+    (tmp_path / "vault.yaml").write_text("sources: [prose]\n", encoding="utf-8")
+    monkeypatch.delenv("SILICA_INDEX_CODE", raising=False)
+    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
+    monkeypatch.setattr(CONFIG, "index_code", True)
+    apply_manifest_to_config()
+    assert CONFIG.index_code is False
+
+
+def test_apply_manifest_no_manifest_plain_folder_stays_prose_only(tmp_path, monkeypatch):
+    monkeypatch.delenv("SILICA_INDEX_CODE", raising=False)
+    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
+    monkeypatch.setattr(CONFIG, "index_code", True)
+    apply_manifest_to_config()
+    assert CONFIG.index_code is False
+
+
+def test_apply_manifest_index_code_env_wins(tmp_path, monkeypatch):
+    (tmp_path / "vault.yaml").write_text("sources: [prose]\n", encoding="utf-8")
+    monkeypatch.setenv("SILICA_INDEX_CODE", "1")
+    monkeypatch.setattr(CONFIG, "vault_path", str(tmp_path))
+    monkeypatch.setattr(CONFIG, "index_code", True)
+    apply_manifest_to_config()
+    assert CONFIG.index_code is True

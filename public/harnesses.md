@@ -12,6 +12,12 @@ refuses a file that does not parse rather than overwriting it. `--dry-run`
 prints the block without writing, `--config PATH` writes somewhere else,
 `--from SPEC` swaps the release for a checkout.
 
+The block it writes launches `uvx --from 'silica-core[mcp,dense]' silica mcp
+--retrieval local-hybrid`, the same server the Claude Code plugin runs: hybrid
+search once the model and the vectors are there, lexical meanwhile, lexical
+with `dense: failed` if the model never arrives. For the light server, edit the
+written block to `--retrieval lexical` (`silica mcp` on its own is lexical).
+
 | `silica setup …` | Harness | Writes |
 |---|---|---|
 | `claude` | Claude Code | delegates to `claude mcp add --scope user` |
@@ -80,7 +86,7 @@ npx skills add kiycoh/silica-core
 
 It installs the skill and nothing else: no package, no server. On its own it
 leaves an agent holding instructions for tools that are not there, so it
-comes after `uv tool install 'silica-core[mcp]'`, not instead of it.
+comes after `uv tool install 'silica-core[mcp,dense]'`, not instead of it.
 
 ## From the shell
 
@@ -96,7 +102,21 @@ silica import papers/lsm-trees.pdf             # writes papers/lsm-trees.md besi
 silica write-note notes/decision.md --body-file - < decision.md
 silica code-pack src/search/index.py --budget 12000
 silica mcp --extended                          # also serve the wikilink tools
+silica mcp --retrieval local-hybrid            # potion in-process, index and vectors warmed up at start (what the plugin and `silica setup` run; needs [dense])
 ```
+
+The dense leg from an endpoint instead of the in-process model, here ollama
+with the prefixes nomic's model card asks for:
+
+```bash
+ollama pull nomic-embed-text
+export SILICA_EMBEDDING_BASE_URL=http://localhost:11434/v1 SILICA_EMBEDDING_MODEL=nomic-embed-text
+export SILICA_EMBEDDING_DOC_PREFIX='search_document: ' SILICA_EMBEDDING_QUERY_PREFIX='search_query: '
+silica index --embed
+```
+
+A remote endpoint needs `silica index --embed --allow-remote` once; until
+then search stays lexical and the reply says so in `dense`.
 
 ## Docker
 

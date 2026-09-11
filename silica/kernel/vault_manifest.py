@@ -299,3 +299,8 @@ def apply_manifest_to_config() -> None:
         # without a declared cooccurrence_lang must NOT be silently pinned to
         # english.
         CONFIG.lang = m.cooccurrence_lang or "auto"
+    if os.getenv("SILICA_INDEX_CODE") is None:
+        # the code lane follows the vault's declared sources: a source tree
+        # indexes its symbols, a folder of papers stays prose-only, and a
+        # mixed one says `sources: [prose, code]` in vault.yaml
+        CONFIG.index_code = "code" in m.sources

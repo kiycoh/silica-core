@@ -88,6 +88,9 @@ def _parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("mcp", help="serve the tools over stdio MCP")
     s.add_argument("--extended", action="store_true", help="also serve the wikilink tools")
+    s.add_argument("--retrieval", choices=("lexical", "local-hybrid"), default="lexical",
+                   help="local-hybrid: a static model in this process (needs [dense]), index and vectors built "
+                        "in the background at start; lexical: BM25 plus whatever SILICA_EMBEDDING_* names")
 
     s = sub.add_parser("doctor", help="check this install and this root")
     s.add_argument("--json", action="store_true")
@@ -99,7 +102,7 @@ def _parser() -> argparse.ArgumentParser:
                    help="claude, codex, cursor, zed, goose, … — `silica setup --list` names them all")
     s.add_argument("--list", dest="list_clients", action="store_true", help="every harness this knows how to wire up")
     s.add_argument("--dry-run", action="store_true")
-    s.add_argument("--from", dest="from_spec", default="", metavar="SPEC", help="what uvx installs instead of the release, e.g. '/path/to/checkout[mcp]'")
+    s.add_argument("--from", dest="from_spec", default="", metavar="SPEC", help="what uvx installs instead of the release, e.g. '/path/to/checkout[mcp,dense]'")
     s.add_argument("--config", default="", help="client config file to write instead of the default")
 
     sub.add_parser("connect", help="bridge to the Obsidian desktop app")
@@ -153,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
 
         from silica.ui.mcp import run_mcp
         logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
-        return run_mcp(extended=a.extended)
+        return run_mcp(extended=a.extended, retrieval=a.retrieval)
     if a.cmd == "doctor":
         from silica.config import CONFIG
         from silica.onboarding import checks

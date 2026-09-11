@@ -45,7 +45,11 @@ import yaml
 
 # What every client is told to run. uvx keeps the server at one command with no
 # install step of its own, which is the whole point of the generated block.
-MCP_COMMAND = ["uvx", "--from", "silica-core[mcp]", "silica", "mcp"]
+# `--retrieval local-hybrid` is what the Claude Code plugin runs (mcp.json), so
+# one install is one experience whichever door it came through: a fresh setup
+# searches hybrid, lexically while the model downloads, lexically with `dense:
+# failed` if the model never arrives. `silica mcp` by hand is still lexical.
+MCP_COMMAND = ["uvx", "--from", "silica-core[mcp,dense]", "silica", "mcp", "--retrieval", "local-hybrid"]
 FROM_SPEC = MCP_COMMAND[2]  # `silica setup <client> --from SPEC` swaps the release for a checkout or a pin
 
 NAME = "silica-core"
@@ -72,7 +76,7 @@ def mcp_command() -> list[str]:
 # every session it serves (see `_setup_dsh`).
 
 # Codex gives a stdio server `startup_timeout_sec` (default 10) to answer
-# `initialize`. A cold `uvx` resolves and installs silica-core[mcp] first,
+# `initialize`. A cold `uvx` resolves and installs silica-core[mcp,dense] first,
 # which takes longer than that on a first run, and a server that misses the
 # window is simply absent for that session, with one line in a log nobody
 # reads.
@@ -276,14 +280,14 @@ RECIPES = {
         "LangGraph, smolagents, CrewAI, AutoGen, Inspect, METR — spawn the server:",
         "  from langchain_mcp_adapters.client import MultiServerMCPClient",
         "  client = MultiServerMCPClient({'silica': {",
-        "      'command': 'uvx', 'args': ['--from', 'silica-core[mcp]', 'silica', 'mcp']}})",
+        "      'command': 'uvx', 'args': ['--from', 'silica-core[mcp,dense]', 'silica', 'mcp', '--retrieval', 'local-hybrid']}})",
         "or skip MCP and call the library directly:",
         "  from silica.core import search, read   # same payloads, no subprocess",
     ),
     "generic": (
         "Any other MCP client (Void, Jan, Factory Droid, Antigravity) —",
         "paste this into its server registry:",
-        '  {"command": "uvx", "args": ["--from", "silica-core[mcp]", "silica", "mcp"]}',
+        '  {"command": "uvx", "args": ["--from", "silica-core[mcp,dense]", "silica", "mcp", "--retrieval", "local-hybrid"]}',
         "Harnesses that also read skills: copy silica/skills/silica/SKILL.md into their",
         "skill root (~/.agents/skills/silica/SKILL.md serves Codex and DSH; Antigravity",
         "uses ~/.gemini/antigravity-cli/skills/).",

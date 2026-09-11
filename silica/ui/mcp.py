@@ -58,8 +58,11 @@ def exposed_tools(extended: bool = False) -> dict[str, Any]:
 INSTRUCTIONS = (
     "Silica indexes the folder this server was started in and returns located "
     "evidence, never answers. Use silica_search first for a question about what "
-    "the files here say when the location is unknown. Code search requires "
-    "SILICA_INDEX_CODE; otherwise locate source code with native tools. "
+    "the files here say when the location is unknown. In a source tree the "
+    "index holds the code too, one unit per function, method, class or "
+    "constant, so the search locates symbols by a question's words; the "
+    "reply's `index` and `dense` say what the index holds and whether the "
+    "vectors ran (`warming` while they build at start: search lexically). "
     "Use grep for an exact string or symbol name; read directly when the "
     "relevant path and section are known. A concise question or description "
     "goes in query; optional identifier groups go in queries, one call. silica_search "
@@ -132,7 +135,17 @@ def make_server(extended: bool = False):
     return server
 
 
-def run_mcp(extended: bool = False) -> int:
+def configure_retrieval(retrieval: str):
+    """`lexical` serves whatever the environment configured; `local-hybrid`
+    binds the static model and starts the warm-up, so the first question of
+    a session usually lands on a built index. Returns the warm-up thread."""
+    from silica import embeddings
+
+    embeddings.set_retrieval(retrieval)
+    return embeddings.warm_up() if retrieval == "local-hybrid" else None
+
+
+def run_mcp(extended: bool = False, retrieval: str = "lexical") -> int:
     """Serve the tools over MCP stdio. Blocks until the client hangs up."""
     try:
         import anyio
@@ -140,6 +153,7 @@ def run_mcp(extended: bool = False) -> int:
     except ImportError:
         print("silica mcp needs the [mcp] extra: uv pip install 'silica-core[mcp]'", file=sys.stderr)
         return 1
+    configure_retrieval(retrieval)
     server = make_server(extended)
     n = len(exposed_tools(extended))
 

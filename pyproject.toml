@@ -57,8 +57,8 @@ all = ["silica-core[connect,mcp,dense]"]
 [project.scripts]
 silica = "silica.entry:main"
 # uvx runs the console script named after the package it was given, and the
-# registry entry in server.json launches `uvx --from silica-core[mcp]
-# silica-core mcp`. Without this alias every registry-driven install dies at
+# registry entry in server.json launches `uvx --from silica-core[mcp,dense]
+# silica-core mcp --retrieval local-hybrid`. Without this alias every registry-driven install dies at
 # "executable not found" with the wheel sitting right there.
 silica-core = "silica.entry:main"
 

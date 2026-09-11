@@ -320,8 +320,11 @@ def disk_stamp(path: Path) -> tuple[int, int] | None:
 
 
 @contextlib.contextmanager
-def index_lock(path: Path) -> Iterator[None]:
+def index_lock(path: Path, blocking: bool = True) -> Iterator[bool]:
     """Advisory flock held across one read-merge-write of an index file.
+    Yields whether it holds: always True when blocking, False when another
+    process has it and `blocking` is off, so the caller serves what is on
+    disk instead of waiting through that process's build.
 
     The lock file is derived from the index path alone (`<dir>/locks/<name>`),
     NOT from `workqueue.path_lease`, whose lock dir comes from the CURRENT
@@ -333,22 +336,27 @@ def index_lock(path: Path) -> Iterator[None]:
     degrades the same way rather than failing the save.
     """
     if fcntl is None:
-        yield
+        yield True
         return
     real = Path(os.path.realpath(path))
     fd: int | None = None
+    held = True
     try:
         try:
             lock_dir = real.parent / "locks"
             lock_dir.mkdir(parents=True, exist_ok=True)
             fd = os.open(str(lock_dir / (real.name + ".lock")), os.O_CREAT | os.O_RDWR, 0o644)
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:  # LOCK_NB: someone else's, and that is the answer
+            if fd is not None:
+                os.close(fd)
+            fd, held = None, False
         except OSError as e:
             logger.warning("index_lock: cross-process lock unavailable for %s (%s)", real.name, e)
             if fd is not None:
                 os.close(fd)
                 fd = None
-        yield
+        yield held
     finally:
         if fd is not None:
             try:

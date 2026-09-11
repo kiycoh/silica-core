@@ -23,8 +23,8 @@
         {
           "type": "named",
           "name": "--from",
-          "value": "silica-core[mcp]",
-          "description": "The server lives behind the [mcp] extra; without it the install carries the CLI and no server.",
+          "value": "silica-core[mcp,dense]",
+          "description": "The server lives behind the [mcp] extra, the local model behind [dense]; without them the install carries the CLI and no server.",
           "isRequired": true
         }
       ],
@@ -35,6 +35,13 @@
           "value": "mcp",
           "description": "Serve files, search, read, code_pack and write_note over stdio.",
           "isRequired": true
+        },
+        {
+          "type": "named",
+          "name": "--retrieval",
+          "value": "local-hybrid",
+          "description": "A static model in the server process, index and vectors built in the background at start; search is lexical until they land. `lexical` is the light server.",
+          "isRequired": false
         }
       ],
       "environmentVariables": [

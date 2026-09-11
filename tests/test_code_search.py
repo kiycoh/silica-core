@@ -113,3 +113,53 @@ def test_the_switch_off_keeps_code_out(root, monkeypatch):
     monkeypatch.setattr(CONFIG, "index_code", False)
     r = root.search("getUserProfile")  # the note still answers through the words of the name
     assert {h["path"] for h in r["hits"]} == {"notes.md"} and r["scope"]["docs"] == 1
+
+
+def test_a_txt_note_is_prose_without_the_code_lane(root, monkeypatch, tmp_path):
+    from silica.config import CONFIG
+    monkeypatch.setattr(CONFIG, "index_code", False)
+    (tmp_path / "readme.txt").write_text("Leveled compaction merges sorted runs level by level.\n", encoding="utf-8")
+    assert root.search("leveled compaction")["hits"][0]["path"] == "readme.txt"
+    by = {f["path"]: f for f in root.files()["files"]}
+    assert by["readme.txt"]["status"] == "indexed"
+
+
+def test_a_txt_never_becomes_a_code_unit(root, tmp_path):
+    (tmp_path / "readme.txt").write_text("Leveled compaction merges sorted runs level by level.\n", encoding="utf-8")
+    assert root.search("leveled compaction")["hits"][0]["path"] == "readme.txt"
+    from silica.kernel.recall.lexical import get_store
+    assert "readme.txt" in get_store(root.INDEX).paths()  # one prose document, not `readme.txt#0` windows
+
+
+def test_config_files_enter_only_with_the_code_lane(root, monkeypatch, tmp_path):
+    from silica.config import CONFIG
+    (tmp_path / "settings.yaml").write_text("compaction: leveled\nlevels: 7\n", encoding="utf-8")
+    assert root.search("compaction leveled")["hits"][0]["path"] == "settings.yaml"
+    monkeypatch.setattr(CONFIG, "index_code", False)
+    assert root.search("compaction leveled")["hits"] == []
+    by = {f["path"]: f for f in root.files()["files"]}
+    assert by["settings.yaml"]["status"] == "excluded"
+
+
+def test_the_whole_build_waits_for_another_builder(root):
+    import threading
+    done = threading.Event()
+    with root._paths.index_lock(root._paths.index_dir() / "build"):  # another server mid-build
+        t = threading.Thread(target=lambda: (root.build_index(), done.set()), daemon=True)
+        t.start()
+        assert not done.wait(0.5)
+    assert done.wait(10)
+
+
+def test_a_refresh_does_not_wait_for_another_builder(root, tmp_path):
+    import threading
+    root.build_index()
+    (tmp_path / "later.md").write_text("# Later\n\na profile arrives later\n", encoding="utf-8")
+    with root._paths.index_lock(root._paths.index_dir() / "build"):  # another server mid-build
+        out: dict = {}
+        s = threading.Thread(target=lambda: out.update(root.silica_search("profile")), daemon=True)
+        s.start()
+        s.join(3)
+        assert not s.is_alive(), "the search waited on the other process's build"
+        assert out["index"]["state"] == "stale" and out["index"]["pending"] == 1  # served as committed, and says so
+        assert out["hits"] and all(h["path"] != "later.md" for h in out["hits"])

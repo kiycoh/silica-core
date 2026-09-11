@@ -7,7 +7,7 @@ the project now lives, and the `silica` command keeps working.
 Install the new name directly:
 
 ```
-uv tool install 'silica-core[mcp]'      # or: pipx install 'silica-core[mcp]'
+uv tool install 'silica-core[mcp,dense]'      # or: pipx install 'silica-core[mcp,dense]'
 ```
 
 Source, issues and documentation: https://github.com/kiycoh/silica-core

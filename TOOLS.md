@@ -90,8 +90,9 @@ question; measured 2026-09-10, that ask took Sonnet from 0 to 17 searches
 in 20 questions). Ranking, in order: BM25 over whole documents; BM25 over
 heading-delimited sections inside the top documents; at most `per_doc`
 sections per document; for each hit, the `width`-character window densest
-in idf-weighted query terms, with its line number. With `SILICA_INDEX_CODE`
-set a source file is indexed one unit per function, method, class or
+in idf-weighted query terms, with its line number. In a source tree
+(`sources` in vault.yaml; a git repository by default; `SILICA_INDEX_CODE`
+overrides) a source file is indexed one unit per function, method, class or
 constant (module-level code between them as its own unit, 80-line windows
 where no parser applies), each unit a document to BM25 and a vector to the
 dense leg: the hit's `section` is the qualified symbol, `span` its first and
@@ -153,7 +154,8 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   read over all the groups' terms. The case it serves is one call for a
   concept and its anchors — `query="leader election"`,
   `queries=["Raft"]` — where one long query would let the anchor's idf
-  drown the concept, or the reverse. The reply repeats them as `queries`.
+  drown the concept, or the reverse. The reply repeats them as `queries`;
+  from the shell, `silica search QUERY --also QUERY` is the same call.
 - A search refreshes the index inline when at most 50 documents are behind
   (`STALE_BUDGET`, ~13 ms a document measured); past that it answers from
   the index as it is and `index` says `stale` with `pending`, so a bulk
@@ -192,8 +194,10 @@ time, not the caller's: there is no parameter. It runs on every search once
 the vectors are there, and `dense` in the reply says so — `{"state":
 "ready", "docs": n}`, the documents in scope it covered — or why it did not
 run while the search stayed lexical: `off` (no embedder named),
+`warming` (the server's warm-up is building them: `silica mcp --retrieval
+local-hybrid`, what the plugin and `silica setup` run, potion in-process, lexical meanwhile),
 `no_vectors` (run `silica index --embed`), `consent_required` (the host
-below), `failed` (what the endpoint answered, in `hint`).
+below), `failed` (what the endpoint or the warm-up answered, in `hint`).
 
 With the leg, the document ranking fuses BM25 with each document's best
 section cosine, and inside the top documents the section ranking fuses BM25

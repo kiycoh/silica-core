@@ -27,7 +27,7 @@ def test_codex_appends_block(tmp_path):
     assert parsed["mcp_servers"]["silica-core"]["command"] == "uvx"
     # The [mcp] extra is the point of the block, and rich markup eats it if the
     # payload is ever printed or written through a markup-enabled path.
-    assert parsed["mcp_servers"]["silica-core"]["args"] == ["--from", "silica-core[mcp]", "silica", "mcp"]
+    assert parsed["mcp_servers"]["silica-core"]["args"] == ["--from", "silica-core[mcp,dense]", "silica", "mcp", "--retrieval", "local-hybrid"]
 
 
 def test_no_client_gets_a_pinned_vault(tmp_path):
@@ -105,9 +105,9 @@ def _printed(args: list[str], capsys=None) -> str:
 def test_previews_keep_the_bracketed_tokens(tmp_path, capsys):
     """`[mcp]` and the TOML headers must reach the terminal intact."""
     out = _printed(["codex", "--config", str(tmp_path / "config.toml"), "--dry-run"], capsys)
-    assert "silica-core[mcp]" in out
+    assert "silica-core[mcp,dense]" in out
     assert "[mcp_servers.silica-core]" in out
-    assert "silica-core[mcp]" in _printed(["claude", "--dry-run"], capsys)
+    assert "silica-core[mcp,dense]" in _printed(["claude", "--dry-run"], capsys)
     assert "[--dry-run]" in _printed(["nonsense"], capsys)
 
 
@@ -197,7 +197,7 @@ def test_dry_run_installs_no_skill(tmp_path, monkeypatch):
 def test_from_spec_swaps_the_release_for_a_checkout(tmp_path, capsys):
     out = _printed(["codex", "--config", str(tmp_path / "config.toml"), "--dry-run", "--from", "/src/silica[mcp]"], capsys)
     assert '"--from", "/src/silica[mcp]", "silica", "mcp"' in out
-    assert "silica-core[mcp]" in _printed(["codex", "--config", str(tmp_path / "c2.toml"), "--dry-run"], capsys)
+    assert "silica-core[mcp,dense]" in _printed(["codex", "--config", str(tmp_path / "c2.toml"), "--dry-run"], capsys)
 
 
 # --- the table-driven clients ------------------------------------------------
@@ -218,7 +218,7 @@ def test_every_client_writes_merges_and_repeats_cleanly(client, tmp_path):
     assert setup_client.run_setup([client, "--config", str(cfg)]) == 0
     text = cfg.read_text(encoding="utf-8")
     assert "unrelated" in text  # merged, not clobbered
-    assert "silica-core[mcp]" in text
+    assert "silica-core[mcp,dense]" in text
     assert "SILICA_VAULT" not in text  # the vault is the folder the client spawns us in
 
     once = text
@@ -374,8 +374,8 @@ def test_recipes_answer_the_harnesses_with_no_config_file(capsys):
     """Aider, SWE-agent, LangGraph and friends install by instruction, so
     `silica setup <topic>` prints one rather than failing."""
     assert "silica search" in _printed(["shell"], capsys)
-    assert "silica-core[mcp]" in _printed(["python"], capsys)
-    assert "silica-core[mcp]" in _printed(["generic"], capsys)
+    assert "silica-core[mcp,dense]" in _printed(["python"], capsys)
+    assert "silica-core[mcp,dense]" in _printed(["generic"], capsys)
 
 
 def test_list_names_every_harness_the_docs_claim(capsys):

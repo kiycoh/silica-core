@@ -32,6 +32,12 @@ def _isolate_silica_home(tmp_path_factory, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_retrieval_mode() -> None:
+    from silica import embeddings
+    embeddings.set_retrieval("lexical")  # no warm-up state leaks between tests
+
+
+@pytest.fixture(autouse=True)
 def _reset_manifest_cache() -> None:
     import silica.kernel.vault_manifest as manifest_mod
     manifest_mod.reset_manifest_cache()

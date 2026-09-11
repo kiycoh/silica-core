@@ -82,7 +82,8 @@ class SilicaConfig:
     # tokenizer language for the index ("auto" detects per text)
     lang: str = _env("SILICA_LANG", "auto", "SILICA_COOCCURRENCE_LANG")
     debug_logging: bool = field(default_factory=lambda: env_flag("SILICA_VERBOSE", False))
-    # index source files too, one unit per symbol (core._is_code says which files)
+    # the code lane, one unit per symbol (core._is_code says which files); unset,
+    # the vault's `sources` decide (vault_manifest.apply_manifest_to_config)
     index_code: bool = field(default_factory=lambda: env_flag("SILICA_INDEX_CODE", False))
 
     # converters

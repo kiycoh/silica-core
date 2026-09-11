@@ -10,7 +10,7 @@ serves five tools named `silica_*`. If they are deferred, load them with
 ToolSearch. If they are missing, say so and give the install line:
 
 ```bash
-uv tool install 'silica-core[mcp]' && silica setup claude   # or codex, cursor, zed, … (silica setup --list)
+uv tool install 'silica-core[mcp,dense]' && silica setup claude   # or codex, cursor, zed, … (silica setup --list)
 ```
 
 ## The loop
@@ -104,12 +104,14 @@ PDF.
 
 ## Code
 
-When the server indexes source files (`SILICA_INDEX_CODE`), `silica_search`
-ranks them one unit per function, method, class or constant beside the
-notes: a hit's `section` is the symbol, `span` its lines, and
-`silica_read(path, section=<symbol>)` serves the body when the hit lacks
-the needed context. Without code indexing, search covers documents;
-use native repository tools to locate source code.
+In a source tree (a git repository, or `sources: [prose, code]` in
+vault.yaml) `silica_search` ranks source files one unit per function,
+method, class or constant beside the notes: a hit's `section` is the
+symbol, `span` its lines, and `silica_read(path, section=<symbol>)` serves
+the body when the hit lacks the needed context. In a folder of documents
+only, search covers the documents; use native repository tools to locate
+source code. While the server builds its vectors at start `dense` says
+`warming`: the search is lexical meanwhile, not broken.
 
 `silica_code_pack(target, budget_chars)` gives one source file with its
 supertypes, extenders, the signatures it names, external dependencies and

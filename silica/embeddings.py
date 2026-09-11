@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import importlib
 import math
+import threading
 import time
 from array import array
 from pathlib import Path
@@ -58,6 +59,79 @@ def _local_model() -> bool:
 
 def enabled() -> bool:
     return _local_model() or bool((CONFIG.embedding_base_url or "").strip())
+
+
+# ---------------------------------------------------------------------------
+# the retrieval mode: `silica mcp --retrieval local-hybrid` is the plugin's
+# ---------------------------------------------------------------------------
+
+POTION = "model2vec/minishlab/potion-retrieval-32M"
+# `state` is the warm-up: off (never started), warming, ready, failed (`hint`)
+_MODE: dict[str, Any] = {"retrieval": "lexical", "state": "off"}
+_LEXICAL = threading.Event()  # the warm-up's lexical phase is on disk
+
+
+def set_retrieval(mode: str) -> None:
+    """`lexical` (the default: whatever SILICA_EMBEDDING_* names, or nothing)
+    or `local-hybrid`: a static model in this process, potion unless the
+    environment names another model2vec model, and no endpoint, so no text
+    ever leaves the machine. Resets the warm-up."""
+    if mode not in ("lexical", "local-hybrid"):
+        raise ValueError(f"retrieval must be lexical or local-hybrid, not {mode!r}")
+    _MODE.clear()
+    _MODE.update(retrieval=mode, state="off")
+    _LEXICAL.clear()
+    if mode == "local-hybrid":
+        CONFIG.embedding_base_url = ""
+        if not _local_model():
+            CONFIG.embedding_model = POTION
+
+
+def warmup_state() -> dict[str, Any]:
+    return dict(_MODE)
+
+
+def lazy_embed() -> bool:
+    """Whether a refresh a search makes should embed too: local-hybrid once
+    the warm-up succeeded, so the model is loaded and nothing leaves."""
+    return _MODE["retrieval"] == "local-hybrid" and _MODE["state"] == "ready"
+
+
+def wait_lexical(timeout: float | None = None) -> None:
+    """Block until the warm-up's lexical phase is on disk, or `timeout`; at
+    once when no warm-up runs."""
+    if _MODE["state"] == "warming":
+        _LEXICAL.wait(timeout)
+
+
+def warm_up() -> threading.Thread:
+    """Build the index, then its vectors, in a background thread: lexical
+    search serves as soon as the first phase lands, `dense` says `warming`
+    until the second does, `failed` with the reason if either breaks."""
+    import silica.core as core
+
+    def run() -> None:
+        try:
+            core.build_index()
+            _LEXICAL.set()
+            if _local_model():
+                _static_model()  # loaded, or fetched, now: `ready` promises the first query no wait and no surprise
+            out = core.build_index(embed=True)
+        except Exception as e:
+            _MODE.update(state="failed", hint=str(e))
+        else:
+            if "error" in out:
+                _MODE.update(state="failed", hint=out["error"]["hint"])
+            else:
+                _MODE.update(state="ready")
+        finally:
+            _LEXICAL.set()
+
+    _MODE.pop("hint", None)
+    _MODE["state"] = "warming"
+    t = threading.Thread(target=run, name="silica-warm-up", daemon=True)
+    t.start()
+    return t
 
 
 def remote_host() -> str | None:

@@ -10,6 +10,7 @@ import hashlib
 import math
 import os
 import re
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -39,6 +40,11 @@ POOL_FACTOR = 3
 # ~13 ms a document on the 254-paper corpus (2026-09-08), so 50 stays under
 # a second. ponytail: a count, not bytes; one 40 MB PDF still blocks.
 STALE_BUDGET = 50
+# The lexical store's mutators are not thread-safe (lexical.py): one thread
+# in them or in a search at a time, so the warm-up thread never fills the
+# store under a search. ponytail: searches serialise too; a reader-writer
+# lock if a client ever fans them out.
+_STORE_RW = threading.RLock()
 # Seconds between partial saves during a build, so Ctrl+C at 90% of a cold
 # build keeps the 90% and the next run does the rest (save() is hundreds of
 # ms on a big index, so not per document).
@@ -56,8 +62,12 @@ _WIKILINK = re.compile(r"\[\[([^\]|#]+)")
 _TEXT_SUFFIXES = frozenset({".md", ".txt", ".rst", ".csv", ".json", ".yaml", ".yml", ".toml", ".xml", ".html"})
 # What the index reads as code when SILICA_INDEX_CODE is set: the languages
 # codeast parses, one unit per symbol, and these as windows of lines.
+# prose is always indexed, a heading section at a time; the code lane adds
+# source languages (codeast's, or 80-line windows for the rest) and the
+# config and data files that only mean something beside code
+_PROSE_SUFFIXES = frozenset({".md", ".txt", ".rst"})
 _CODE_SUFFIXES = frozenset({".rs", ".go", ".rb", ".php", ".kt", ".swift", ".scala", ".sh", ".sql", ".cfg",
-                            ".ini", ".rst", ".txt", ".yaml", ".yml", ".toml", ".json"})
+                            ".ini", ".yaml", ".yml", ".toml", ".json"})
 _CODE_MAX_BYTES = 512 * 1024  # a lockfile, a minified bundle, a fixture dump: not read
 
 
@@ -340,7 +350,8 @@ def _notes() -> dict[str, float]:
     for rel, full in _walk():
         if full is None:
             continue
-        if rel.endswith(".md") or (full.suffix.lower() == ".pdf" and not full.with_suffix(".md").is_file()):
+        suffix = full.suffix.lower()
+        if suffix in _PROSE_SUFFIXES or (suffix == ".pdf" and not full.with_suffix(".md").is_file()):
             try:
                 out[rel] = full.stat().st_mtime
             except OSError:
@@ -394,7 +405,21 @@ def _flush(store, meta: dict, failed: dict) -> None:
 
 
 def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, float] | None = None,
-                allow_remote: bool = False) -> dict:
+                allow_remote: bool = False, wait: bool = True) -> dict:
+    """`_build_index` under one lock per index: the stamps, the store and the
+    vectors land as one, so a second server building the same folder waits
+    and then finds the work done rather than interleaving with it. With
+    `wait` off a busy lock is not waited for: the reply carries the index
+    as it is on disk and `busy`, for a search that must answer now."""
+    with _paths.index_lock(_paths.index_dir() / "build", blocking=wait) as held:
+        if not held:
+            state = index_state(live=live)
+            return {"docs": state["docs"], "changed": 0, "failed": {}, "index": state, "busy": True}
+        return _build_index(rebuild, embed, live, allow_remote)
+
+
+def _build_index(rebuild: bool = False, embed: bool = False, live: dict[str, float] | None = None,
+                 allow_remote: bool = False) -> dict:
     """Build or refresh the document index. Incremental by mtime; `rebuild`
     re-reads everything. Never raises for one unreadable file: it lands in
     `failed` and in the failures file `silica_files` reports from. Saves
@@ -404,69 +429,70 @@ def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, floa
     rebuild = rebuild or not meta.get("built_at")
     if rebuild:
         meta = {"built_at": None, "stamps": {}, "no_text": {}, "tokenizer": TOKENIZER_VERSION}
-    store = get_store(INDEX)
-    if rebuild:  # a unit key of a rebuilt file would otherwise outlive the offset it names
-        for p in store.paths():
-            store.remove(p)
-    stamps: dict[str, float] = meta["stamps"]
-    skipped: dict[str, dict] = meta.setdefault("no_text", {})
-    units: dict[str, list[str]] = meta.setdefault("units", {})  # code file -> its unit keys
-    root = _root()
-    live = _notes() if live is None else live
-    changed, failed = 0, {}
-    last_flush = time.monotonic()
-    for rel, mt in live.items():
-        if not rebuild and (stamps.get(rel) == mt or skipped.get(rel, {}).get("mtime") == mt):
-            continue
-        if rel.lower().endswith(".pdf"):
-            text, _pages, reason = _pdf_text(rel, root / rel)
-            if not text:  # a scan, or a PDF PDFium could not open: `unconverted`, never indexed
-                skipped[rel] = {"mtime": mt, "reason": reason}
-                if stamps.pop(rel, None) is not None:
-                    store.remove(rel)
+    with _STORE_RW:  # the store is filled here; no search reads it meanwhile
+        store = get_store(INDEX)
+        if rebuild:  # a unit key of a rebuilt file would otherwise outlive the offset it names
+            for p in store.paths():
+                store.remove(p)
+        stamps: dict[str, float] = meta["stamps"]
+        skipped: dict[str, dict] = meta.setdefault("no_text", {})
+        units: dict[str, list[str]] = meta.setdefault("units", {})  # code file -> its unit keys
+        root = _root()
+        live = _notes() if live is None else live
+        changed, failed = 0, {}
+        last_flush = time.monotonic()
+        for rel, mt in live.items():
+            if not rebuild and (stamps.get(rel) == mt or skipped.get(rel, {}).get("mtime") == mt):
                 continue
-        elif _is_code(rel):
-            try:
-                parts = _sections_of(rel)[1]
-            except OSError as e:
-                failed[rel] = str(e)
+            if rel.lower().endswith(".pdf"):
+                text, _pages, reason = _pdf_text(rel, root / rel)
+                if not text:  # a scan, or a PDF PDFium could not open: `unconverted`, never indexed
+                    skipped[rel] = {"mtime": mt, "reason": reason}
+                    if stamps.pop(rel, None) is not None:
+                        store.remove(rel)
+                    continue
+            elif _is_code(rel):
+                try:
+                    parts = _sections_of(rel)[1]
+                except OSError as e:
+                    failed[rel] = str(e)
+                    continue
+                keys = [f"{rel}#{off}" for off, *_rest in parts]
+                for old in units.get(rel, []):
+                    if old not in keys:
+                        store.remove(old)
+                for (off, part, _tf, _dl, title), key in zip(parts, keys):
+                    store.upsert(key, title, part)
+                units[rel] = keys
+                stamps[rel] = mt
+                changed += 1
                 continue
-            keys = [f"{rel}#{off}" for off, *_rest in parts]
-            for old in units.get(rel, []):
-                if old not in keys:
-                    store.remove(old)
-            for (off, part, _tf, _dl, title), key in zip(parts, keys):
-                store.upsert(key, title, part)
-            units[rel] = keys
+            else:
+                try:
+                    text = _read(root / rel)
+                except OSError as e:
+                    failed[rel] = str(e)
+                    continue
+            store.upsert(rel, Path(rel).stem, text)
             stamps[rel] = mt
+            skipped.pop(rel, None)
             changed += 1
-            continue
-        else:
-            try:
-                text = _read(root / rel)
-            except OSError as e:
-                failed[rel] = str(e)
-                continue
-        store.upsert(rel, Path(rel).stem, text)
-        stamps[rel] = mt
-        skipped.pop(rel, None)
-        changed += 1
-        if time.monotonic() - last_flush > _FLUSH_S:
-            _flush(store, meta, failed)
-            last_flush = time.monotonic()
-    for gone in [p for p in list(stamps) + list(skipped) if p not in live]:
-        stamps.pop(gone, None)
-        skipped.pop(gone, None)
-        units.pop(gone, None)
-        _extract_cache(gone).unlink(missing_ok=True)  # a deleted PDF leaves no extraction behind
-    for gone in [p for p in store.paths() if _split_key(p)[0] not in live]:
-        store.remove(gone)
-    _flush(store, meta, failed)
-    # Every live document is now stamped, skipped or failed, so the state is
-    # known without another walk: only the failures are still pending.
-    state = {"state": "stale" if failed else "ready", "docs": len(stamps),
-             "built_at": meta["built_at"], "pending": len(failed)}
-    out = {"docs": len(stamps), "changed": changed, "failed": failed, "index": state}
+            if time.monotonic() - last_flush > _FLUSH_S:
+                _flush(store, meta, failed)
+                last_flush = time.monotonic()
+        for gone in [p for p in list(stamps) + list(skipped) if p not in live]:
+            stamps.pop(gone, None)
+            skipped.pop(gone, None)
+            units.pop(gone, None)
+            _extract_cache(gone).unlink(missing_ok=True)  # a deleted PDF leaves no extraction behind
+        for gone in [p for p in store.paths() if _split_key(p)[0] not in live]:
+            store.remove(gone)
+        _flush(store, meta, failed)
+        # Every live document is now stamped, skipped or failed, so the state is
+        # known without another walk: only the failures are still pending.
+        state = {"state": "stale" if failed else "ready", "docs": len(stamps),
+                 "built_at": meta["built_at"], "pending": len(failed)}
+        out = {"docs": len(stamps), "changed": changed, "failed": failed, "index": state}
     if embed:
         from silica import embeddings
         if not embeddings.enabled():
@@ -547,9 +573,9 @@ def silica_files(
         suffix = full.suffix.lower()
         if rel in failed:
             row.update(status="failed", reason=failed[rel])
-        elif suffix == ".md":
+        elif suffix in _PROSE_SUFFIXES:
             row["status"] = "indexed" if stamps.get(rel) == st.st_mtime else "changed"
-            src, state = _conversion_of(full, _head(full))
+            src, state = _conversion_of(full, _head(full)) if suffix == ".md" else (None, None)
             if state:  # the note a conversion wrote carries the verdict too: it is the path search returns
                 row.update(source=src, source_state=state)
         elif suffix in DOC_EXTS and suffix not in IMG_EXTS:
@@ -648,9 +674,9 @@ def silica_search(
 ) -> dict:
     """For a question that names no identifier (what a behaviour is, where
     it is decided, why), call this before Grep, Read or Glob: it ranks
-    passages and, with the code index on (`SILICA_INDEX_CODE`), the
-    functions, methods, classes and constants themselves, by the question's
-    words and their vectors. Do not grep for the words of a question; grep
+    passages and, in a source tree, the functions, methods, classes and
+    constants themselves, by the question's words and their vectors.
+    Do not grep for the words of a question; grep
     for an exact string or a symbol name you already know. Ranked passages
     with an honest zero: BM25 over documents, then over the heading sections
     of the top documents, at most `per_doc` per document; each hit carries
@@ -663,26 +689,46 @@ def silica_search(
     words); `terms_absent` are query terms found nowhere in the corpus. No
     boolean "no answer" exists: read coverage and matched_terms
     and decide to stop or rephrase. The dense leg (one vector per section)
-    runs by itself once `silica index --embed` built the vectors: `dense` in
-    the reply says `ready` and how many documents it covered, or why it did
-    not run (`off`, `no_vectors`, `consent_required`, `failed`) while the
-    search stayed lexical; that is the user's to fix, not the caller's. With
+    runs once the vectors are built (the server's warm-up, or `silica index
+    --embed`): `dense` in the reply says `ready` and how many documents it
+    covered, or why not (`off`, `warming`, `no_vectors`, `consent_required`,
+    `failed`) while the search stayed lexical; the user's to fix, not the
+    caller's. With
     `queries` or the dense leg the order is by reciprocal rank across the
     groups (and the vectors); `score`, `matched_terms` and `coverage` then
     read over all the groups' terms, and a hit the dense leg alone found
-    carries `dense` and coverage 0. With `SILICA_INDEX_CODE` set, source
-    files are indexed one unit per function, method, class or constant
-    (windows of lines where no parser applies), ranked beside the notes: a
-    hit's `section` is the symbol, `span` its lines, and
-    `silica_read(path, section=<symbol>)` serves its body. Builds the index
-    on first use."""
+    carries `dense` and coverage 0. In a source tree (vault.yaml `sources`;
+    a git repository by default) source files are indexed one unit per
+    function, method, class or constant (line windows where no parser
+    applies), ranked beside the notes: a hit's `section` is the symbol,
+    `span` its lines, and `silica_read(path, section=<symbol>)` serves its
+    body. Builds the index on first use."""
+    from silica import embeddings
+    live = _notes()
+    # A local-hybrid warm-up over a folder nothing has indexed yet: wait for
+    # the first lexical index to land, this process's or another's, rather
+    # than answer empty. Anything already on disk is served at once, even
+    # while another process holds the build through its embedding phase.
+    while index_state(live=live)["state"] == "cold" and embeddings.warmup_state()["state"] == "warming":
+        embeddings.wait_lexical(0.5)
+    with _STORE_RW:
+        return _search(query, folder, k, per_doc, width, queries, live)
+
+
+def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: list[str] | None,
+            live: dict[str, float]) -> dict:
     groups = [query] + [q for q in (queries or []) if q.strip()]
     # The dense leg is the user's call, made at index time, not the caller's:
     # it runs whenever the vectors are there and the query may go to the
     # endpoint; otherwise the reply says why and the search stays lexical.
     from silica import embeddings
+    warm = embeddings.warmup_state()
     leg: dict[str, Any]
-    if not embeddings.enabled():
+    if warm["state"] == "warming":
+        leg = {"state": "warming", "hint": "the vectors are building in the background; this search is lexical"}
+    elif warm["state"] == "failed":
+        leg = {"state": "failed", "hint": warm["hint"]}
+    elif not embeddings.enabled():
         leg = {"state": "off"}
     elif embeddings.load() is None:
         leg = {"state": "no_vectors", "hint": "run `silica index --embed`"}
@@ -692,10 +738,12 @@ def silica_search(
     else:
         leg = {"state": "ready"}
     hybrid = leg["state"] == "ready"
-    live = _notes()
     state = index_state(live=live)
-    if state["state"] == "cold" or (state["state"] == "stale" and state["pending"] <= STALE_BUDGET):
-        state = build_index(rebuild=state["state"] == "cold", live=live)["index"]
+    if warm["state"] != "warming" and (
+            state["state"] == "cold" or (state["state"] == "stale" and state["pending"] <= STALE_BUDGET)):
+        # `wait=False`: another process mid-build is served around, not waited for
+        state = build_index(rebuild=state["state"] == "cold", embed=embeddings.lazy_embed(), live=live,
+                            wait=False)["index"]
     # else: served as it is; `index` in the reply says stale and how far behind
     store = get_store(INDEX)
     group_terms = [set(_tokens(q)) for q in groups]

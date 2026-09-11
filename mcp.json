@@ -8,8 +8,12 @@
         "${CLAUDE_PLUGIN_ROOT}",
         "--extra",
         "mcp",
+        "--extra",
+        "dense",
         "silica",
-        "mcp"
+        "mcp",
+        "--retrieval",
+        "local-hybrid"
       ]
     }
   }

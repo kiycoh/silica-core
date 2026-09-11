@@ -31,14 +31,16 @@ def test_both_mcp_files_launch_a_bare_silica_mcp():
         assert set(doc) == {key}, name
         srv = doc[key]["silica-core"]
         args = srv["args"]
-        assert args[args.index("silica"):args.index("silica") + 2] == ["silica", "mcp"], name
+        # ...and the same retrieval mode as every block `silica setup` writes:
+        # installing Silica through the plugin or through setup is one experience.
+        assert args[args.index("silica"):] == MCP_COMMAND[3:], name
         assert "env" not in srv  # vault = the folder the client opened, never a pin
 
     # Codex is the install path setup_client also writes by hand, so those two
-    # still have to be the same command, prefix-wise: a surface flag may follow.
+    # have to be the same command.
     codex = json.loads((ROOT / "mcp.codex.json").read_text(encoding="utf-8"))
     srv = codex["mcp_servers"]["silica-core"]
-    assert [srv["command"], *srv["args"]][:len(MCP_COMMAND)] == MCP_COMMAND
+    assert [srv["command"], *srv["args"]] == MCP_COMMAND
 
 
 
@@ -74,9 +76,10 @@ def test_the_registry_entry_is_launchable_and_owns_its_package():
     assert server["version"] == pkg["version"]
 
     # Same shape as the block `silica setup <client>` writes, executable aside.
-    named = {a["name"]: a["value"] for a in pkg["runtimeArguments"]}
-    assert [pkg["runtimeHint"], "--from", named["--from"]] == MCP_COMMAND[:3]
-    assert [a["value"] for a in pkg["packageArguments"]] == MCP_COMMAND[4:]
+    def flat(args):  # what a client spells: `--name value` for named, `value` for positional
+        return [t for a in args for t in ([a["name"], a["value"]] if a["type"] == "named" else [a["value"]])]
+    assert [pkg["runtimeHint"], *flat(pkg["runtimeArguments"])] == MCP_COMMAND[:3]
+    assert flat(pkg["packageArguments"]) == MCP_COMMAND[4:]
 
 
 

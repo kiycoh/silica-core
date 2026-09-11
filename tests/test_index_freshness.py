@@ -82,4 +82,5 @@ def test_silicaignore_hides_files_by_name_and_by_path(root, tmp_path):
     rows = {f["path"]: f for f in root.files(status="excluded")["files"]}
     assert rows["templates/daily.md"]["reason"] == "ignore rule"
     assert rows["README.md"]["reason"] == "ignore rule" and rows["n1.draft.md"]["reason"] == "ignore rule"
-    assert "templates/keep.txt" in rows and rows["templates/keep.txt"]["reason"].startswith("not indexed")
+    assert "templates/keep.txt" not in rows, "a .txt is prose: the *.md rule does not name it"
+    assert "templates/keep.txt" in {f["path"] for f in root.files(status="indexed")["files"]}
