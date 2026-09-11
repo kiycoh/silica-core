@@ -131,3 +131,8 @@ docs/research/
 
 # zvec-grep workspace index (arm Z of scripts/baseline.py)
 .zvec-grep/
+
+# Byproducts of assets/quickstart.tape: the GIF is what the README serves,
+# the video and the poster frame regenerate from the tape in one command.
+assets/quickstart.mp4
+assets/quickstart-poster.png
