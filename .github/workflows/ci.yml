@@ -81,3 +81,76 @@ jobs:
           printf '# Compaction\n\nLSM trees merge sorted runs on write.\n' > vault/notes.md
           docker run --rm -v "$PWD/vault:/vault" silica-core:ci search compaction -k 1 | tee out.json
           grep -q notes.md out.json
+
+  # The README says the package runs where Python runs; until this job the
+  # only proof was Ubuntu. Not the suite (mypy, ruff and the tests do not
+  # change with the OS): the wheel, the CLI and the stdio server, the three
+  # things a user on macOS or Windows actually touches, run from the wheel
+  # and outside the source tree so an import that only resolves in the
+  # checkout cannot pass here. One Python: the test job covers the versions.
+  platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash   # one script for three shells; the Windows runner ships Git Bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0   # setuptools-scm names the wheel from the tag
+
+      # activate-environment puts the venv's bin (Scripts on Windows) on PATH
+      # for every later step, which is the one place the three systems differ.
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          python-version: "3.12"
+          activate-environment: true
+
+      - name: Build and install the wheel
+        run: |
+          uv build --wheel
+          uv pip install "$(ls dist/*.whl)[mcp]"
+          silica --version
+
+      # Three processes over one folder: init builds the index, index refreshes
+      # it, search reads it back. Cross-process is the part with a platform
+      # branch (the file lock has no fcntl on Windows), so no single-process
+      # shortcut here.
+      - name: CLI
+        run: |
+          mkdir vault && cd vault
+          printf '# Compaction\n\nLSM trees merge sorted runs on write; la città dorme → then wakes.\n' > notes.md
+          silica init
+          silica index
+          silica search compaction -k 1 | tee out.json
+          grep -q notes.md out.json
+
+      # Raw JSON-RPC over a pipe, the same way tests/test_mcp_surface.py drives
+      # the server: no client library, and exactly what every harness does.
+      - name: MCP stdio
+        working-directory: vault
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          p = subprocess.Popen(["silica", "mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+          def send(o):
+              p.stdin.write(json.dumps(o).encode() + b"\n"); p.stdin.flush()
+          def recv():
+              line = p.stdout.readline()
+              if not line:
+                  sys.exit(f"silica mcp died, rc={p.wait()}\n{p.stderr.read().decode(errors='replace')}")
+              return json.loads(line)
+          send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "ci", "version": "0"}}})
+          print(recv()["result"]["serverInfo"])
+          send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+          send({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "silica_search", "arguments": {"query": "compaction", "k": 1}}})
+          text = recv()["result"]["content"][0]["text"]
+          print(text[:300])
+          assert "notes.md" in text, text
+          p.kill(); p.wait(timeout=10)
+          PY
