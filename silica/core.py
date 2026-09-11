@@ -517,7 +517,7 @@ def _build_index(rebuild: bool = False, embed: bool = False, live: dict[str, flo
         try:
             out["embeddings"] = embeddings.build(to_embed, rebuild=rebuild)
         except Exception as e:
-            return _error("bad_argument", f"embeddings endpoint failed: {e}", **out)
+            return _error("bad_argument", f"embeddings failed: {e}", **out)
     return out
 
 
@@ -779,7 +779,7 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
         try:
             dense_docs, dense_secs = embeddings.rank(query, live)
         except Exception as e:  # the endpoint is the extension's business: the reply says so, the search stays lexical
-            leg, hybrid = {"state": "failed", "hint": f"embeddings endpoint failed: {e}"}, False
+            leg, hybrid = {"state": "failed", "hint": f"embeddings failed: {e}"}, False
         else:
             # the dense ranking at the store's granularity: a note by its best
             # section, a code file unit by unit, so the fusion ranks like keys
