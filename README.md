@@ -5,9 +5,9 @@
   <img src="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/banner-light.svg" alt="Silica Core" width="590" />
 </picture>
 
-**Retrieval tools for coding agents. No model in the loop.**
+**Lightweight, local evidence retrieval tools for code and research**
 
-Point it at a folder and the agent you already use gets five tools that return located evidence, never answers.
+Silica locates the source, symbol, page, or passage you and your agents need. Maximum signal, minimum machinery.
 
 <p align="center">
   <a href="https://pypi.org/project/silica-core/"><img src="https://img.shields.io/pypi/v/silica-core?style=flat&labelColor=000000&color=000000" alt="PyPI" /></a>
@@ -21,16 +21,31 @@ Point it at a folder and the agent you already use gets five tools that return l
 <!-- mcp-name: io.github.kiycoh/silica-core -->
 
 Silica indexes the markdown, code, PDFs and office files under one root and
-serves them to [Claude Code, Cursor, Zed, Codex and every other harness it
-knows](#harnesses), as MCP tools or as shell commands that print the same
+serves them to [Claude Code, Cursor, Hermes, Codex, OpenCode and every other popular harness](#harnesses), as MCP tools or as shell commands that print the same
 JSON. A hit is a path, a section, a line, a window of text and the numbers
 to judge it by. The harness owns the loop.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/kiycoh/silica-core/main/assets/quickstart.gif" alt="the quickstart recorded end to end: uv tool install, silica init reporting nine indexed documents, silica setup claude registering the MCP server, then Claude Code answering a question about the LSM compaction design space by calling silica-core and citing the PDF with its page and its line" width="900" />
+</p>
+
+Three commands, then a question asked the way you would ask any other. The
+harness calls `silica_search`, and the answer carries the file, the page and
+the line it came from.
 
 ## Install
 
 ```bash
-uv tool install 'silica-core[mcp,dense]'
+uv tool install 'silica-core[mcp]'         # BM25 over documents and their sections (faster, lighter)
+uv tool install 'silica-core[mcp,dense]'   # in addition the dense leg: numpy, a static model (still fast, more precise)
 ```
+
+The second line adds the dense leg: `numpy` and a static model2vec model, no
+torch and no GPU. It stays inert until the model is named and the sections
+are embedded — the last stanza of the Quickstart. Take it when the questions
+are paraphrases that share no words with the text; an exact term or an
+identifier is answered by the lexical leg either way, and only that leg
+reports `terms_absent`.
 
 `pipx` works the same. The package is `silica-core`, the command is
 `silica`, the tools are `silica_*`.
@@ -43,6 +58,10 @@ In any folder of markdown, code, PDFs or office files:
 silica init                               # adopt the folder: ignore file, first index
 silica search "leveled compaction" -k 5  # the best located passages
 silica setup claude                      # register the MCP server, write the guidance block into ~/.claude/CLAUDE.md
+
+# optional, with the [dense] extra: the dense leg, a static model, nothing leaves the machine
+export SILICA_EMBEDDING_MODEL=model2vec/minishlab/potion-retrieval-32M
+silica index --embed
 ```
 
 <p align="center">
@@ -105,18 +124,41 @@ Code, on the twenty SWE-QA questions zvec-grep publishes for its own
 benchmark, same embedder, k = 10, scored on the files and symbols the
 reference answer rests on.
 
-| Arm | file hit@5 · @10 | file MRR | symbol hit@10 | symbol recall |
-|---|---:|---:|---:|---:|
-| **Silica**, hybrid | **0.85 · 0.90** | **0.68** | **0.75** | **0.24** |
-| zvec-grep 0.2.2, hybrid | 0.65 · 0.75 | 0.54 | 0.55 | 0.17 |
+| Arm | file hit@5 · @10 | file MRR | symbol hit@10 | symbol recall | chars returned |
+|---|---:|---:|---:|---:|---:|
+| **Silica**, hybrid | **0.85 · 0.90** | **0.68** | **0.75** | **0.24** | 8,266 |
+| Silica, vectors | 0.80 · 0.85 | 0.67 | 0.65 | 0.21 | **6,225** |
+| Silica, lexical | 0.65 · 0.75 | 0.47 | 0.45 | 0.14 | 8,194 |
+| zvec-grep 0.2.2, hybrid | 0.65 · 0.75 | 0.54 | 0.55 | 0.17 | 7,326 |
+| zvec-grep 0.2.2, vector | 0.60 · 0.80 | 0.61 | 0.55 | 0.18 | 6,821 |
+| zvec-grep 0.2.2, FTS | 0.45 · 0.60 | 0.36 | 0.45 | 0.11 | 6,690 |
 
 On BEIR the two hybrids tie at the 95% interval: the same vectors rank the
-same, with no daemon and no vector store. On code, file MRR is +0.135 (95%
-interval +0.01 to +0.27) paired per question. Asked the way the plugin asks,
-Sonnet ran the search in 17 of 20 SWE-QA runs and closed the question in 4.7
-turns instead of 6.5, cost unchanged within its interval; zvec-grep's MCP
-search, with the guidance `zg install` writes, was chosen once in twenty.
-Corpora, intervals, the `silica_code_pack` cost runs and the commands are in
+same, with no daemon and no vector store. On code, Silica's hybrid file MRR
+is +0.135 over zvec-grep's hybrid (95% interval +0.01 to +0.27), paired per
+question. The fusion also gains +0.21 MRR and +0.30 symbol hit over Silica's
+lexical arm; no reranker or graph expansion is involved.
+
+On this measured scope, Silica is a compact, local, SOTA-competitive
+retriever: it matches zvec-grep on BEIR and leads the paired SWE-QA
+code-localization replay with the same embedder.
+
+Retrieval matters only if the agent does less work without losing the answer.
+These are separate experiments and are not pooled:
+
+| Workload and arm | Runs | Quality | Search used | Turns | Tool calls | Seconds | Warm cost |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Repository, search-first contract | 20 | Judge 59.7 | 17/20 | **4.7** | — | **24** | $0.197 |
+| Repository, same plugin without contract | 20 | Judge 50.6 | 0/20 | 6.5 | — | 28 | **$0.180** |
+| Documents, resident Silica tools | 12 tasks | 12/12 correct | 12/12 | **3.9** | **2.9** | — | **$0.20** |
+| Documents, no plugin | 12 tasks | 12/12 correct | — | 5.0 | 4.0 | — | $0.22 |
+
+The repository result is one repetition: turns improve by 1.75 (95% interval
+0.55 to 3.05 fewer), while Judge and cost remain inconclusive. The document
+rows belong to a 144-run study over twelve questions and a 5.5M-token corpus.
+They establish less work on that workload, not a universal agent claim.
+
+Corpora, intervals, per-task exceptions and reproduction commands are in
 [benchmarks](public/benchmarks.md).
 
 ## Harnesses
