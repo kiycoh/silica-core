@@ -124,6 +124,21 @@ def test_write_note_decodes_a_body_escaped_twice(root, tmp_path):
     assert (tmp_path / "esc" / "plain.md").read_text(encoding="utf-8") == "one line, no escapes"
 
 
+def test_cli_replies_in_utf8_whatever_the_console_encoding(root, tmp_path, monkeypatch):
+    # A piped stdout on Windows carries the console code page (cp1252), which
+    # has no arrow: without the reconfigure in main() the search dies at print.
+    import io
+    import sys
+    from silica.cli import main
+    root.write_note("enc/arrow", "# Arrow\n\nleft → right\n")
+    root.build_index()
+    out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", out)
+    assert main(["--vault", str(tmp_path), "read", "enc/arrow.md"]) == 0
+    out.flush()
+    assert "left → right" in out.buffer.getvalue().decode("utf-8")
+
+
 def test_cli_prints_the_tool_reply(root, tmp_path, capsys):
     from silica.cli import main
     root.build_index()

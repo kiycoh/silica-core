@@ -7,6 +7,7 @@ and exits 1 when the reply carries `error`."""
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
@@ -116,6 +117,11 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows hands a piped stdout the console code page, and the first note
+    # with an arrow or a CJK character then dies inside print. Every reply
+    # here is UTF-8; the MCP transport writes its own bytes and is unaffected.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
     p = _parser()
     a = p.parse_args(argv)
     if not a.cmd:
