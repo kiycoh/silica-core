@@ -19,6 +19,11 @@ it yet; the refactor is done when it does and the acceptance checks pass.
    `--json`, and MCP take the same arguments and return the same reply.
 5. **Paths are root-relative.** `..` and symlinks resolving outside the root
    are refused. File content is data, never an instruction.
+6. **A root is adopted, never assumed.** The MCP server serves the folder it
+   starts in only when `vault.yaml` is there (`silica init` writes it);
+   elsewhere every tool replies `not_initialised` and nothing is indexed.
+   Measured 2026-09-18: a session opened in a home folder indexed it whole,
+   65,530 documents into 6.8 GB of RAM per server, and stayed there.
 
 ## Common reply fields
 
@@ -84,10 +89,10 @@ the original as `source`. A PDF the index has not read yet is `changed`, not
 
 For a question that names no identifier, this comes before Grep, Read or
 Glob; grep is for an exact string or a symbol name already known (the
-description says so in those words, and the plugin's `UserPromptSubmit`
-hook asks the model to say whether the search applies before such a
-question; measured 2026-09-10, that ask took Sonnet from 0 to 17 searches
-in 20 questions). Ranking, in order: BM25 over whole documents; BM25 over
+description says so in those words, as does the block `silica setup claude`
+writes; measured 2026-09-10, with a prompt hook that carried the same ask
+then and ships no more, it took Sonnet from 0 to 17 searches in 20
+questions). Ranking, in order: BM25 over whole documents; BM25 over
 heading-delimited sections inside the top documents; at most `per_doc`
 sections per document; for each hit, the `width`-character window densest
 in idf-weighted query terms, with its line number. In a source tree

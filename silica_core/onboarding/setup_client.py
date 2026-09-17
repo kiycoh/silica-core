@@ -581,9 +581,9 @@ def _setup_claude(dry_run: bool) -> int:
     if result.returncode != 0:
         _say(f"  ✗ `{escape(printable)}` failed")
         return result.returncode
-    _say("  ✓ registered with Claude Code (user scope: every project, vault from its folder)")
+    _say("  ✓ registered with Claude Code (user scope: every project; a folder is served once `silica init` adopted it)")
     _say(
-        "  for the skill and the session hooks too: "
+        "  for the skill too: "
         "claude plugin marketplace add kiycoh/silica-core && "
         "claude plugin install silica-core@silica-core"
     )
@@ -593,8 +593,7 @@ def _setup_claude(dry_run: bool) -> int:
 
 def _write_claude_guidance(dry_run: bool) -> None:
     """The block of guidance.py into the user-level CLAUDE.md, between
-    markers: when to search before grep. Consultive by nature, so the
-    plugin's prompt hook carries the same ask per question; measured
+    markers: when to search before grep. Consultive by nature; measured
     2026-09-10, neither the description nor a skill alone moved Sonnet."""
     from silica_core.onboarding.guidance import claude_md_path, write_guidance
     path = claude_md_path()

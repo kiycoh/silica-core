@@ -173,9 +173,10 @@ def main(argv: list[str] | None = None) -> int:
             checks.render_report(results)
         return checks.exit_code(results)
     if a.cmd == "init":
-        from silica_core.onboarding.adopt import declare_write_dir, seed_silicaignore
+        from silica_core.onboarding.adopt import declare_write_dir, mark_root, seed_silicaignore
         ignore = seed_silicaignore(root)
         declared = declare_write_dir(root)
+        mark_root(root)  # a root from here on: the MCP server serves only those
         built = core.build_index(rebuild=True)
         return _emit({"root": str(root), "silicaignore": str(ignore) if ignore else None,
                       "write_dir": declared, "index": built["index"], "docs": built["docs"],

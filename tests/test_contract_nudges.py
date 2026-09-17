@@ -1,51 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2026 Alessandro Carosia
 
-"""The three ways the plugin asks to be used: the prompt hook fires on a
-question without an identifier and on nothing else; `silica setup claude`
+"""The two ways the plugin asks to be used: `silica setup claude`
 puts its block into CLAUDE.md once, between markers; the search description
 opens with the ask and stays under Claude Code's comfortable size."""
 from __future__ import annotations
 
-import importlib.util
-import json
 import re
-import subprocess
-import sys
-from pathlib import Path
-
-REPO = Path(__file__).resolve().parents[1]
-
-
-def _hook():
-    spec = importlib.util.spec_from_file_location("prompt_hook", REPO / "hooks" / "prompt.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def test_hook_fires_on_a_question_without_an_identifier_only():
-    h = _hook()
-    assert h.nudge("Where does the code decide what to do when a tool's answer is too long?") == h.LINE
-    assert h.nudge("How does the migration system handle irreversible operations?") == h.LINE
-    assert h.nudge("List every call site of `best_window_spans`.") is None  # a name in backticks
-    assert h.nudge("What does silica_code_pack do with a #L12 target?") is None  # snake_case, #L
-    assert h.nudge("How does SessionRedirectMixin merge cookies?") is None  # camelCase
-    assert h.nudge("fix the bug in silica_core/core.py") is None  # a path, and not a question
-    assert h.nudge("") is None
-    out = subprocess.run([sys.executable, str(REPO / "hooks" / "prompt.py")],
-                         input=json.dumps({"prompt": "Why is the cache invalidated on every write?"}),
-                         capture_output=True, text=True)
-    assert out.returncode == 0 and out.stdout.strip() == h.LINE
-    assert subprocess.run([sys.executable, str(REPO / "hooks" / "prompt.py")], input="not json",
-                          capture_output=True, text=True).returncode == 0
-    # Claude Code loads hooks/hooks.json from the plugin root on its own and
-    # rejects a manifest that names it again ("Duplicate hooks file detected").
-    # Declared, the key reached every install of 0.3.0 and again of 0.8.2.
-    manifest = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
-    assert "hooks" not in manifest, "Claude Code auto-loads hooks/hooks.json; naming it again is an error"
-    hooks = json.loads((REPO / "hooks" / "hooks.json").read_text())
-    assert "UserPromptSubmit" in hooks["hooks"]
 
 
 def test_setup_claude_writes_its_block_once(tmp_path, monkeypatch):
@@ -80,7 +41,6 @@ def test_no_contract_surface_says_blocked():
     from silica_core.onboarding.guidance import GUIDANCE
     from silica_core.ui.mcp import exposed_tools
     surfaces = {name: t.description for name, t in exposed_tools(False).items()}
-    surfaces["hook"] = _hook().LINE
     surfaces["guidance"] = GUIDANCE
     for name, text in surfaces.items():
         assert not re.search(r"\bblocked\b", text, re.I), f"{name} says 'blocked'"

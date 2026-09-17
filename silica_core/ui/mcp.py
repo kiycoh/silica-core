@@ -10,6 +10,7 @@ imported inside run_mcp so the module loads without the [mcp] extra.
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import sys
@@ -101,7 +102,39 @@ def parse_cli_args(args: list[str]) -> dict[str, Any]:
     return opts
 
 
-def make_server(extended: bool = False):
+def root_gate(retrieval: str):
+    """The check every call runs first: the folder is a root only once
+    `silica init` left vault.yaml in it. Until then every tool replies
+    `not_initialised` and nothing is indexed. The first call that passes
+    starts the retrieval warm-up, once, so a folder adopted mid-session
+    serves from then on."""
+    from pathlib import Path
+
+    from silica_core.config import CONFIG
+    from silica_core.kernel.vault_manifest import initialised
+
+    root = Path(CONFIG.vault_path or os.getcwd()).resolve()
+    started = False
+
+    def check() -> str | None:
+        nonlocal started
+        if not initialised(root):
+            return json.dumps({"error": {"code": "not_initialised", "hint": (
+                f"{root} is not a silica root: run `silica init` there once, or start the "
+                "session in a folder that has vault.yaml")}, "root": str(root)})
+        if not started:
+            started = True
+            configure_retrieval(retrieval)
+        return None
+
+    return check
+
+
+NOT_A_ROOT = (" This folder is not a silica root: every tool replies not_initialised until "
+              "`silica init` runs in it.")
+
+
+def make_server(extended: bool = False, retrieval: str = "lexical"):
     import anyio
     import mcp.types as types
     from mcp.server.lowlevel import Server
@@ -110,7 +143,9 @@ def make_server(extended: bool = False):
 
     tools = exposed_tools(extended)
     vault = str(getattr(CONFIG, "vault_path", "") or "").strip()
-    server = Server("silica-core", instructions=INSTRUCTIONS + (f" Root: {vault}" if vault else ""))
+    gate = root_gate(retrieval)
+    server = Server("silica-core", instructions=INSTRUCTIONS + (f" Root: {vault}" if vault else "")
+                    + (NOT_A_ROOT if gate() else ""))  # gate() at start warms an adopted root up, as before
 
     @server.list_tools()
     async def list_tools() -> list[types.Tool]:
@@ -129,6 +164,8 @@ def make_server(extended: bool = False):
         t = tools.get(name)
         if t is None:
             raise ValueError(f"Unknown tool: {name}")
+        if (refused := gate()) is not None:
+            return [types.TextContent(type="text", text=refused)]
         out = await anyio.to_thread.run_sync(lambda: t.run(**(arguments or {})))
         return [types.TextContent(type="text", text=out)]
 
@@ -153,8 +190,7 @@ def run_mcp(extended: bool = False, retrieval: str = "lexical") -> int:
     except ImportError:
         print("silica mcp needs the [mcp] extra: uv pip install 'silica-core[mcp]'", file=sys.stderr)
         return 1
-    configure_retrieval(retrieval)
-    server = make_server(extended)
+    server = make_server(extended, retrieval)
     n = len(exposed_tools(extended))
 
     async def _serve() -> None:

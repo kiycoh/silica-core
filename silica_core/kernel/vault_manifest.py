@@ -25,6 +25,14 @@ from silica_core.kernel.recall import paths
 logger = logging.getLogger(__name__)
 
 MANIFEST_REL = "vault.yaml"
+
+
+def initialised(vault: str | Path) -> bool:
+    """Whether `silica init` adopted this folder: vault.yaml is there. The MCP
+    server serves no other folder — opened in a home directory, a session
+    indexed it whole on 2026-09-18: 65,530 documents into 6.8 GB of RAM per
+    server."""
+    return (Path(vault) / MANIFEST_REL).is_file()
 # Where notes go in a source tree, and the safe-mode mirror folder of a prose vault.
 CODE_WRITE_DIR = "docs/silica"
 SAFE_WRITE_DIR = "silica"
@@ -114,6 +122,8 @@ def load_manifest(vault: str | Path) -> VaultManifest:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning("vault.yaml: parse failed (%s) — using defaults", exc)
+        return defaults
+    if raw is None:  # comment-only: the marker `silica init` leaves in a prose folder
         return defaults
     if not isinstance(raw, dict):
         logger.warning("vault.yaml: expected a mapping — using defaults")

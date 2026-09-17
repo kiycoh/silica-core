@@ -55,7 +55,7 @@ reports `terms_absent`.
 In any folder of markdown, code, PDFs or office files:
 
 ```bash
-silica init                               # adopt the folder: ignore file, first index
+silica init                               # adopt the folder: ignore file, vault.yaml, first index; the MCP server serves adopted folders only
 silica search "leveled compaction" -k 5  # the best located passages
 silica setup claude                      # register the MCP server, write the guidance block into ~/.claude/CLAUDE.md
 
@@ -84,8 +84,8 @@ the passage; the page beside it is the check.
 In a source tree every function, method, class and constant is its own unit:
 a hit's `section` is the symbol, `span` its lines, and
 `silica_read(path, section=…)` serves the body. For a symbol whose name is
-known, grep wins; for a question that names none, the search comes first,
-and the plugin's prompt hook asks the model to say so before it greps. The
+known, grep wins; for a question that names none, the search comes first:
+the tool description and the block `silica setup claude` writes say so. The
 contract, the reply shapes and the acceptance checks are in
 [TOOLS.md](TOOLS.md). Nothing needs an API key or a network.
 

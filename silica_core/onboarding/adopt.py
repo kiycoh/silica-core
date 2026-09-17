@@ -105,6 +105,22 @@ def write_dir_for(vault: str | Path) -> str:
     return CODE_WRITE_DIR if looks_like_code(root) else SAFE_WRITE_DIR
 
 
+def mark_root(vault: str | Path) -> Path | None:
+    """Leave `vault.yaml` behind when adoption declared nothing (a prose folder
+    files in place): the file is what says this folder is a root, and the MCP
+    server serves no other. Returns the path when this call wrote it."""
+    manifest = Path(vault) / MANIFEST_REL
+    if manifest.exists():
+        return None
+    try:
+        manifest.write_text("# silica init: this folder is a root. `write_dir:` and `sources:` may go here.\n",
+                            encoding="utf-8")
+    except OSError as exc:
+        logger.warning("could not write %s (%s) — the MCP server will not serve this folder", manifest, exc)
+        return None
+    return manifest
+
+
 def declare_write_dir(vault: str | Path) -> str | None:
     """Persist `write_dir` in `<vault>/vault.yaml` when the vault needs one.
 

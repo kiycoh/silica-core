@@ -194,7 +194,9 @@ zero, cost +$0.018 (-0.005 to +0.041) and judge +9.1 (-8.2 to +25.7) inside
 the interval at one repetition, 13 wins and 6 losses. Against the same
 morning's grep-and-reads arm the judge is +15.4 (+3.3 to +28.6). In the same
 grid zvec-grep's MCP search, with the guidance `zg install` writes, was
-chosen once in its 20 runs.
+chosen once in its 20 runs. The hook was removed on 2026-09-18: it fired on
+every question in every session, root or not; the description and the
+guidance block stay.
 
 **Half the description, the same ask.** The description above ran at 2,046
 characters; on 2026-09-11 a copy cut to 1,047 by deletion alone (the
