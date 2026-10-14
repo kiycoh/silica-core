@@ -35,6 +35,9 @@ the line it came from.
 
 ## Install
 
+In Claude Code, install [the plugin](#how-the-claude-code-plugin-works)
+instead: it brings its own server, dense leg included.
+
 ```bash
 uv tool install 'silica-core[mcp]'         # BM25 over documents and their sections (faster, lighter)
 uv tool install 'silica-core[mcp,dense]'   # in addition the dense leg: numpy, a static model (still fast, more precise)
@@ -191,14 +194,58 @@ Docker and the REPL are in [public/harnesses.md](public/harnesses.md).
 
 ## How the Claude Code plugin works
 
+In Claude Code the plugin is all you need: it brings its own server and the
+skills. The [Install](#install) section above and `silica-core setup claude`
+are for other clients; with both, two servers serve the same folder.
+
+### Install
+
+It needs [uv](https://docs.astral.sh/uv/) on `PATH`, which starts the server.
+
+```bash
+claude plugin install silica-core --marketplace kiycoh/silica-core
+```
+
+That one step works on Claude Code 2.1.275 or later, and
+`/plugin install silica-core --marketplace kiycoh/silica-core` does the same
+inside a session. On an older client, add the marketplace first:
+`claude plugin marketplace add kiycoh/silica-core`, then
+`claude plugin install silica-core@silica-core`.
+
+### First run
+
+1. Start Claude Code in the folder you want to search.
+2. Wait for the first start. It is slower than the next ones: uv installs the
+   packages and the server downloads its model, once.
+3. Press **Index** above the prompt, or type `/silica-init`. Nothing is
+   indexed until you do.
+4. Ask a question about the folder. Claude searches it with `silica_search`.
+   Until the vectors are built the search is lexical, and its replies say
+   `dense: warming`.
+
+### Update
+
+Refresh the marketplace, then the plugin. The new version loads in the next
+session.
+
+```bash
+claude plugin marketplace update silica-core
+claude plugin update silica-core@silica-core
+```
+
+### What it runs, reads and downloads
+
 The plugin is an MCP server plus a small mod in `hooks/`. Neither
 one sends your files, prompts or conversation anywhere.
 
-- **The server** starts with `uv run --frozen --project <plugin folder>`. The
-  first time, uv installs the packages pinned in `uv.lock` from PyPI (and a
-  Python build if the machine has no Python 3.11 or newer), and the server
-  downloads the `potion-retrieval-32M` model from Hugging Face. Nothing else
-  is downloaded.
+- **The server** starts with `uv run --frozen --project <plugin folder>`.
+  The plugin folder is
+  `~/.claude/plugins/cache/silica-core/silica-core/<version>`, with the
+  version `claude plugin list` shows. The first time, uv installs the
+  packages pinned in `uv.lock` from PyPI (and a Python build if the machine
+  has no Python 3.11 or newer), and the server downloads the
+  `potion-retrieval-32M` model from Hugging Face. Nothing else is
+  downloaded.
 - **Indexing.** In a folder that isn't indexed yet, the mod shows an
   **Index** button above the prompt; `/silica-init` does the same. Either one
   runs `uv run --frozen --project <plugin folder> --extra mcp --extra dense
@@ -231,6 +278,56 @@ one sends your files, prompts or conversation anywhere.
     `implemented` and `partial` name a commit or a path in `implemented_in`,
     `pending` and `draft` name none, `partial` and `dropped` carry an
     `implementation_note`.
+
+### On an older Claude Code
+
+The **Index** button, `/silica-init`, the search hints and the docs upkeep
+come from the mod, which needs Claude Code 2.1.293 or later. An older client
+still runs the server and the skills. Index a folder from a terminal opened
+in it instead:
+
+```bash
+uv run --frozen --project <plugin folder> --extra mcp --extra dense silica-core init
+```
+
+### When it does not work
+
+- **The silica tools are missing, or Claude Code says it could not connect to
+  `plugin:silica-core:silica-core`.** The server did not start; `/mcp` shows
+  its state. The usual causes are uv missing from `PATH` and a first install
+  that failed. Start the server by hand in the folder to read the error:
+
+  ```bash
+  uv run --frozen --project <plugin folder> --extra mcp --extra dense silica-core mcp --retrieval local-hybrid
+  ```
+
+  When all is well it prints `serving 5 tools on stdio, waiting for a client`;
+  Ctrl+C ends it.
+- **No Index button.** It never shows in your home folder or in `/`, which
+  are too large to index whole. After **Not here** it stays hidden in that
+  folder, and `/silica-init` still indexes it. On a client older than
+  2.1.293, see above.
+- **What this machine can read.** `silica-core doctor` checks the install
+  and the folder:
+
+  ```bash
+  uv run --frozen --project <plugin folder> --extra mcp --extra dense silica-core doctor
+  ```
+
+### Uninstall
+
+```bash
+claude plugin uninstall silica-core@silica-core
+```
+
+The plugin leaves two things behind:
+
+- `vault.yaml`, and `.silicaignore` in a code repository, in each folder you
+  indexed;
+- the indexes in `~/.silica/index/`, one folder each.
+
+Delete them by hand. An index deleted while the plugin is still installed is
+rebuilt the next time its folder is searched.
 
 ## Notes
 
