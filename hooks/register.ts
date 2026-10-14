@@ -1,6 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderElement } from 'claude-code'
-import { covers, describe, lint, listed, reminder, scan } from './docs.ts'
+import {
+  codePaths, covers, decision, describe, frontmatter, HUB, isAccepted, isRecord, listOf, mdLinks, normalize, parseLog,
+  paths, reminder, SHA, stateProblems, supersedes,
+} from './docs.ts'
+import type { Front } from './docs.ts'
+import type { DocsReport } from './types.d.ts'
 import { GUIDANCE, START } from './guidance.ts'
 
 // The ask of docs/adr/0001, lever 1: the UserPromptSubmit hook removed in
@@ -14,7 +19,10 @@ const IDENTIFIER = /`|\b[A-Za-z]\w*_\w+\b|\b[A-Za-z]*[a-z][A-Z]\w*\b|\/\w|\.\w{1
 export const NUDGE = 'silica-core: this question names no identifier. Before any grep (a Grep tool, or grep or rg in a shell), Glob or Read, state whether silica_search applies (yes or no); if yes, call it first with the question as `query`.'
 
 // ponytail: the folder the session started in; SILICA_VAULT pointing elsewhere is not seen (ADR-0001)
-const adopted = async ($: EngineInterface) => $.fs.exists(`${await $.session.root()}/vault.yaml`)
+async function adopted($: EngineInterface): Promise<boolean> {
+  const root = await $.session.root()
+  return $.fs.exists(`${root}/vault.yaml`)
+}
 
 // Where `silica-core setup claude` writes its block: guidance.claude_md_path().
 async function claudeMdHoldsTheBlock($: EngineInterface): Promise<boolean> {
@@ -55,6 +63,149 @@ let stops = { blocks: 0, last: '' }
 const changed = (result: any): number =>
   (result?.structuredPatch ?? []).reduce((n: number, h: any) =>
     n + (h.lines ?? []).filter((l: string) => l.startsWith('+') || l.startsWith('-')).length, 0)
+
+// The docs upkeep's reading through the engine, git and the files
+// (docs/adr/0004); what reads text alone is in docs.ts
+
+async function git($: EngineInterface, root: string, args: string[]): Promise<string> {
+  const r = await $.process.run(['git', '-C', root, ...args], { timeoutMs: 30_000 }).catch(() => undefined)
+  return r && r.exitCode === 0 ? r.stdout : ''
+}
+
+// every commit reachable from HEAD, or null where that cannot be known (not a repo, a shallow clone)
+async function commits($: EngineInterface, root: string): Promise<string[] | null> {
+  const shallow = await git($, root, ['rev-parse', '--is-shallow-repository'])
+  if (shallow.trim() !== 'false') return null
+  const all = await git($, root, ['rev-list', 'HEAD'])
+  return all.split('\n').filter(Boolean)
+}
+
+// a file's text, undefined when it cannot be read
+async function readText($: EngineInterface, path: string): Promise<string | undefined> {
+  const t = await $.fs.read(path).catch(() => undefined)
+  return t === undefined ? undefined : String(t)
+}
+
+// whether a root-relative path, a folder with its trailing slash or without, is in the tree
+async function isThere($: EngineInterface, root: string, rel: string): Promise<boolean> {
+  return $.fs.exists(`${root}/${rel.replace(/\/$/, '')}`)
+}
+
+// the records under docs/adr/ and docs/specs/, root-relative
+async function records($: EngineInterface, root: string): Promise<string[]> {
+  const adr = await $.fs.list(`${root}/docs/adr`).catch(() => [])
+  const specs = await $.fs.list(`${root}/docs/specs`).catch(() => [])
+  const out = adr.map(x => `docs/adr/${x.name}`)
+  for (const x of specs) out.push(x.kind === 'dir' ? `docs/specs/${x.name}/spec.md` : `docs/specs/${x.name}`)
+  return out.filter(isRecord)
+}
+
+// what a record names that is not there: a SHA that is not one commit
+// reachable from HEAD, a path of implemented_in or documents not in the tree
+async function evidence($: EngineInterface, root: string, fm: Front, known: string[] | null): Promise<string[]> {
+  const out: string[] = []
+  for (const ref of listOf(fm.implemented_in)) {
+    if (SHA.test(ref)) {
+      if (known && known.filter(c => c.startsWith(ref)).length !== 1) out.push(`${ref} is not one commit reachable from HEAD`)
+    } else if (!(await isThere($, root, ref))) out.push(`${ref} is neither a commit nor a path in the tree`)
+  }
+  for (const ref of listOf(fm.documents)) {
+    if (!SHA.test(ref) && !(await isThere($, root, ref))) out.push(`documents names ${ref}, which is not in the tree`)
+  }
+  return out
+}
+
+// each record by its path, with the paths its implemented_in and documents name
+async function listed($: EngineInterface, root: string): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>()
+  for (const rec of await records($, root)) {
+    const names = paths(frontmatter((await readText($, `${root}/${rec}`)) ?? ''))
+    if (names.length) out.set(rec, names)
+  }
+  return out
+}
+
+async function scan($: EngineInterface, root: string): Promise<DocsReport> {
+  const recs = await records($, root)
+  if (!recs.length) return { problems: [], drift: [] }
+  const fms = new Map<string, Front>()
+  for (const rec of recs) fms.set(rec, frontmatter((await readText($, `${root}/${rec}`)) ?? ''))
+
+  const known = await commits($, root)
+  const problems: string[] = []
+  for (const [rec, fm] of fms) {
+    if (fm.implementation === undefined) continue
+    for (const p of [...stateProblems(fm), ...(await evidence($, root, fm, known))]) problems.push(`${rec}: ${p}`)
+  }
+
+  // drift: commits to a record's files after the record's last commit (its mtime when git does not track it)
+  const hubs = new Map<string, number>()
+  for (const fm of fms.values()) for (const p of paths(fm)) hubs.set(p, (hubs.get(p) ?? 0) + 1)
+  const last = new Map<string, number>()
+  for (const c of parseLog(await git($, root, ['log', '--format=@%ct', '--name-only', '--', 'docs/adr', 'docs/specs'])))
+    for (const f of c.files) if (!last.has(f)) last.set(f, c.t)
+  const anchors = new Map<string, number>()
+  for (const rec of recs) {
+    const at = last.get(rec)
+    if (at !== undefined) { anchors.set(rec, at); continue }
+    const st = await $.fs.stat(`${root}/${rec}`).catch(() => undefined)
+    anchors.set(rec, Math.floor((st?.mtimeMs ?? 0) / 1000))
+  }
+  const since = Math.min(...anchors.values())
+  const log = parseLog(await git($, root, ['log', `--since=@${since}`, '--format=@%ct', '--name-only']))
+  const drift: DocsReport['drift'] = []
+  for (const [rec, fm] of fms) {
+    if (fm.implementation !== 'implemented' && fm.implementation !== 'partial') continue
+    const own = paths(fm).filter(p => (hubs.get(p) ?? 0) < HUB)
+    const anchor = anchors.get(rec)!
+    const n = own.length ? log.filter(c => c.t > anchor && c.files.some(f => own.some(p => covers(p, f)))).length : 0
+    if (n) drift.push({ rec, commits: n })
+  }
+  drift.sort((a, b) => b.commits - a.commits)
+  return { problems, drift }
+}
+
+// what the docs this turn wrote get wrong, one line each; `docs` holds each
+// with its text before the turn's first write (null for a new one)
+async function lint($: EngineInterface, root: string, docs: Map<string, string | null>): Promise<string[]> {
+  const out: string[] = []
+  const entries = await $.fs.list(root).catch(() => [])
+  const top = new Set(entries.filter(x => x.kind === 'dir').map(x => x.name))
+  const adrEntries = await $.fs.list(`${root}/docs/adr`).catch(() => [])
+  const adrs = adrEntries.map(x => x.name)
+  let known: string[] | null | undefined
+  for (const [rel, before] of docs) {
+    const text = await readText($, `${root}/${rel}`)
+    if (text === undefined) continue
+    const dir = rel.split('/').slice(0, -1).join('/')
+    for (const target of mdLinks(text)) {
+      const to = normalize(`${dir}/${target}`)
+      if (to === undefined || !(await isThere($, root, to))) out.push(`${rel}: the link to ${target} leads nowhere`)
+    }
+    for (const p of codePaths(text)) {
+      if (top.has(p.split('/')[0]!) && !(await isThere($, root, p))) out.push(`${rel}: \`${p}\` is not in the repo`)
+    }
+    if (isRecord(rel)) {
+      const fm = frontmatter(text)
+      if (fm.implementation !== undefined) {
+        known ??= await commits($, root)
+        for (const p of [...stateProblems(fm), ...(await evidence($, root, fm, known))]) out.push(`${rel}: ${p}`)
+      }
+      for (const n of supersedes(text)) {
+        if (!adrs.some(x => x.startsWith(`${n}-`))) out.push(`${rel}: it names ADR-${n}, which docs/adr/ does not hold`)
+      }
+    }
+    const num = rel.match(/^docs\/adr\/(\d{4})-/)?.[1]
+    const same = num ? adrs.filter(x => x.startsWith(`${num}-`)) : []
+    if (same.length > 1) out.push(`${rel}: ADR number ${num} is taken by ${same.length} files: ${same.join(', ')}`)
+    const was = before != null && rel.startsWith('docs/adr/') && isAccepted(before) ? decision(before) : undefined
+    if (was !== undefined && was.trim() !== (decision(text) ?? '').trim()) {
+      out.push(`${rel}: the Decision of an accepted ADR changed this turn. If the decision was reversed or replaced, ` +
+        'put it back, write a new ADR that supersedes this one and mark this one "Superseded by" it; if the change only clarifies it, say so')
+    }
+  }
+  return out
+}
 
 async function adopt($: EngineInterface): Promise<{ isIndexed: boolean; text: string }> {
   const root = await $.session.root()
