@@ -9,7 +9,8 @@ vectors are there (`dense` in the reply says so, or why not).
 Off until `SILICA_EMBEDDING_BASE_URL` names an endpoint or
 `SILICA_EMBEDDING_MODEL` names `model2vec/<hf id>`. The vectors live beside
 the lexical index: `embed.json` says which sections of which document sit
-at which row, `embed.f32` holds the rows, unit length, float32. A section
+at which row, `embed.q8` holds the rows as int8 codes (see `_quantize`),
+mapped rather than read where the platform allows (see `_map`). A section
 is embedded as `<stem> › <heading>` plus its first `_UNIT_CHARS` characters,
 so the dense leg lands on the passage, not on the document's opening —
 measured 2026-09-09: one vector per document found the paper and handed
@@ -29,11 +30,13 @@ from __future__ import annotations
 
 import importlib
 import math
+import mmap
+import os
 import threading
 import time
 from array import array
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple, Sequence
 from urllib.parse import urlsplit
 
 import orjson
@@ -46,7 +49,24 @@ _BATCH = 16
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 MODEL2VEC_PREFIX = "model2vec/"
 _M2V = None
-_CACHE: tuple[tuple[int, int], dict, array] | None = None  # (stamp of embed.json, meta, rows)
+# Scoring converts the int8 rows to float32 one block of this many bytes at a
+# time, into one reused buffer: int8 has no BLAS, and converting the whole
+# matrix per query cost 10x the float32 product where a cache-sized block
+# costs 2.5x (55,576 x 512: float32 3.0 ms, whole 30 ms, 512 KiB blocks
+# 7.9 ms; 389,529 rows: 15.8 / 148 / 46 ms; measured 2026-10-27).
+_BLOCK_BYTES = 1 << 19
+
+
+class _Rows(NamedTuple):
+    """The section vectors: row i is `scales[i] * codes[i*dim:(i+1)*dim]`, a
+    unit vector. Views over the mapped file where there is one."""
+    scales: memoryview[float]  # float32, one per row
+    codes: memoryview  # int8, rows x dim
+    dim: int
+
+
+_EMPTY = _Rows(memoryview(b"").cast("f"), memoryview(b"").cast("b"), 0)
+_CACHE: tuple[tuple[int, int], dict, _Rows] | None = None  # (stamp of embed.json, meta, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -222,10 +242,67 @@ def _meta_path() -> Path:
 
 
 def _rows_path() -> Path:
+    """One float32 scale per row, then every row's int8 codes."""
+    return _paths.index_dir() / "embed.q8"
+
+
+def _legacy_rows_path() -> Path:
+    """float32 rows, the format until 2026-10-27: still read, and written
+    back as `embed.q8` by the next build without re-embedding anything.
+    Until then each process converts them on load: 0.55 s with numpy, 7.8 s
+    without, at 55,576 x 512 (measured 2026-10-27)."""
     return _paths.index_dir() / "embed.f32"
 
 
-def load() -> tuple[dict, array] | None:
+def _map(path: Path) -> memoryview:
+    """The file's bytes, mapped on POSIX: every server on this root shares one
+    copy in the page cache instead of holding its own (two servers per
+    session, see tests/test_root_gate.py), and a build's os.replace leaves a
+    mapping of the old file valid. Read on Windows, where a mapped file
+    cannot be replaced and the next build's atomic write would fail."""
+    with open(path, "rb") as f:
+        if os.name == "nt" or os.fstat(f.fileno()).st_size == 0:  # mmap refuses an empty file
+            return memoryview(f.read())
+        return memoryview(mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ))
+
+
+def _quantize(vecs: Sequence[Sequence[float]]) -> tuple[array, bytes]:
+    """One float32 scale per vector and its int8 codes: each component scaled
+    so the largest is ±127, and the scale is 1/|codes|, so scale × codes is
+    the unit vector and its dot product with a unit query is the cosine.
+    4x smaller than float32; measured 2026-10-27 on 55,576 potion sections,
+    0.9905 of the float32 top-10 (fp16 kept 0.998 at half the size, half the
+    dimensions 0.86). numpy when it is there, the same arithmetic in doubles
+    when not: both round half to even, and the sum of squared integer codes
+    is exact in any order, so the two produce the same bytes."""
+    if not vecs:
+        return array("f"), b""
+    try:
+        np: Any = importlib.import_module("numpy")
+    except ImportError:
+        scales, codes = array("f"), array("b")
+        for v in vecs:
+            peak = max(map(abs, v))
+            c = [round(x * 127 / peak) for x in v] if peak else [0] * len(v)
+            n = math.sqrt(sum(x * x for x in c))
+            scales.append(1 / n if n else 0.0)  # a zero vector stays zero: cosine 0 with everything
+            codes.extend(c)
+        return scales, codes.tobytes()
+    m = np.asarray(vecs, dtype=np.float64)
+    peak = np.abs(m).max(axis=1, keepdims=True)
+    c = np.round(m * 127 / np.where(peak == 0, 1.0, peak))
+    n = np.sqrt((c * c).sum(axis=1))
+    s = np.divide(1.0, n, out=np.zeros_like(n), where=n != 0)
+    return array("f", s.astype(np.float32).tobytes()), c.astype(np.int8).tobytes()
+
+
+def _from_float32(raw: memoryview, n: int, dim: int) -> _Rows:
+    floats = raw.cast("f")
+    scales, codes = _quantize([floats[i * dim:(i + 1) * dim] for i in range(n)])
+    return _Rows(memoryview(scales), memoryview(codes).cast("b"), dim)
+
+
+def load() -> tuple[dict, _Rows] | None:
     """(meta, rows) or None when nothing is embedded yet. Cached across calls
     while `embed.json` is unchanged: the rows are megabytes."""
     global _CACHE
@@ -238,17 +315,25 @@ def load() -> tuple[dict, array] | None:
         return _current(_CACHE[1], _CACHE[2])
     try:
         meta = orjson.loads(_meta_path().read_bytes())
-        rows = array("f")
-        rows.frombytes(_rows_path().read_bytes())
-    except (OSError, ValueError):
+        n, dim = int(meta.get("rows", 0)), int(meta.get("dim", 0))
+        rows: _Rows | None = None
+        if meta.get("codes") == "int8":
+            raw = _map(_rows_path())
+            if len(raw) == n * (4 + dim):
+                rows = _Rows(raw[:4 * n].cast("f"), raw[4 * n:].cast("b"), dim)
+        else:
+            raw = _map(_legacy_rows_path())
+            if len(raw) == 4 * n * dim:
+                rows = _from_float32(raw, n, dim)
+    except (OSError, ValueError, TypeError):
         return None
-    if meta.get("unit") != "section" or not meta.get("docs") or len(rows) != meta.get("rows", 0) * meta.get("dim", 0):
+    if meta.get("unit") != "section" or not meta.get("docs") or rows is None:
         return None
     _CACHE = (stamp, meta, rows)
     return _current(meta, rows)
 
 
-def _current(meta: dict, rows: array) -> tuple[dict, array] | None:
+def _current(meta: dict, rows: _Rows) -> tuple[dict, _Rows] | None:
     """The store, or None when it was embedded by another model or under
     another document prefix: those vectors describe other text, and serving
     them beside this query's would rank noise (`silica-core index --embed` rebuilds)."""
@@ -262,59 +347,82 @@ def build(units: list[tuple[str, float, list[tuple[int, str]]]], *, rebuild: boo
     stamp changed; rows of unchanged documents are kept. Returns {docs,
     sections, embedded, model}."""
     loaded = None if rebuild else load()
-    meta: dict = loaded[0] if loaded else {}
-    rows: array = loaded[1] if loaded else array("f")
-    if not meta:
-        meta, rows = {"dim": 0, "docs": {}}, array("f")  # nothing yet, or another model's or prefix's vectors: `load` said None
+    meta: dict
+    if loaded:
+        meta, rows = loaded
+    else:  # nothing yet, or another model's or prefix's vectors: `load` said None
+        meta, rows = {"dim": 0, "docs": {}}, _EMPTY
     dim: int = meta["dim"]
-    keep = {rel: d for rel, d in meta["docs"].items()
-            if any(rel == u[0] and d["mtime"] == u[1] for u in units)}
+    # One dict lookup per document, not a scan of `units` for each: that was
+    # O(docs²), 1.4 s at 8k documents and ~90 s at the 65k of ~/Documents
+    # (measured 2026-10-27).
+    stamp_of = {rel: mt for rel, mt, _secs in units}
+    keep = {rel: d for rel, d in meta["docs"].items() if stamp_of.get(rel) == d["mtime"]}
     todo = [(rel, mt, secs) for rel, mt, secs in units if rel not in keep]
     texts, owners = [], []
     for rel, _mt, secs in todo:
         for off, text in secs:
             texts.append(CONFIG.embedding_doc_prefix + text)
             owners.append((rel, off))
-    vecs = [_unit(v) for v in embed_texts(texts)] if texts else []
+    if loaded and not texts and len(keep) == len(meta["docs"]) and meta.get("codes") == "int8":
+        # Nothing to embed and nothing gone: the store on disk is the one this
+        # build would write. Every refresh a search makes lands here, and each
+        # one rewrote the whole file (108 MB of float32 for silica-internal).
+        return {"docs": len(keep), "sections": meta["rows"], "embedded": 0, "model": meta["model"]}
+    vecs = embed_texts(texts) if texts else []
     if vecs:
         if dim and len(vecs[0]) != dim:  # the endpoint answers in another width: not the same model
             keep, dim = {}, 0
         dim = dim or len(vecs[0])
-    out_rows, docs, row = array("f"), {}, 0
+    new_scales, new_codes = _quantize(vecs)
+    scales, codes, docs, row = array("f"), bytearray(), {}, 0
     for rel, d in keep.items():
         n = len(d["offsets"])
-        out_rows.extend(rows[d["row"] * dim:(d["row"] + n) * dim])
+        scales.frombytes(rows.scales[d["row"]:d["row"] + n].cast("B"))
+        codes += rows.codes[d["row"] * dim:(d["row"] + n) * dim].cast("B")
         docs[rel] = {"mtime": d["mtime"], "offsets": d["offsets"], "row": row}
         row += n
-    by_doc: dict[str, list[tuple[int, array]]] = {}
-    for (rel, off), vec in zip(owners, vecs):
-        by_doc.setdefault(rel, []).append((off, vec))
+    by_doc: dict[str, list[tuple[int, int]]] = {}
+    for i, (rel, off) in enumerate(owners):
+        by_doc.setdefault(rel, []).append((off, i))
     for rel, mt, _secs in todo:
         vs = by_doc.get(rel, [])
         if not vs:
             continue
-        docs[rel] = {"mtime": mt, "offsets": [off for off, _v in vs], "row": row}
-        for _off, vec in vs:
-            out_rows.extend(vec)
+        docs[rel] = {"mtime": mt, "offsets": [off for off, _i in vs], "row": row}
+        for _off, i in vs:
+            scales.append(new_scales[i])
+            codes += new_codes[i * dim:(i + 1) * dim]
         row += len(vs)
     meta = {"model": CONFIG.embedding_model, "doc_prefix": CONFIG.embedding_doc_prefix, "unit": "section",
-            "dim": dim, "docs": docs, "rows": row, "built_at": time.time()}
-    _paths.atomic_write_bytes(_rows_path(), out_rows.tobytes())
+            "codes": "int8", "dim": dim, "docs": docs, "rows": row, "built_at": time.time()}
+    _paths.atomic_write_bytes(_rows_path(), scales.tobytes() + bytes(codes))
     _paths.atomic_write_bytes(_meta_path(), orjson.dumps(meta))
+    _legacy_rows_path().unlink(missing_ok=True)
     return {"docs": len(docs), "sections": row, "embedded": len(texts), "model": meta["model"]}
 
 
-def _scores(rows: array, dim: int, q: array) -> list[float]:
-    """One dot product per row; numpy when it is there, plain Python when not.
+def _scores(rows: _Rows, q: array) -> list[float]:
+    """One cosine per row; numpy when it is there, plain Python when not.
     Imported by name so the type checker never opens numpy's stubs (they
     are written for 3.12+, this package is checked as 3.11)."""
+    dim = rows.dim
     try:
         np: Any = importlib.import_module("numpy")
     except ImportError:
-        n = len(rows) // dim
-        return [sum(map(float.__mul__, rows[i * dim:(i + 1) * dim], q)) for i in range(n)]
-    m = np.frombuffer(rows, dtype=np.float32).reshape(-1, dim)
-    return list((m @ np.frombuffer(q, dtype=np.float32)).tolist())
+        # q first: float.__mul__ takes the int code as its argument, not as self
+        return [s * sum(map(float.__mul__, q, rows.codes[i * dim:(i + 1) * dim])) for i, s in enumerate(rows.scales)]
+    codes = np.frombuffer(rows.codes, dtype=np.int8).reshape(-1, dim)
+    qv = np.frombuffer(q, dtype=np.float32)
+    out = np.empty(len(codes), dtype=np.float32)
+    step = max(1, _BLOCK_BYTES // (4 * dim))
+    buf = np.empty((step, dim), dtype=np.float32)
+    for i in range(0, len(codes), step):
+        block = codes[i:i + step]
+        b = buf[:len(block)]
+        b[...] = block
+        np.dot(b, qv, out=out[i:i + len(block)])
+    return list((out * np.frombuffer(rows.scales, dtype=np.float32)).tolist())
 
 
 def rank(query: str, live: dict[str, float]) -> tuple[list[tuple[str, float]], dict[tuple[str, int], float]]:
@@ -329,7 +437,7 @@ def rank(query: str, live: dict[str, float]) -> tuple[list[tuple[str, float]], d
     q = _unit(embed_texts([CONFIG.embedding_query_prefix + query])[0])
     if len(q) != meta["dim"]:
         raise RuntimeError(f"the endpoint answered {len(q)} dimensions, the store holds {meta['dim']}: run `silica-core index --embed --rebuild`")
-    scores = _scores(rows, meta["dim"], q)
+    scores = _scores(rows, q)
     best: dict[str, float] = {}
     sections: dict[tuple[str, int], float] = {}
     for rel, d in meta["docs"].items():

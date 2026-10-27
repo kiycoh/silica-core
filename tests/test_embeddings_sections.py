@@ -170,3 +170,48 @@ def test_prefixes_reach_the_embedder_on_both_sides(root, monkeypatch):
     monkeypatch.setattr(CONFIG, "embedding_doc_prefix", "")
     monkeypatch.setattr(CONFIG, "embedding_model", "other")
     assert root.search("car")["dense"]["state"] == "no_vectors"
+
+
+def test_an_unchanged_build_rewrites_nothing(root, tmp_path):
+    root.build_index(embed=True)
+    files = [tmp_path / ".idx" / "embed.q8", tmp_path / ".idx" / "embed.json"]
+    before = [f.stat().st_mtime_ns for f in files]
+    assert root.build_index(embed=True)["embeddings"] == {"docs": 3, "sections": 4, "embedded": 0, "model": "fake"}
+    assert [f.stat().st_mtime_ns for f in files] == before
+
+
+def test_rows_are_int8_and_a_float32_store_converts_without_re_embedding(root, tmp_path, monkeypatch):
+    """embed.q8 is one float32 scale and dim int8 codes per row. A store
+    written before it (float32 rows in embed.f32) still serves, and the next
+    build rewrites it as int8 from the stored rows, not from the embedder."""
+    from array import array
+    import orjson
+    from silica_core import embeddings
+    root.build_index(embed=True)
+    idx = tmp_path / ".idx"
+    meta = orjson.loads((idx / "embed.json").read_bytes())
+    n, dim = meta["rows"], meta["dim"]
+    assert (idx / "embed.q8").stat().st_size == n * (4 + dim)
+    hits = [(h["path"], h["section"], h["dense"]) for h in root.search("car")["hits"]]
+    _meta, rows = embeddings.load()
+    legacy = array("f", [rows.scales[i] * c for i in range(n) for c in rows.codes[i * dim:(i + 1) * dim]])
+    (idx / "embed.f32").write_bytes(legacy.tobytes())
+    (idx / "embed.q8").unlink()
+    meta.pop("codes")
+    (idx / "embed.json").write_bytes(orjson.dumps(meta))
+    monkeypatch.setattr(embeddings, "_CACHE", None)
+    assert [(h["path"], h["section"], h["dense"]) for h in root.search("car")["hits"]] == hits
+    monkeypatch.setattr(embeddings, "embed_texts", lambda texts: pytest.fail(f"re-embedded {len(texts)} sections"))
+    assert root.build_index(embed=True)["embeddings"]["embedded"] == 0
+    assert (idx / "embed.q8").exists() and not (idx / "embed.f32").exists()
+
+
+def test_numpy_and_pure_python_quantize_to_the_same_bytes(monkeypatch):
+    import random
+    import sys
+    from silica_core import embeddings
+    rng = random.Random(0)
+    vecs = [[rng.gauss(0, 1) for _ in range(64)] for _ in range(50)] + [[0.0] * 64, [0.5] * 64]
+    with_numpy = embeddings._quantize(vecs)
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    assert embeddings._quantize(vecs) == with_numpy

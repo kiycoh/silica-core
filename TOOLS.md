@@ -192,9 +192,11 @@ model that wants a task prefix gets it from `SILICA_EMBEDDING_DOC_PREFIX`
 of the query): nomic-embed-text needs `search_document: ` and
 `search_query: `, potion and qwen3 need neither, and nothing is added
 unless named.
-`silica-core index --embed` builds the vectors (`embed.json` + `embed.f32`
-beside the lexical index, float32, unit length, re-embedding only the
-documents whose stamp changed). The leg is the user's call, made at index
+`silica-core index --embed` builds the vectors (`embed.json` + `embed.q8`
+beside the lexical index: int8 codes and one scale per section, a quarter
+of float32, re-embedding only the documents whose stamp changed and
+writing nothing when none did; an `embed.f32` from an older version is
+read and rewritten as `embed.q8` without re-embedding). The leg is the user's call, made at index
 time, not the caller's: there is no parameter. It runs on every search once
 the vectors are there, and `dense` in the reply says so — `{"state":
 "ready", "docs": n}`, the documents in scope it covered — or why it did not
