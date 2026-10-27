@@ -402,6 +402,13 @@ def _flush(store, meta: dict, failed: dict) -> None:
     meta["built_at"] = time.time()
     _paths.atomic_write_bytes(_meta_path(), orjson.dumps(meta))
     _paths.atomic_write_bytes(_paths.index_dir() / "failures.json", orjson.dumps(failed))
+    # The dir's name is a one-way digest of the root, so without this nothing
+    # can tell which folder an index describes or that the folder is gone:
+    # 343 of 549 dirs under ~/.silica/index on 2026-10-27. Not `vault.json`:
+    # silica-agent routes to every vault whose dir carries that one.
+    marker = _paths.index_dir() / "root.json"
+    if not marker.is_file():
+        _paths.atomic_write_bytes(marker, orjson.dumps({"path": str(_root())}))
 
 
 def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, float] | None = None,

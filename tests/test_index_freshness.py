@@ -84,3 +84,12 @@ def test_silicaignore_hides_files_by_name_and_by_path(root, tmp_path):
     assert rows["README.md"]["reason"] == "ignore rule" and rows["n1.draft.md"]["reason"] == "ignore rule"
     assert "templates/keep.txt" not in rows, "a .txt is prose: the *.md rule does not name it"
     assert "templates/keep.txt" in {f["path"] for f in root.files(status="indexed")["files"]}
+
+
+def test_a_build_names_its_root_beside_the_index(root, tmp_path):
+    """The index dir is a digest of the root; root.json is the way back, which
+    is what a cleanup of indexes whose folder is gone reads."""
+    root.build_index()
+    marker = tmp_path / ".idx" / "root.json"
+    assert orjson.loads(marker.read_bytes()) == {"path": str(tmp_path.resolve())}
+    assert not (tmp_path / ".idx" / "vault.json").exists(), "vault.json is silica-agent's: it would route to this folder"
