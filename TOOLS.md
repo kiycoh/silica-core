@@ -176,7 +176,7 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed, unread?}, ind
   says the folder never uses the word, not which word it uses instead;
   five of nine models in the 2026-11-04 survey asked for that bridge (K04).
   Offered, never substituted, and lexical only: a synonym is the dense
-  leg's job. ~20 ms a term over 87,206 terms (one vault, measured).
+  leg's job. ~7 ms a term over 87,206 terms (one vault, measured).
 - Read `coverage` down the hits, one entry per distinct path, and the shape
   says how many documents are in contention. Measured on the test corpus,
   best section per document: `0.99 · 0.67 · 0.60` is one paper, `0.97 ·

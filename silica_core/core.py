@@ -190,6 +190,11 @@ def _conversion_of(md_full: Path, text: str) -> tuple[str | None, str | None]:
     from silica_core.kernel.write.frontmatter import split
     from silica_core.sources.convert import DOC_EXTS
 
+    # Only a conversion writes the key, and a key is in the text before it is
+    # in the YAML: parsing every note's frontmatter was 0.45 of the 0.50 s a
+    # listing of 2,259 notes took (cProfile, alex_second_brain, 2026-11-04).
+    if "source_sha256" not in text:
+        return None, None
     data, _raw, _body = split(text)
     if not isinstance(data, dict) or not data.get("source_sha256"):
         return None, None
@@ -1043,7 +1048,7 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
             "index": state}
 
 
-_NEAR_TERMS = 5  # absent terms looked up per search: ~20 ms each on an 87k-term vocabulary
+_NEAR_TERMS = 5  # absent terms looked up per search: ~7 ms each on an 87k-term vocabulary
 
 
 def _terms_near(store, absent: list[str]) -> dict[str, list[str]]:
