@@ -108,13 +108,22 @@ the page: five 1500-char windows cost 60% less than five page reads
 
 Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window}],
 documents: [{path, score, matched_terms, coverage}], candidates, terms_absent,
-terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
+terms_absent_in_scope?, scope: {folder, docs, unconverted, failed, unread?}, index}`.
 
 - `scope` says what the search could see: the documents indexed under
   `folder` (the whole root when empty) and how many files there the index
-  read but found no text in (`unconverted`) or could not read (`failed`). A
-  relevant document among those never ranks; `silica_files(status=…)` names
-  them. `terms_absent` is always corpus-wide. With a `folder`,
+  holds no text for, with the statuses `silica_files` gives them:
+  `unconverted` (a PDF it read and found no text layer in, or another
+  document with no `.md` extracted beside it) and `failed` (the read
+  failed). `unread` names the first ten of them, failed first, and is
+  absent when there are none. A relevant document among those never ranks,
+  so a miss under a folder with `unread` is not an absence;
+  `silica_files(status=…)` lists the rest. Until 2026-11-04 `unconverted`
+  counted only the PDFs found empty, and a folder of `.docx` contracts read
+  `docs 0, unconverted 0`; on silica-agent's probe of the same field, the
+  paths beside the count took the answers that called such a folder silent
+  from 10 of 20 to 2 (Qwen3.5-9B) and from 6 to 0 (deepseek-v4-flash-0731).
+  `terms_absent` is always corpus-wide. With a `folder`,
   `terms_absent_in_scope` lists the query terms the corpus holds but nowhere
   under that folder, so a zero there is a zero of the scope, not of the
   corpus.
@@ -325,7 +334,12 @@ beyond the built-in PDF text layer.
 
 ## Surfaces
 
-- Python: `from silica_core.core import files, search, read, code_pack, write_note`
+- Python: `from silica_core.core import files, search, read, code_pack, write_note`;
+  for a harness built on the engine, `walk(folder)` (the walk every tool
+  starts from), `unreadable(folder)` (the `failed` and `unconverted` rows
+  alone, without reading every note's head as a listing does) and
+  `version_of(path)` (the `version` a read would serve, or None), so it
+  never reaches for a private name
 - CLI: `silica-core files|search|read|code-pack|write-note ... --json`
 - MCP: `silica-core mcp --vault DIR` exposes exactly these five
 - `silica-core repl`: the optional reference harness, an agent loop over the same
@@ -367,3 +381,7 @@ beyond the built-in PDF text layer.
    lands on the section the vector points at, not on the document's
    opening, and a non-loopback embedder is refused until granted once
    (`tests/test_embeddings_sections.py`).
+9. A search under a folder whose only file is a `.docx` with no `.md`
+   beside it has no hits and reports it in `scope.unconverted` and
+   `scope.unread`, as `silica_files` reports it `unconverted`
+   (`tests/test_core_contract.py`).

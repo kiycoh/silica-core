@@ -199,16 +199,64 @@ def test_scope_reports_what_the_search_could_see(root):
     """The scan the index could not read counts under the folder it sits in,
     and a term the corpus holds elsewhere is absent from the folder only."""
     r = root.search("compaction memtable", folder="docs")
-    assert r["scope"] == {"folder": "docs", "docs": 2, "unconverted": 1, "failed": 0}
+    assert r["scope"] == {"folder": "docs", "docs": 2, "unconverted": 1, "failed": 0, "unread": ["docs/scan.pdf"]}
     assert r["terms_absent"] == [] and r["terms_absent_in_scope"] == []
     (root._root() / "notes").mkdir()
     (root._root() / "notes" / "x.md").write_text("# Notes\n\nabout pages\n", encoding="utf-8")
     r = root.search("compaction pages", folder="notes")
-    assert r["scope"]["docs"] == 1 and r["scope"]["unconverted"] == 0
+    assert r["scope"]["docs"] == 1 and r["scope"]["unconverted"] == 0 and "unread" not in r["scope"]
     assert r["terms_absent"] == [] and r["terms_absent_in_scope"] == ["compaction"]
     whole = root.search("compaction pages")
     assert "terms_absent_in_scope" not in whole and whole["scope"]["docs"] == 3
 
+
+
+def test_scope_counts_an_office_file_with_no_sidecar(root):
+    """A .docx with no `.md` beside it is `unconverted` to silica_files, so
+    the search under its folder counts and names it too: before 2026-11-04 a
+    folder of contracts read `docs 0, unconverted 0`, an absence the search
+    had not earned. A converted one is the note beside it and counts no more."""
+    contracts = root._root() / "contracts"
+    contracts.mkdir()
+    (contracts / "rate-card.docx").write_bytes(b"PK\x03\x04not really a docx")
+    r = root.search("hourly rate senior designer", folder="contracts")
+    assert r["hits"] == [] and r["scope"]["docs"] == 0
+    assert r["scope"]["unconverted"] == 1 and r["scope"]["unread"] == ["contracts/rate-card.docx"]
+    row = root.files(folder="contracts")["files"][0]
+    assert row == {"path": "contracts/rate-card.docx", "bytes": row["bytes"], "status": "unconverted",
+                   "reason": "no extracted .md beside it"}
+    whole = root.search("hourly rate")["scope"]
+    assert whole["unconverted"] == 2 and whole["unread"] == ["contracts/rate-card.docx", "docs/scan.pdf"]
+    (contracts / "rate-card.md").write_text("# Rate card\n\nSenior designer: 95 EUR an hour.\n", encoding="utf-8")
+    r = root.search("hourly rate senior designer", folder="contracts")
+    assert r["scope"]["unconverted"] == 0 and "unread" not in r["scope"] and r["hits"]
+
+
+def test_unread_names_at_most_ten(root):
+    for i in range(12):
+        (root._root() / "docs" / f"deck-{i:02}.pptx").write_bytes(b"PK")
+    scope = root.search("compaction", folder="docs")["scope"]
+    assert scope["unconverted"] == 13 and len(scope["unread"]) == 10
+
+
+def test_public_walk_unreadable_and_version_of(root):
+    """What a harness built on the engine needs without its private names:
+    the walk, the files whose text the index lacks, and the version a read
+    would serve, the one a citation carries as `expect_version`."""
+    (root._root() / "docs" / "brief.docx").write_bytes(b"PK")
+    root.build_index()
+    walked = dict(root.walk("docs"))
+    assert set(walked) == {"docs/lsm.md", "docs/btree.md", "docs/scan.pdf", "docs/brief.docx"}
+    assert ("node_modules/", None) in list(root.walk())
+    got = root.unreadable("docs")
+    assert [(f["path"], f["status"]) for f in got["files"]] == [("docs/brief.docx", "unconverted"),
+                                                                ("docs/scan.pdf", "unconverted")]
+    assert got["counts"] == {"failed": 0, "unconverted": 2}
+    assert root.unreadable("nowhere")["error"]["code"] == "not_found"
+    assert root.unreadable("../x")["error"]["code"] == "out_of_root"
+    assert root.version_of("docs/lsm.md") == root.read("docs/lsm.md")["version"]
+    assert root.version_of("docs/scan.pdf") is None and root.version_of("docs/missing.md") is None
+    assert root.version_of("../etc/passwd") is None
 
 def test_documents_are_the_head_of_the_ranking_with_coverage(root):
     r = root.search("compaction memtable pages", k=1)

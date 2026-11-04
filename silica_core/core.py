@@ -346,8 +346,21 @@ def _notes() -> dict[str, float]:
     no extracted `.md` beside them — that sidecar is the note, and indexing
     both would double it. The one stat per file happens here, so
     `index_state` and `build_index` given this dict never walk again."""
+    return _inventory()[0]
+
+
+def _inventory(base: Path | None = None) -> tuple[dict[str, float], list[str]]:
+    """`_notes()` and, from the same walk, the documents the index holds no
+    text for because nothing extracted it: an office file, an e-book, a
+    recording with no `.md` beside it, which `silica_files` calls
+    `unconverted`. A search needs both, and a second walk for the count was
+    paid on every call (0.032 s on 3,202 files, silica-agent's own walk on
+    alex_second_brain, 2026-11-04)."""
+    from silica_core.sources.convert import DOC_EXTS, IMG_EXTS
+
     out: dict[str, float] = {}
-    for rel, full in _walk():
+    unextracted: list[str] = []
+    for rel, full in _walk(base):
         if full is None:
             continue
         suffix = full.suffix.lower()
@@ -363,7 +376,59 @@ def _notes() -> dict[str, float]:
                 continue
             if st.st_size <= _CODE_MAX_BYTES:
                 out[rel] = st.st_mtime
-    return dict(sorted(out.items()))
+        elif suffix in DOC_EXTS and suffix not in IMG_EXTS and suffix != ".pdf" \
+                and not full.with_suffix(".md").is_file():
+            unextracted.append(rel)
+    return dict(sorted(out.items())), unextracted
+
+
+def walk(folder: str = ""):
+    """(root-relative path, Path) for every file under `folder` (the whole
+    root when empty) that the index's walk enters, and (path, None) for what
+    it does not: a hidden name, a noise folder, a `.silicaignore` rule. The
+    walk every tool here starts from, public for a harness that lists files
+    on its own terms (silica-agent's changes since a time) instead of
+    reaching for the private one."""
+    base = _root() / _rel(folder) if folder.strip() else None
+    return _walk(base)
+
+
+def unreadable(folder: str = "") -> dict:
+    """The files under `folder` whose text the index does not hold, with the
+    rows `silica_files` gives them: `failed` (the read failed) and
+    `unconverted` (a PDF with no text layer, or another document with no
+    `.md` extracted beside it), each with its `reason`. A relevant document
+    among them never ranks, so a harness that reports its own searches names
+    them beside a miss; this classifies those two statuses alone, without
+    reading every note's head the way a full listing does."""
+    try:
+        scope = _rel(folder) if folder.strip() else ""
+    except ValueError as e:
+        return _error("out_of_root", str(e))
+    base = _root() / scope if scope else None
+    if base is not None and not base.is_dir():
+        return _error("not_found", f"{scope} is not a folder under {_root()}")
+    rows = _unread_rows(scope, _inventory(base)[1])
+    return {"root": str(_root()), "folder": scope, "files": rows,
+            "counts": {s: sum(1 for r in rows if r["status"] == s) for s in ("failed", "unconverted")}}
+
+
+def _unread_rows(scope: str, unextracted: list[str]) -> list[dict]:
+    """Failed and unconverted files under `scope`, failed first, then by
+    path: what a search under that folder could not rank."""
+    failed = _failures()
+    rows = [{"path": p, "status": "failed", "reason": failed[p]}
+            for p in sorted(failed) if _paths.in_folder(p, scope)]
+    skipped = _load_meta().get("no_text", {})
+    unconverted = [(p, skipped[p].get("reason") or "no text layer") for p in skipped if p not in failed]
+    unconverted += [(p, _NO_SIDECAR) for p in unextracted if p not in failed]
+    rows += [{"path": p, "status": "unconverted", "reason": why}
+             for p, why in sorted(unconverted) if _paths.in_folder(p, scope)]
+    return rows
+
+
+_NO_SIDECAR = "no extracted .md beside it"
+_UNREAD_SHOWN = 10  # a folder of 400 scans must not turn every search reply into a listing
 
 
 def _note_paths() -> list[str]:
@@ -592,7 +657,7 @@ def silica_files(
                 row.update(status="excluded", reason=f"converted: {sidecar.relative_to(root).as_posix()}",
                            source_state=_source_state(full, _read(sidecar)))
             elif suffix != ".pdf":
-                row["status"] = "unconverted"
+                row.update(status="unconverted", reason=_NO_SIDECAR)
             elif stamps.get(rel) == st.st_mtime:
                 row["status"] = "indexed"
             elif skip.get("mtime") == st.st_mtime:
@@ -700,13 +765,15 @@ def silica_search(
     `matched_terms` are the query terms in the hit; `coverage` is the share
     of the query's idf mass they carry (near 1 = every rare term matched,
     near 0 = only the common words); `terms_absent` are query terms found
-    nowhere in the corpus. No boolean "no answer" exists: read coverage and
+    nowhere in the corpus. `scope.unread` names files here whose text the
+    index does not hold (unconverted or failed): a miss is not absence while
+    the answer may sit in one. No boolean "no answer" exists: read coverage and
     matched_terms and decide to stop or rephrase. A hit the dense leg alone
     found carries `dense` and coverage 0. In a source tree a hit's `section`
     is the symbol, `span` its lines, and `silica_read(path,
     section=<symbol>)` serves its body."""
     from silica_core import embeddings
-    live = _notes()
+    live, unextracted = _inventory()
     # A local-hybrid warm-up over a folder nothing has indexed yet: wait for
     # the first lexical index to land, this process's or another's, rather
     # than answer empty. Anything already on disk is served at once, even
@@ -714,11 +781,11 @@ def silica_search(
     while index_state(live=live)["state"] == "cold" and embeddings.warmup_state()["state"] == "warming":
         embeddings.wait_lexical(0.5)
     with _STORE_RW:
-        return _search(query, folder, k, per_doc, width, queries, live)
+        return _search(query, folder, k, per_doc, width, queries, live, unextracted)
 
 
 def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: list[str] | None,
-            live: dict[str, float]) -> dict:
+            live: dict[str, float], unextracted: list[str] | None = None) -> dict:
     groups = [query] + [q for q in (queries or []) if q.strip()]
     # The dense leg is the user's call, made at index time, not the caller's:
     # it runs whenever the vectors are there and the query may go to the
@@ -768,11 +835,20 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
     # What the search could see: a relevant document among the unconverted or
     # the failed never ranks, and a term the corpus holds may still be absent
     # from the folder. `in_folder` with an empty folder is the whole root.
-    meta = _load_meta()
-    visible = {"folder": scope,
-               "docs": len({_split_key(p)[0] for p in store.paths() if _paths.in_folder(p, scope)}),
-               "unconverted": sum(1 for p in meta.get("no_text", {}) if _paths.in_folder(p, scope)),
-               "failed": sum(1 for p in _failures() if _paths.in_folder(p, scope))}
+    # `unconverted` counted only the PDFs found empty until 2026-11-04, so a
+    # folder of .docx contracts read `docs 0, unconverted 0`: an absence the
+    # search had no right to imply (survey card C1, silica-agent's docs).
+    unread = _unread_rows(scope, unextracted or [])
+    visible: dict[str, Any] = {
+        "folder": scope,
+        "docs": len({_split_key(p)[0] for p in store.paths() if _paths.in_folder(p, scope)}),
+        "unconverted": sum(1 for r in unread if r["status"] == "unconverted"),
+        "failed": sum(1 for r in unread if r["status"] == "failed")}
+    if unread:
+        # Named, not only counted: on silica-agent's probe the paths beside the
+        # count took Qwen3.5-9B from 10 of 20 "the documents do not say" to 2,
+        # and deepseek-v4-flash-0731 from 6 to 0 (survey card C1, 2026-11-04).
+        visible["unread"] = [r["path"] for r in unread[:_UNREAD_SHOWN]]
     absent_in_scope = sorted(t for t in known
                              if not any(_paths.in_folder(p, scope) for p in store.paths_with(t)))
     dense_docs: list[tuple[str, float]] = []
@@ -897,6 +973,50 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
 # 3. read
 # ---------------------------------------------------------------------------
 
+def _served(rel: str) -> dict:
+    """The text `silica_read` serves for `rel`, and what it says about it: a
+    note's own text, a binary source's sidecar, a PDF's text layer, or the
+    error a read returns. One place, so `version_of` cannot drift from the
+    version a read checks."""
+    root = _root()
+    full = root / rel
+    if not full.is_file():
+        return _error("not_found", f"{rel} is not a file under {root}")
+    pages: list[dict] = []
+    source, paged, source_state = None, False, None
+    if full.suffix.lower() != ".pdf" and _is_text(full):
+        text = _read(full)
+        if full.suffix.lower() == ".md":
+            source, source_state = _conversion_of(full, text)
+    else:
+        sidecar = full.with_suffix(".md")
+        if sidecar.is_file():
+            text = _read(sidecar)
+            source_state = _source_state(full, text)
+            source, rel = rel, sidecar.relative_to(root).as_posix()
+        elif full.suffix.lower() == ".pdf":
+            text, pages, reason = _pdf_text(rel, full)
+            if not text:
+                return _error("unconverted", f"{reason} in {rel}; run `silica-core import {rel}`")
+            source, paged = rel, True
+        else:
+            return _error("unconverted", f"no extracted text beside {rel}; run `silica-core import {rel}`")
+    return {"path": rel, "text": text, "pages": pages, "paged": paged, "source": source,
+            "source_state": source_state}
+
+
+def version_of(path: str) -> str | None:
+    """The `version` `silica_read` would serve for `path` now, or None when
+    the read would refuse (missing, outside the root, unconverted). For a
+    harness that remembers a citation and checks it later: compare with the
+    version it kept instead of hashing the file its own way."""
+    try:
+        served = _served(_rel(path))
+    except ValueError:
+        return None
+    return None if "error" in served else _version(served["text"])
+
+
 @tool(cls="atomic")
 def silica_read(
     path: Annotated[str, Field(description="Root-relative file path (from silica_files or a search hit)")],
@@ -932,29 +1052,12 @@ def silica_read(
         rel = _rel(path)
     except ValueError as e:
         return _error("out_of_root", str(e))
-    full = root / rel
-    if not full.is_file():
-        return _error("not_found", f"{rel} is not a file under {root}")
-    pages: list[dict] = []
-    source, paged, source_state = None, False, None
-    if full.suffix.lower() != ".pdf" and _is_text(full):
-        text = _read(full)
-        if full.suffix.lower() == ".md":
-            source, source_state = _conversion_of(full, text)
-    else:
-        sidecar = full.with_suffix(".md")
-        if sidecar.is_file():
-            text = _read(sidecar)
-            source_state = _source_state(full, text)
-            source, full = rel, sidecar
-            rel = sidecar.relative_to(root).as_posix()
-        elif full.suffix.lower() == ".pdf":
-            text, pages, reason = _pdf_text(rel, full)
-            if not text:
-                return _error("unconverted", f"{reason} in {rel}; run `silica-core import {rel}`")
-            source, paged = rel, True
-        else:
-            return _error("unconverted", f"no extracted text beside {rel}; run `silica-core import {rel}`")
+    served = _served(rel)
+    if "error" in served:
+        return served
+    rel, text, pages, source, source_state = (served["path"], served["text"], served["pages"],
+                                              served["source"], served["source_state"])
+    paged = served["paged"]
     version = _version(text)
     if expect_version and expect_version != version:
         return _error("changed", f"{rel} is now version {version}", version=version)
