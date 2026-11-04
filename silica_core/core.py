@@ -787,7 +787,8 @@ def silica_search(
     `matched_terms` are the query terms in the hit; `coverage` is the share
     of the query's idf mass they carry (near 1 = every rare term matched,
     near 0 = only the common words); `terms_absent` are query terms found
-    nowhere in the corpus. No boolean "no answer" exists: read coverage and
+    nowhere in the corpus, `terms_near` the corpus's closest spellings of
+    them. No boolean "no answer" exists: read coverage and
     matched_terms and decide to stop or rephrase. A hit the dense leg alone
     found carries `dense` and coverage 0. In a source tree a hit's `section`
     is the symbol, `span` its lines, and `silica_read(path,
@@ -993,10 +994,27 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
                           for i, (p, sc, m) in enumerate(top) if i < k or _split_key(p)[0] in versions],
             "candidates": len(docs),
             "terms_absent": absent,
+            **({"terms_near": near} if (near := _terms_near(store, absent)) else {}),
             **({"terms_absent_in_scope": absent_in_scope} if scope else {}),
             "scope": visible,
             "dense": leg,
             "index": state}
+
+
+_NEAR_TERMS = 5  # absent terms looked up per search: ~7 ms each on an 87k-term vocabulary
+
+
+def _terms_near(store, absent: list[str]) -> dict[str, list[str]]:
+    """For each absent word of four letters or more, the corpus's closest
+    spellings: an absent term says the folder never uses the word, not which
+    word it uses instead (K04, five of nine models in the 2026-11-04 survey).
+    Lexical and offered, never substituted: the caller decides whether
+    `neuroscience` is what `neurosience` meant."""
+    out: dict[str, list[str]] = {}
+    for t in [t for t in absent if len(t) >= 4 and not t.isdigit()][:_NEAR_TERMS]:
+        if close := store.near(t):
+            out[t] = close
+    return out
 
 
 # ---------------------------------------------------------------------------
