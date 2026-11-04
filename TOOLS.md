@@ -107,7 +107,7 @@ the page: five 1500-char windows cost 60% less than five page reads
 (measured 2026-09-09).
 
 Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window, source?, source_state?}],
-documents: [{path, score, matched_terms, coverage}], candidates, terms_absent,
+documents: [{path, score, matched_terms, coverage}], candidates, terms_absent, terms_near?,
 terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
 
 - `scope` says what the search could see: the documents indexed under
@@ -153,6 +153,18 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   low even when its one surviving word matches (measured on the test corpus:
   0.31 with the absent terms ignored, 0.13 with them weighed).
 - `terms_absent` lists the query terms that occur nowhere in the corpus.
+  `terms_near` gives, for each absent term of four letters or more (the
+  first five), up to three corpus terms spelled like it (difflib ratio at
+  least 0.8, among terms within two characters of its length that share
+  its first or second letter; closest first). An absence says the folder
+  never uses the word, not which word it uses instead. Offered, never
+  substituted, and lexical only: a synonym is the dense leg's job. Measured
+  2026-11-04 on deepseek-v4-flash-0731 (probe p5b): over 200 contact notes,
+  a surname misspelt by one letter went unanswered, the contact called
+  absent, in 14 of 20 turns without it and 0 of 20 with it, 95% interval
+  [+0.50, +0.90], with 2.2 fewer tool calls and 19,395 fewer prompt tokens
+  a turn. A misspelt common word the model corrects on its own (p5, 20 of
+  20 either way). ~7 ms a term over 87,206 terms (one vault, measured).
 - Read `coverage` down the hits, one entry per distinct path, and the shape
   says how many documents are in contention. Measured on the test corpus,
   best section per document: `0.99 · 0.67 · 0.60` is one paper, `0.97 ·
@@ -395,5 +407,6 @@ beyond the built-in PDF text layer.
 9. A search under a folder whose only file is a `.docx` with no `.md`
    beside it has no hits and counts it in `scope.unconverted`, as
    `silica_files` reports it `unconverted`; a search hit on a converted
-   note whose PDF was replaced carries `source_state: stale`
+   note whose PDF was replaced carries `source_state: stale`; a misspelt
+   absent term gets the corpus's spelling in `terms_near`
    (`tests/test_core_contract.py`).

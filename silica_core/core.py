@@ -1009,7 +1009,10 @@ def _terms_near(store, absent: list[str]) -> dict[str, list[str]]:
     spellings: an absent term says the folder never uses the word, not which
     word it uses instead (K04, five of nine models in the 2026-11-04 survey).
     Lexical and offered, never substituted: the caller decides whether
-    `neuroscience` is what `neurosience` meant."""
+    `neuroscience` is what `neurosience` meant. A misspelt surname among
+    200 contacts went unanswered in 14 of 20 turns without it and 0 with it
+    on deepseek-v4-flash-0731 (probe p5b, 2026-11-04); a misspelt common
+    word the model fixes on its own (p5)."""
     out: dict[str, list[str]] = {}
     for t in [t for t in absent if len(t) >= 4 and not t.isdigit()][:_NEAR_TERMS]:
         if close := store.near(t):
