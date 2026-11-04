@@ -37,7 +37,7 @@ it yet; the refactor is done when it does and the acceptance checks pass.
 
 ## 1. `silica_files` — inventory and index state
 
-`silica_files(folder="", status="", limit=200, cursor="")`
+`silica_files(folder="", status="", limit=200, cursor="", since="")`
 
 Lists what is under the root and what the index did with it. A file has
 exactly one `status`:
@@ -50,14 +50,23 @@ exactly one `status`:
 | `failed` | read or conversion failed; `reason` says why |
 | `unconverted` | a PDF whose text layer the index could not read (a scan, an encrypted or broken file), or another binary source with no extracted text yet; `reason` says which |
 
-Reply: `{root, total, files: [{path, bytes, status, reason?, source?, source_state?}],
+Reply: `{root, total, files: [{path, bytes, status, reason?, source?, source_state?, modified?}],
 counts: {indexed, changed, excluded, failed, unconverted}, excluded_dirs,
 truncated, next_cursor, index}`.
 
 The folders the walk does not enter (hidden, or an ignore rule) are a count,
 `excluded_dirs`, in every listing and rows only under `status=excluded`;
 `counts.excluded` includes them. `status` already says whether a file
-changed since the index read it, so no timestamp rides along.
+changed since the index read it, so no timestamp rides along unless asked
+for: `since` (ISO 8601, `2026-11-04` or `2026-11-04T09:30`, local time
+without an offset) keeps only the files modified after that time, each row
+with its `modified`, and `counts` count those rows. It is the question a
+caller with memory asks before citing what it remembers: "what changed
+after my last session". Nine of nine models in the 2026-11-04 survey asked
+for it, its mean use rising from 0.4 without memory to 3.0 with it (K12). Deletions
+are not listed: the index refreshes on every search, so it keeps no record
+of what was there. The folders the walk did not enter have no date and are
+left out of a `since` listing, still counted in `excluded_dirs`.
 
 `<root>/.silicaignore` is what the index should not search, as distinct
 from what git should not commit (`.gitignore` is deliberately not read: a

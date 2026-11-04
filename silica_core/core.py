@@ -620,6 +620,7 @@ def silica_files(
     status: Annotated[str, Field(description="Only this status: indexed, changed, excluded, failed, unconverted")] = "",
     limit: Annotated[int, Field(description="Max entries per page")] = 200,
     cursor: Annotated[str, Field(description="`next_cursor` from the previous page")] = "",
+    since: Annotated[str, Field(description="Only files modified after this time, ISO 8601 (2026-11-04, 2026-11-04T09:30, with or without an offset; local time without): what changed since a session you remember. Each row then carries `modified`; deletions are not listed")] = "",
 ) -> dict:
     """Ask what the index could see before trusting a search or calling
     absence. Inventory of the root and what the index did with each file: `indexed`
@@ -632,7 +633,8 @@ def silica_files(
     that sidecar is indexed instead, and both rows carry `source_state`:
     `stale` means the original changed after the conversion, `unverifiable`
     that the sidecar records no hash of it or its original is not under the
-    root. `index.state` is `cold` when nothing was
+    root. `since` keeps only what was modified after a time, dated: what
+    changed since a session you remember. `index.state` is `cold` when nothing was
     ever indexed: an empty listing there is not "no files"."""
     from silica_core.sources.convert import DOC_EXTS, IMG_EXTS
 
@@ -644,21 +646,40 @@ def silica_files(
     base = root / scope if scope else root
     if not base.is_dir():
         return _error("not_found", f"{scope or '.'} is not a folder under {root}")
+    cut = None
+    if since.strip():
+        # A remembered claim is checked against what changed after it was
+        # made: nine of nine models in the 2026-11-04 survey asked for this
+        # once they had memory (K12). Dates ride along only when asked for;
+        # `status` already says "changed since the index read it" otherwise.
+        import datetime as _dt
+        try:
+            when = _dt.datetime.fromisoformat(since.strip())
+        except ValueError:
+            return _error("bad_argument", f"since must be ISO 8601 (2026-11-04 or 2026-11-04T09:30), not {since!r}")
+        cut = (when if when.tzinfo else when.astimezone()).timestamp()
     meta = _load_meta()
     stamps = meta.get("stamps", {})
     skipped = meta.get("no_text", {})
     failed = _failures()
     entries: list[dict] = []
+    excluded_dirs = 0
     for rel, full in _walk(base):
         if full is None:  # a directory not entered, or a file `.silicaignore` names
-            entries.append({"path": rel, "status": "excluded",
-                            "reason": "hidden" if rel.rstrip("/").rsplit("/", 1)[-1].startswith(".") else "ignore rule"})
+            excluded_dirs += rel.endswith("/")
+            if cut is None:  # what the walk never entered has no date to compare
+                entries.append({"path": rel, "status": "excluded",
+                                "reason": "hidden" if rel.rstrip("/").rsplit("/", 1)[-1].startswith(".") else "ignore rule"})
             continue
         try:
             st = full.stat()
         except OSError:
             continue
+        if cut is not None and st.st_mtime <= cut:
+            continue
         row: dict = {"path": rel, "bytes": st.st_size}  # `status` says whether it changed; a float mtime said nothing more
+        if cut is not None:
+            row["modified"] = _iso(st.st_mtime)
         suffix = full.suffix.lower()
         if rel in failed:
             row.update(status="failed", reason=failed[rel])
@@ -694,7 +715,6 @@ def silica_files(
     # The folders the walk did not enter are a count in every listing and rows
     # only under status=excluded: thirteen hidden folders opened every listing
     # of this repository before any file (measured 2026-09-08).
-    excluded_dirs = sum(1 for e in entries if e["path"].endswith("/"))
     if status:
         entries = [e for e in entries if e["status"] == status]
     else:
@@ -710,6 +730,12 @@ def silica_files(
             "excluded_dirs": excluded_dirs,
             "truncated": truncated, "next_cursor": str(offset + limit) if truncated else None,
             "index": index_state(meta)}
+
+
+def _iso(ts: float) -> str:
+    """A local time with its offset, to the second: what `since` takes back."""
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------------------

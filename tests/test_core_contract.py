@@ -288,6 +288,29 @@ def test_unseen_ignores_the_long_tail(root):
     r = root.search("leveled compaction read amplification", k=1, exclude=["docs/lsm.md"])
     assert r["hits"][0]["path"] == "docs/todo.md" and r["unseen"] == 0 and r["excluded"] == 1
 
+
+def test_files_since_lists_what_changed_after_a_time(root):
+    """A session remembers a figure from a note; the next one asks what
+    changed after it. Only those rows, each with its date; a bad time is a
+    bad argument, and without `since` no row carries a date."""
+    import datetime as dt
+    import os
+
+    old = dt.datetime(2026, 10, 1, 12, 0).timestamp()
+    for f in (root._root() / "docs").iterdir():
+        os.utime(f, (old, old))
+    edited = root._root() / "docs" / "btree.md"
+    later = dt.datetime(2026, 11, 3, 9, 30).timestamp()
+    os.utime(edited, (later, later))
+    r = root.files(since="2026-11-01")
+    assert [f["path"] for f in r["files"]] == ["docs/btree.md"] and r["total"] == 1
+    assert r["files"][0]["modified"].startswith("2026-11-03T09:30:00")
+    assert r["counts"]["changed"] + r["counts"]["indexed"] == 1 and r["excluded_dirs"] == 1
+    assert root.files(since="2026-11-03T10:00")["files"] == []
+    assert root.files(since="2026-11-03T09:00", folder="docs")["total"] == 1
+    assert "modified" not in root.files()["files"][0]
+    assert root.files(since="last tuesday")["error"]["code"] == "bad_argument"
+
 def test_documents_are_the_head_of_the_ranking_with_coverage(root):
     r = root.search("compaction memtable pages", k=1)
     assert r["candidates"] == 2 and len(r["documents"]) == 1, r["documents"]
