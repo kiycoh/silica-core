@@ -106,7 +106,7 @@ no headings), so on a PDF hit widen `width` (1200-1500) rather than reading
 the page: five 1500-char windows cost 60% less than five page reads
 (measured 2026-09-09).
 
-Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window}],
+Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window, source?, source_state?}],
 documents: [{path, score, matched_terms, coverage}], candidates, terms_absent,
 terms_absent_in_scope?, scope: {folder, docs, unconverted, failed, unread?}, index}`.
 
@@ -127,6 +127,12 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed, unread?}, ind
   `terms_absent_in_scope` lists the query terms the corpus holds but nowhere
   under that folder, so a zero there is a zero of the scope, not of the
   corpus.
+
+- A hit on a `.md` a conversion wrote carries `source` (the original) and
+  `source_state` (`current`, `stale`, `unverifiable`, as in `silica_files`),
+  so a passage quoted from a sidecar whose PDF was replaced says so before it
+  is cited, not only once the note is read. A note no conversion wrote
+  carries neither.
 
 - `version` is the content hash `silica_read` checks: carried into
   `expect_version`, a file edited between the search and the read is refused

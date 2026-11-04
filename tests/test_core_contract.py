@@ -317,7 +317,12 @@ def test_the_search_to_read_path_reports_a_stale_conversion(root, tmp_path, monk
     r = root.read(hit["path"], expect_version=hit["version"])
     assert r["source"] == "docs/paper.pdf" and r["source_state"] == "current"
 
+    assert hit["source"] == "docs/paper.pdf" and hit["source_state"] == "current"
+    assert "source_state" not in root.search("leveled compaction")["hits"][0]
+
     pdf.write_bytes(pdf_bytes(["Rewritten under the note."]))
+    stale_hit = root.search("bloom filters absent keys")["hits"][0]
+    assert stale_hit["path"] == "docs/paper.md" and stale_hit["source_state"] == "stale"
     again = root.read(hit["path"], expect_version=hit["version"])
     assert again["version"] == hit["version"] and again["source_state"] == "stale"
     assert again["source"] == "docs/paper.pdf"

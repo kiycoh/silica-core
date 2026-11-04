@@ -145,11 +145,10 @@ def _source_state(original: Path, sidecar_text: str) -> str:
     `stale` when it does not (the original was replaced, the sidecar kept),
     `unverifiable` when the sidecar records no hash (a conversion older than
     the field, or a `.md` someone wrote by hand). The text's `version` says
-    nothing about this: a stale sidecar is textually stable.
-
-    ponytail: the original is hashed on every call; a folder of hundreds of
-    large PDFs with sidecars pays that per listing. Cache by (mtime, size)
-    beside the index if a listing ever shows it.
+    nothing about this: a stale sidecar is textually stable. The hash is
+    kept in this process per (path, mtime, size) since search hits carry
+    the verdict too (2026-11-04); a listing's first call still hashes every
+    original once.
     """
     from silica_core.kernel.write.frontmatter import split
 
@@ -158,9 +157,27 @@ def _source_state(original: Path, sidecar_text: str) -> str:
     if not isinstance(want, str) or not want:
         return "unverifiable"
     try:
-        return "current" if hashlib.sha256(original.read_bytes()).hexdigest() == want else "stale"
+        return "current" if _sha256_of(original) == want else "stale"
     except OSError:
         return "unverifiable"
+
+
+_sha_cache: dict[tuple[str, int, int], str] = {}
+
+
+def _sha256_of(full: Path) -> str:
+    """The file's sha256, kept per (path, mtime, size): every search hit on
+    a converted note asks for its original's, and a 40 MB PDF is a 40 MB
+    read plus 16 ms of hashing (measured 2026-11-04) per hit. A replaced
+    file moves its mtime or size, so a stale verdict is never served from
+    here."""
+    st = full.stat()
+    key = (str(full), st.st_mtime_ns, st.st_size)
+    if key not in _sha_cache:
+        if len(_sha_cache) > 512:
+            _sha_cache.clear()
+        _sha_cache[key] = hashlib.sha256(full.read_bytes()).hexdigest()
+    return _sha_cache[key]
 
 
 def _conversion_of(md_full: Path, text: str) -> tuple[str | None, str | None]:
@@ -928,6 +945,7 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
     hits: list[dict] = []
     seen: dict[str, int] = {}
     versions: dict[str, str] = {}  # the hash silica_read checks, from the text already in hand
+    conversions: dict[str, tuple[str | None, str | None]] = {}
     for key in order:
         path, off = key
         score, part, matched, title = scored[key]
@@ -946,6 +964,15 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
             hit["span"] = [first, first + part.rstrip("\n").count("\n")]
         if key in dense_secs:
             hit["dense"] = round(dense_secs[key], 3)
+        if path.lower().endswith(".md"):
+            # A converted note quotes its original as it was: when the PDF was
+            # replaced since, the hit says so before anything is cited, not
+            # only a read of the note (survey card C2, K08: six of nine).
+            if path not in conversions:
+                conversions[path] = _conversion_of(_root() / path, texts[path])
+            src, src_state = conversions[path]
+            if src_state:
+                hit.update(source=src, source_state=src_state)
         hits.append(hit)
         if len(hits) == k:
             break
