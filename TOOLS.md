@@ -133,10 +133,11 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   is cited, not only once the note is read. A note no conversion wrote
   carries neither. Measured 2026-11-04 on deepseek-v4-flash-0731 (probe p3,
   20 converted PDFs, 10 replaced after the conversion): answers quoting a
-  replaced one with no caveat went from 5 of 10 to 0 of 10, 95% interval
-  [+0.20, +0.80], the 10 current ones found in both arms. Two of the five
-  without the field had read the note, whose `source_state: stale` they
-  did not repeat.
+  replaced one with no caveat went from 5 of 10 to 1 of 10 with this
+  reply, 95% interval [+0.10, +0.70] (0 of 10, [+0.20, +0.80], in a first
+  run beside four fields since removed), the 10 current ones found in
+  every arm. Two of the five without the field had read the note, whose
+  `source_state: stale` they did not repeat.
 
 - `version` is the content hash `silica_read` checks: carried into
   `expect_version`, a file edited between the search and the read is refused
