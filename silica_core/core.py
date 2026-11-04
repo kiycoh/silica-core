@@ -1048,8 +1048,8 @@ def _unseen(docs: list, hits: list[dict], known: dict[str, float], mass: float) 
     holding one query word: 21,500 candidates on silica-agent's tree), so
     the bar is the reply's own: zero means nothing left ranks as strongly
     as what was shown. Absent when no hit matched a word, the dense leg's
-    alone giving no bar. Seven of nine models in the 2026-11-04 survey said
-    they stop without knowing what remains (K05); `exclude` pages on."""
+    alone giving no bar. Seven of nine models in the 2026-11-04 survey asked
+    to know what remains unseen before they stop (K05); `exclude` pages on."""
     cov: dict[str, float] = {}
     for p, _sc, m in docs:
         rel = _split_key(p)[0]

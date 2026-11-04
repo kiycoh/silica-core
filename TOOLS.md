@@ -147,8 +147,8 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed, unread?}, ind
   ranking is always large (21,500 candidates on one source tree). Zero means
   nothing left ranks as strongly as what was shown; it is absent when no hit
   matched a query word. It is a lexical count, not a promise of relevance:
-  seven of nine models in the 2026-11-04 survey said they stop without
-  knowing what remains, and this is what the index can say about that.
+  seven of nine models in the 2026-11-04 survey asked to know what remains
+  unseen before they stop (K05), and this is what the index can say about it.
 
 - A hit on a `.md` a conversion wrote carries `source` (the original) and
   `source_state` (`current`, `stale`, `unverifiable`, as in `silica_files`),
