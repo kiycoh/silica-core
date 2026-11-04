@@ -85,7 +85,7 @@ the passage; the page beside it is the check.
 | Tool | Shell | Returns |
 |---|---|---|
 | `silica_files` | `silica-core files` | the inventory and what the index did with each file: `indexed`, `changed`, `excluded`, `failed`, `unconverted` |
-| `silica_search` | `silica-core search` | ranked passages: path, section, line, BM25, matched terms, `coverage`, and the query terms absent from the corpus |
+| `silica_search` | `silica-core search` | ranked passages: path, section, line, BM25, matched terms, `coverage`, the query terms absent from the corpus, what the search could not read, and on a converted note whether its original changed since |
 | `silica_read` | `silica-core read` | a slice by lines or by heading (a page, in a PDF), the outline, and a `version` to carry forward |
 | `silica_code_pack` | `silica-core code-pack` | an AST context pack for one source file inside a character budget |
 | `silica_write_note` | `silica-core write-note` | one atomic write, linted for structure and unresolved wikilinks |
