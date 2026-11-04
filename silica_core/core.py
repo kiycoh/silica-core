@@ -769,6 +769,7 @@ def silica_search(
     per_doc: Annotated[int, Field(description="Max sections per document")] = 2,
     width: Annotated[int, Field(description="Characters in each hit's window")] = 600,
     queries: Annotated[list[str] | None, Field(description="More query groups, each ranked on its own and fused with `query` by rank: the concept in one, its identifiers in another")] = None,
+    exclude: Annotated[list[str] | None, Field(description="Paths already read: their documents leave the ranking, so the hits are the next best and `unseen` counts what is left")] = None,
 ) -> dict:
     """For a question that names no identifier (what a behaviour is, where
     it is decided, why), call this before any grep (a Grep tool, or
@@ -784,7 +785,9 @@ def silica_search(
     near 0 = only the common words); `terms_absent` are query terms found
     nowhere in the corpus. `scope.unread` names files here whose text the
     index does not hold (unconverted or failed): a miss is not absence while
-    the answer may sit in one. No boolean "no answer" exists: read coverage and
+    the answer may sit in one. `unseen` counts ranked documents not shown that
+    match the query as well as the weakest shown; pass what you read as
+    `exclude` for the next. No boolean "no answer" exists: read coverage and
     matched_terms and decide to stop or rephrase. A hit the dense leg alone
     found carries `dense` and coverage 0. In a source tree a hit's `section`
     is the symbol, `span` its lines, and `silica_read(path,
@@ -798,11 +801,12 @@ def silica_search(
     while index_state(live=live)["state"] == "cold" and embeddings.warmup_state()["state"] == "warming":
         embeddings.wait_lexical(0.5)
     with _STORE_RW:
-        return _search(query, folder, k, per_doc, width, queries, live, unextracted)
+        return _search(query, folder, k, per_doc, width, queries, live, unextracted, exclude)
 
 
 def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: list[str] | None,
-            live: dict[str, float], unextracted: list[str] | None = None) -> dict:
+            live: dict[str, float], unextracted: list[str] | None = None,
+            exclude: list[str] | None = None) -> dict:
     groups = [query] + [q for q in (queries or []) if q.strip()]
     # The dense leg is the user's call, made at index time, not the caller's:
     # it runs whenever the vectors are there and the query may go to the
@@ -901,6 +905,19 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
             lists.append([p for p, _c in dense_docs])
         fused = _rrf(lists)
         docs = [(p, *lex.get(p, (0.0, set()))) for p in sorted(fused, key=lambda p: (-fused[p], p))]
+    # What the caller already read leaves the ranking before the cut, so the
+    # pool and the hits are the next best rather than the same five again;
+    # a path that names nothing ranked is no error, it simply removes nothing.
+    gone: set[str] = set()
+    if exclude:
+        drop = set()
+        for x in exclude:
+            try:
+                drop.add(_rel(x))
+            except ValueError:
+                continue  # outside the root ranks nothing anyway
+        gone = {_split_key(p)[0] for p, _s, _m in docs} & drop
+        docs = [d for d in docs if _split_key(d[0])[0] not in gone]
     top = docs[: _pool(k)]
     dense = dict(dense_docs)  # a document's best section cosine, for `documents`
     text_all = " ".join(groups)
@@ -989,11 +1006,35 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
                            **({"dense": round(dense[p], 3)} if p in dense else {})}
                           for i, (p, sc, m) in enumerate(top) if i < k or _split_key(p)[0] in versions],
             "candidates": len(docs),
+            **_unseen(docs, hits, known, mass),
+            **({"excluded": len(gone)} if exclude else {}),
             "terms_absent": absent,
             **({"terms_absent_in_scope": absent_in_scope} if scope else {}),
             "scope": visible,
             "dense": leg,
             "index": state}
+
+
+def _unseen(docs: list, hits: list[dict], known: dict[str, float], mass: float) -> dict:
+    """`unseen`: the ranked documents no hit came from whose own coverage is
+    at least that of the weakest document a lexical hit came from. A count
+    of the whole ranking would always be large (BM25 ranks every document
+    holding one query word: 21,500 candidates on silica-agent's tree), so
+    the bar is the reply's own: zero means nothing left ranks as strongly
+    as what was shown. Absent when no hit matched a word, the dense leg's
+    alone giving no bar. Seven of nine models in the 2026-11-04 survey said
+    they stop without knowing what remains (K05); `exclude` pages on."""
+    cov: dict[str, float] = {}
+    for p, _sc, m in docs:
+        rel = _split_key(p)[0]
+        c = sum(known[t] for t in m) / mass
+        if c > cov.get(rel, -1.0):
+            cov[rel] = c
+    shown = {h["path"] for h in hits}
+    bar = min((cov[r] for r in shown if cov.get(r, 0.0) > 0), default=None)
+    if bar is None:
+        return {}
+    return {"unseen": sum(1 for r, c in cov.items() if r not in shown and c >= bar)}
 
 
 # ---------------------------------------------------------------------------

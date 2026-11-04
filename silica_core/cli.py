@@ -56,6 +56,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("-k", type=int, default=5)
     s.add_argument("--per-doc", type=int, default=2)
     s.add_argument("--width", type=int, default=600)
+    s.add_argument("--exclude", action="append", default=[], metavar="PATH",
+                   help="a path already read; its document leaves the ranking (repeatable)")
     s.add_argument("--also", action="append", default=[], metavar="QUERY",
                    help="another query group, ranked on its own and fused with the first by rank")
 
@@ -139,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         return _emit(core.files(folder=a.folder, status=a.status, limit=a.limit, cursor=a.cursor))
     if a.cmd == "search":
         return _emit(core.search(a.query, folder=a.folder, k=a.k, per_doc=a.per_doc, width=a.width,
-                                 queries=a.also))
+                                 queries=a.also, exclude=a.exclude or None))
     if a.cmd == "read":
         return _emit(core.read(a.path, start=a.start, end=a.end, section=a.section,
                                max_chars=a.max_chars, expect_version=a.expect_version))

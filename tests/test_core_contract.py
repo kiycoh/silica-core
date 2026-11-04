@@ -258,6 +258,36 @@ def test_public_walk_unreadable_and_version_of(root):
     assert root.version_of("docs/scan.pdf") is None and root.version_of("docs/missing.md") is None
     assert root.version_of("../etc/passwd") is None
 
+
+def test_exclude_pages_on_and_unseen_says_what_is_left(root):
+    """Six suppliers in six notes, two hits a call: `unseen` counts the
+    notes that match as well as the weakest shown, and passing the shown
+    ones as `exclude` serves the next instead of the same two again."""
+    sup = root._root() / "suppliers"
+    sup.mkdir()
+    for name in ("alder", "birch", "cedar", "elm", "fir", "oak"):
+        (sup / f"{name}.md").write_text(f"# {name.title()} Ltd\n\nApproved supplier of kiln-dried timber.\n",
+                                        encoding="utf-8")
+    first = root.search("approved supplier kiln-dried timber", k=2, per_doc=1)
+    shown = [h["path"] for h in first["hits"]]
+    assert len(shown) == 2 and first["unseen"] == 4 and "excluded" not in first
+    second = root.search("approved supplier kiln-dried timber", k=2, per_doc=1, exclude=shown)
+    assert second["excluded"] == 2 and not set(shown) & {h["path"] for h in second["hits"]}
+    assert second["unseen"] == 2 and all(d["path"] not in shown for d in second["documents"])
+    seen = shown + [h["path"] for h in second["hits"]] + ["../outside.md", "nowhere.md"]
+    third = root.search("approved supplier kiln-dried timber", k=5, per_doc=1, exclude=seen)
+    assert third["excluded"] == 4 and len(third["hits"]) == 2 and third["unseen"] == 0
+
+
+def test_unseen_ignores_the_long_tail(root):
+    """A document holding one common query word is ranked but is no
+    contender: the bar is the weakest shown hit's coverage, not the ranking."""
+    (root._root() / "docs" / "todo.md").write_text("# Todo\n\nRead the paper later.\n", encoding="utf-8")
+    r = root.search("leveled compaction read amplification", k=1)
+    assert r["hits"][0]["path"] == "docs/lsm.md" and r["candidates"] == 2 and r["unseen"] == 0
+    r = root.search("leveled compaction read amplification", k=1, exclude=["docs/lsm.md"])
+    assert r["hits"][0]["path"] == "docs/todo.md" and r["unseen"] == 0 and r["excluded"] == 1
+
 def test_documents_are_the_head_of_the_ranking_with_coverage(root):
     r = root.search("compaction memtable pages", k=1)
     assert r["candidates"] == 2 and len(r["documents"]) == 1, r["documents"]
