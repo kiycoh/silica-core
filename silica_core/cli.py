@@ -49,6 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--status", default="", choices=["", "indexed", "changed", "excluded", "failed", "unconverted"])
     s.add_argument("--limit", type=int, default=200)
     s.add_argument("--cursor", default="")
+    s.add_argument("--since", default="", metavar="ISO", help="only files modified after this time")
 
     s = sub.add_parser("search", help="ranked passages")
     s.add_argument("query")
@@ -136,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     import silica_core.core as core
 
     if a.cmd == "files":
-        return _emit(core.files(folder=a.folder, status=a.status, limit=a.limit, cursor=a.cursor))
+        return _emit(core.files(folder=a.folder, status=a.status, limit=a.limit, cursor=a.cursor, since=a.since))
     if a.cmd == "search":
         return _emit(core.search(a.query, folder=a.folder, k=a.k, per_doc=a.per_doc, width=a.width,
                                  queries=a.also))
