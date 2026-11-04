@@ -116,7 +116,7 @@ the page: five 1500-char windows cost 60% less than five page reads
 (measured 2026-09-09).
 
 Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window, source?, source_state?}],
-documents: [{path, score, matched_terms, coverage}], candidates, unseen?, excluded?, terms_absent,
+documents: [{path, score, matched_terms, coverage}], candidates, unseen?, excluded?, terms_absent, terms_near?,
 terms_absent_in_scope?, scope: {folder, docs, unconverted, failed, unread?}, index}`.
 
 - `scope` says what the search could see: the documents indexed under
@@ -170,6 +170,13 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed, unread?}, ind
   low even when its one surviving word matches (measured on the test corpus:
   0.31 with the absent terms ignored, 0.13 with them weighed).
 - `terms_absent` lists the query terms that occur nowhere in the corpus.
+  `terms_near` gives, for each absent term of four letters or more (the
+  first five), up to three corpus terms spelled like it (difflib ratio at
+  least 0.8, closest first): `neurosience` → `neuroscience`. An absence
+  says the folder never uses the word, not which word it uses instead;
+  five of nine models in the 2026-11-04 survey asked for that bridge (K04).
+  Offered, never substituted, and lexical only: a synonym is the dense
+  leg's job. ~20 ms a term over 87,206 terms (one vault, measured).
 - Read `coverage` down the hits, one entry per distinct path, and the shape
   says how many documents are in contention. Measured on the test corpus,
   best section per document: `0.99 · 0.67 · 0.60` is one paper, `0.97 ·

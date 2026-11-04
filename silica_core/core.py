@@ -809,7 +809,8 @@ def silica_search(
     `matched_terms` are the query terms in the hit; `coverage` is the share
     of the query's idf mass they carry (near 1 = every rare term matched,
     near 0 = only the common words); `terms_absent` are query terms found
-    nowhere in the corpus. `scope.unread` names files here whose text the
+    nowhere in the corpus, `terms_near` the corpus's closest spellings of
+    them. `scope.unread` names files here whose text the
     index does not hold (unconverted or failed): a miss is not absence while
     the answer may sit in one. `unseen` counts ranked documents not shown that
     match the query as well as the weakest shown; pass what you read as
@@ -1035,10 +1036,27 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
             **_unseen(docs, hits, known, mass),
             **({"excluded": len(gone)} if exclude else {}),
             "terms_absent": absent,
+            **({"terms_near": near} if (near := _terms_near(store, absent)) else {}),
             **({"terms_absent_in_scope": absent_in_scope} if scope else {}),
             "scope": visible,
             "dense": leg,
             "index": state}
+
+
+_NEAR_TERMS = 5  # absent terms looked up per search: ~20 ms each on an 87k-term vocabulary
+
+
+def _terms_near(store, absent: list[str]) -> dict[str, list[str]]:
+    """For each absent word of four letters or more, the corpus's closest
+    spellings: an absent term says the folder never uses the word, not which
+    word it uses instead (K04, five of nine models in the 2026-11-04 survey).
+    Lexical and offered, never substituted: the caller decides whether
+    `neuroscience` is what `neurosience` meant."""
+    out: dict[str, list[str]] = {}
+    for t in [t for t in absent if len(t) >= 4 and not t.isdigit()][:_NEAR_TERMS]:
+        if close := store.near(t):
+            out[t] = close
+    return out
 
 
 def _unseen(docs: list, hits: list[dict], known: dict[str, float], mass: float) -> dict:

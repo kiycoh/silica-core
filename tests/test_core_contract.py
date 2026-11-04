@@ -180,7 +180,7 @@ def test_absent_terms_weigh_on_coverage(root):
     """Three rare words the corpus never contains and one common word it
     does: the hit still comes back, and coverage says how little it covers."""
     r = root.search("zebra giraffe okapi compaction")
-    assert r["terms_absent"] == ["giraffe", "okapi", "zebra"]
+    assert r["terms_absent"] == ["giraffe", "okapi", "zebra"] and "terms_near" not in r
     assert r["hits"] and r["hits"][0]["matched_terms"] == ["compaction"]
     assert r["hits"][0]["coverage"] < 0.5, r["hits"][0]
 
@@ -310,6 +310,15 @@ def test_files_since_lists_what_changed_after_a_time(root):
     assert root.files(since="2026-11-03T09:00", folder="docs")["total"] == 1
     assert "modified" not in root.files()["files"][0]
     assert root.files(since="last tuesday")["error"]["code"] == "bad_argument"
+
+
+def test_terms_near_offers_the_folders_spelling_of_an_absent_word(root):
+    """`compacton` is in no note; `compaction` is, and the reply says so
+    beside the absence instead of leaving the guess to the caller. Short
+    and numeric absent tokens get no offer."""
+    r = root.search("compacton memtabel 2031 qx")
+    assert r["terms_absent"] == ["2031", "compacton", "memtabel", "qx"]
+    assert r["terms_near"] == {"compacton": ["compaction"], "memtabel": ["memtable"]}
 
 def test_documents_are_the_head_of_the_ranking_with_coverage(root):
     r = root.search("compaction memtable pages", k=1)
