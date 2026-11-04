@@ -49,7 +49,6 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--status", default="", choices=["", "indexed", "changed", "excluded", "failed", "unconverted"])
     s.add_argument("--limit", type=int, default=200)
     s.add_argument("--cursor", default="")
-    s.add_argument("--since", default="", metavar="ISO", help="only files modified after this time")
 
     s = sub.add_parser("search", help="ranked passages")
     s.add_argument("query")
@@ -57,8 +56,6 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("-k", type=int, default=5)
     s.add_argument("--per-doc", type=int, default=2)
     s.add_argument("--width", type=int, default=600)
-    s.add_argument("--exclude", action="append", default=[], metavar="PATH",
-                   help="a path already read; its document leaves the ranking (repeatable)")
     s.add_argument("--also", action="append", default=[], metavar="QUERY",
                    help="another query group, ranked on its own and fused with the first by rank")
 
@@ -139,10 +136,10 @@ def main(argv: list[str] | None = None) -> int:
     import silica_core.core as core
 
     if a.cmd == "files":
-        return _emit(core.files(folder=a.folder, status=a.status, limit=a.limit, cursor=a.cursor, since=a.since))
+        return _emit(core.files(folder=a.folder, status=a.status, limit=a.limit, cursor=a.cursor))
     if a.cmd == "search":
         return _emit(core.search(a.query, folder=a.folder, k=a.k, per_doc=a.per_doc, width=a.width,
-                                 queries=a.also, exclude=a.exclude or None))
+                                 queries=a.also))
     if a.cmd == "read":
         return _emit(core.read(a.path, start=a.start, end=a.end, section=a.section,
                                max_chars=a.max_chars, expect_version=a.expect_version))

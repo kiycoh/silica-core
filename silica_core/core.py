@@ -451,7 +451,6 @@ def _unread_rows(scope: str, unextracted: list[str]) -> list[dict]:
 
 
 _NO_SIDECAR = "no extracted .md beside it"
-_UNREAD_SHOWN = 10  # a folder of 400 scans must not turn every search reply into a listing
 
 
 def _note_paths() -> list[str]:
@@ -626,7 +625,6 @@ def silica_files(
     status: Annotated[str, Field(description="Only this status: indexed, changed, excluded, failed, unconverted")] = "",
     limit: Annotated[int, Field(description="Max entries per page")] = 200,
     cursor: Annotated[str, Field(description="`next_cursor` from the previous page")] = "",
-    since: Annotated[str, Field(description="Only files modified after this time, ISO 8601 (2026-11-04, 2026-11-04T09:30, with or without an offset; local time without): what changed since a session you remember. Each row then carries `modified`; deletions are not listed")] = "",
 ) -> dict:
     """Ask what the index could see before trusting a search or calling
     absence. Inventory of the root and what the index did with each file: `indexed`
@@ -639,8 +637,7 @@ def silica_files(
     that sidecar is indexed instead, and both rows carry `source_state`:
     `stale` means the original changed after the conversion, `unverifiable`
     that the sidecar records no hash of it or its original is not under the
-    root. `since` keeps only what was modified after a time, dated: what
-    changed since a session you remember. `index.state` is `cold` when nothing was
+    root. `index.state` is `cold` when nothing was
     ever indexed: an empty listing there is not "no files"."""
     from silica_core.sources.convert import DOC_EXTS, IMG_EXTS
 
@@ -652,40 +649,21 @@ def silica_files(
     base = root / scope if scope else root
     if not base.is_dir():
         return _error("not_found", f"{scope or '.'} is not a folder under {root}")
-    cut = None
-    if since.strip():
-        # A remembered claim is checked against what changed after it was
-        # made: nine of nine models in the 2026-11-04 survey asked for this
-        # once they had memory (K12). Dates ride along only when asked for;
-        # `status` already says "changed since the index read it" otherwise.
-        import datetime as _dt
-        try:
-            when = _dt.datetime.fromisoformat(since.strip())
-        except ValueError:
-            return _error("bad_argument", f"since must be ISO 8601 (2026-11-04 or 2026-11-04T09:30), not {since!r}")
-        cut = (when if when.tzinfo else when.astimezone()).timestamp()
     meta = _load_meta()
     stamps = meta.get("stamps", {})
     skipped = meta.get("no_text", {})
     failed = _failures()
     entries: list[dict] = []
-    excluded_dirs = 0
     for rel, full in _walk(base):
         if full is None:  # a directory not entered, or a file `.silicaignore` names
-            excluded_dirs += rel.endswith("/")
-            if cut is None:  # what the walk never entered has no date to compare
-                entries.append({"path": rel, "status": "excluded",
-                                "reason": "hidden" if rel.rstrip("/").rsplit("/", 1)[-1].startswith(".") else "ignore rule"})
+            entries.append({"path": rel, "status": "excluded",
+                            "reason": "hidden" if rel.rstrip("/").rsplit("/", 1)[-1].startswith(".") else "ignore rule"})
             continue
         try:
             st = full.stat()
         except OSError:
             continue
-        if cut is not None and st.st_mtime <= cut:
-            continue
         row: dict = {"path": rel, "bytes": st.st_size}  # `status` says whether it changed; a float mtime said nothing more
-        if cut is not None:
-            row["modified"] = _iso(st.st_mtime)
         suffix = full.suffix.lower()
         if rel in failed:
             row.update(status="failed", reason=failed[rel])
@@ -721,6 +699,7 @@ def silica_files(
     # The folders the walk did not enter are a count in every listing and rows
     # only under status=excluded: thirteen hidden folders opened every listing
     # of this repository before any file (measured 2026-09-08).
+    excluded_dirs = sum(1 for e in entries if e["path"].endswith("/"))
     if status:
         entries = [e for e in entries if e["status"] == status]
     else:
@@ -736,12 +715,6 @@ def silica_files(
             "excluded_dirs": excluded_dirs,
             "truncated": truncated, "next_cursor": str(offset + limit) if truncated else None,
             "index": index_state(meta)}
-
-
-def _iso(ts: float) -> str:
-    """A local time with its offset, to the second: what `since` takes back."""
-    import datetime as _dt
-    return _dt.datetime.fromtimestamp(ts).astimezone().isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -801,7 +774,6 @@ def silica_search(
     per_doc: Annotated[int, Field(description="Max sections per document")] = 2,
     width: Annotated[int, Field(description="Characters in each hit's window")] = 600,
     queries: Annotated[list[str] | None, Field(description="More query groups, each ranked on its own and fused with `query` by rank: the concept in one, its identifiers in another")] = None,
-    exclude: Annotated[list[str] | None, Field(description="Paths already read: their documents leave the ranking, so the hits are the next best and `unseen` counts what is left")] = None,
 ) -> dict:
     """For a question that names no identifier (what a behaviour is, where
     it is decided, why), call this before any grep (a Grep tool, or
@@ -815,12 +787,7 @@ def silica_search(
     `matched_terms` are the query terms in the hit; `coverage` is the share
     of the query's idf mass they carry (near 1 = every rare term matched,
     near 0 = only the common words); `terms_absent` are query terms found
-    nowhere in the corpus, `terms_near` the corpus's closest spellings of
-    them. `scope.unread` names files here whose text the
-    index does not hold (unconverted or failed): a miss is not absence while
-    the answer may sit in one. `unseen` counts ranked documents not shown that
-    match the query as well as the weakest shown; pass what you read as
-    `exclude` for the next. No boolean "no answer" exists: read coverage and
+    nowhere in the corpus. No boolean "no answer" exists: read coverage and
     matched_terms and decide to stop or rephrase. A hit the dense leg alone
     found carries `dense` and coverage 0. In a source tree a hit's `section`
     is the symbol, `span` its lines, and `silica_read(path,
@@ -834,12 +801,11 @@ def silica_search(
     while index_state(live=live)["state"] == "cold" and embeddings.warmup_state()["state"] == "warming":
         embeddings.wait_lexical(0.5)
     with _STORE_RW:
-        return _search(query, folder, k, per_doc, width, queries, live, unextracted, exclude)
+        return _search(query, folder, k, per_doc, width, queries, live, unextracted)
 
 
 def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: list[str] | None,
-            live: dict[str, float], unextracted: list[str] | None = None,
-            exclude: list[str] | None = None) -> dict:
+            live: dict[str, float], unextracted: list[str] | None = None) -> dict:
     groups = [query] + [q for q in (queries or []) if q.strip()]
     # The dense leg is the user's call, made at index time, not the caller's:
     # it runs whenever the vectors are there and the query may go to the
@@ -893,16 +859,16 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
     # folder of .docx contracts read `docs 0, unconverted 0`: an absence the
     # search had no right to imply (survey card C1, silica-agent's docs).
     unread = _unread_rows(scope, unextracted or [])
-    visible: dict[str, Any] = {
+    visible = {
         "folder": scope,
         "docs": len({_split_key(p)[0] for p in store.paths() if _paths.in_folder(p, scope)}),
         "unconverted": sum(1 for r in unread if r["status"] == "unconverted"),
         "failed": sum(1 for r in unread if r["status"] == "failed")}
-    if unread:
-        # Named, not only counted: on silica-agent's probe the paths beside the
-        # count took Qwen3.5-9B from 10 of 20 "the documents do not say" to 2,
-        # and deepseek-v4-flash-0731 from 6 to 0 (survey card C1, 2026-11-04).
-        visible["unread"] = [r["path"] for r in unread[:_UNREAD_SHOWN]]
+    # Not named here: through this surface deepseek-v4-flash-0731 called a
+    # folder of unread .docx silent in 0 of 20 turns even before this fix,
+    # with the count at 0 and no path named, because it asks silica_files
+    # itself; the paths fixed nothing measurable (probe p1, 2026-11-04).
+    # `silica_files(status=...)` and `unreadable()` name them.
     absent_in_scope = sorted(t for t in known
                              if not any(_paths.in_folder(p, scope) for p in store.paths_with(t)))
     dense_docs: list[tuple[str, float]] = []
@@ -938,19 +904,6 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
             lists.append([p for p, _c in dense_docs])
         fused = _rrf(lists)
         docs = [(p, *lex.get(p, (0.0, set()))) for p in sorted(fused, key=lambda p: (-fused[p], p))]
-    # What the caller already read leaves the ranking before the cut, so the
-    # pool and the hits are the next best rather than the same five again;
-    # a path that names nothing ranked is no error, it simply removes nothing.
-    gone: set[str] = set()
-    if exclude:
-        drop = set()
-        for x in exclude:
-            try:
-                drop.add(_rel(x))
-            except ValueError:
-                continue  # outside the root ranks nothing anyway
-        gone = {_split_key(p)[0] for p, _s, _m in docs} & drop
-        docs = [d for d in docs if _split_key(d[0])[0] not in gone]
     top = docs[: _pool(k)]
     dense = dict(dense_docs)  # a document's best section cosine, for `documents`
     text_all = " ".join(groups)
@@ -1039,52 +992,11 @@ def _search(query: str, folder: str, k: int, per_doc: int, width: int, queries: 
                            **({"dense": round(dense[p], 3)} if p in dense else {})}
                           for i, (p, sc, m) in enumerate(top) if i < k or _split_key(p)[0] in versions],
             "candidates": len(docs),
-            **_unseen(docs, hits, known, mass),
-            **({"excluded": len(gone)} if exclude else {}),
             "terms_absent": absent,
-            **({"terms_near": near} if (near := _terms_near(store, absent)) else {}),
             **({"terms_absent_in_scope": absent_in_scope} if scope else {}),
             "scope": visible,
             "dense": leg,
             "index": state}
-
-
-_NEAR_TERMS = 5  # absent terms looked up per search: ~7 ms each on an 87k-term vocabulary
-
-
-def _terms_near(store, absent: list[str]) -> dict[str, list[str]]:
-    """For each absent word of four letters or more, the corpus's closest
-    spellings: an absent term says the folder never uses the word, not which
-    word it uses instead (K04, five of nine models in the 2026-11-04 survey).
-    Lexical and offered, never substituted: the caller decides whether
-    `neuroscience` is what `neurosience` meant."""
-    out: dict[str, list[str]] = {}
-    for t in [t for t in absent if len(t) >= 4 and not t.isdigit()][:_NEAR_TERMS]:
-        if close := store.near(t):
-            out[t] = close
-    return out
-
-
-def _unseen(docs: list, hits: list[dict], known: dict[str, float], mass: float) -> dict:
-    """`unseen`: the ranked documents no hit came from whose own coverage is
-    at least that of the weakest document a lexical hit came from. A count
-    of the whole ranking would always be large (BM25 ranks every document
-    holding one query word: 21,500 candidates on silica-agent's tree), so
-    the bar is the reply's own: zero means nothing left ranks as strongly
-    as what was shown. Absent when no hit matched a word, the dense leg's
-    alone giving no bar. Seven of nine models in the 2026-11-04 survey asked
-    to know what remains unseen before they stop (K05); `exclude` pages on."""
-    cov: dict[str, float] = {}
-    for p, _sc, m in docs:
-        rel = _split_key(p)[0]
-        c = sum(known[t] for t in m) / mass
-        if c > cov.get(rel, -1.0):
-            cov[rel] = c
-    shown = {h["path"] for h in hits}
-    bar = min((cov[r] for r in shown if cov.get(r, 0.0) > 0), default=None)
-    if bar is None:
-        return {}
-    return {"unseen": sum(1 for r, c in cov.items() if r not in shown and c >= bar)}
 
 
 # ---------------------------------------------------------------------------

@@ -270,21 +270,6 @@ class LexicalStore(DiskSynced):
             out[t] = math.log(1 + (n - df + 0.5) / (df + 0.5)) if df else None
         return out
 
-    def near(self, term: str, n: int = 3, cutoff: float = 0.8) -> list[str]:
-        """Up to `n` corpus terms spelled like `term` (difflib ratio at least
-        `cutoff`), closest first: the folder's own word for a query word it
-        never uses, a typo's or a plural's. Only terms within two characters
-        of its length that share its first or second letter are compared:
-        7 ms a call over 87,206 terms against 26 ms on length alone, the
-        first offer unchanged on 16 of 16 misspellings and the whole list
-        on 13 (alex_second_brain, 2026-11-04)."""
-        import difflib
-
-        lo, hi = len(term) - 2, len(term) + 2
-        cands = [t for t in self._postings
-                 if lo <= len(t) <= hi and (t[:1] == term[:1] or t[1:2] == term[1:2])]
-        return difflib.get_close_matches(term, cands, n=n, cutoff=cutoff)
-
     def bm25(self, query: str) -> list[tuple[str, float, set[str]]]:
         """Every candidate document, best first: (path, raw score, matched terms).
         Empty store -> []."""
