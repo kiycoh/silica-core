@@ -410,7 +410,8 @@ def walk(folder: str = ""):
     it does not: a hidden name, a noise folder, a `.silicaignore` rule. The
     walk every tool here starts from, public for a harness that lists files
     on its own terms (silica-agent's changes since a time) instead of
-    reaching for the private one."""
+    reaching for the private one. A folder outside the root raises
+    ValueError, as every root-relative path here does."""
     base = _root() / _rel(folder) if folder.strip() else None
     return _walk(base)
 
