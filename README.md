@@ -117,6 +117,18 @@ is about data replication. On 254 papers the top hit of an answered question
 carries 0.69 to 1.00; a question the corpus does not cover, 0.44. Silica
 exposes the signals; the harness decides whether to stop, read or rephrase.
 
+## What a reply also says (0.12)
+
+Asked in November 2026, nine models named what they need from a knowledge
+layer; each of these was kept only where a probe on a production model
+showed the failure it fixes ([TOOLS.md](TOOLS.md) has the numbers):
+
+- `scope` counts every file the search could not read, an office file with no extracted `.md` beside it included, so a folder of `.docx` no longer reads as silent.
+- A hit from a converted note carries `source_state`: `stale` when its PDF was replaced after the conversion, before the passage is quoted.
+- `terms_near` offers the corpus's closest spelling of an absent word (`quitanllu` → `quitanlu`) instead of leaving a misspelt name to read as absent.
+- `unseen` counts the ranked documents as strong as the weakest shown that were not shown; `exclude` takes the paths already read and serves the next ones, so a long list is paged instead of re-fetched.
+- `silica_files(since=…)` lists only what changed after a time, dated: what changed since the last session.
+
 ## Benchmarks
 
 nDCG@10 on BEIR SciFact · NFCorpus, the same documents and queries for every
