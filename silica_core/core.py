@@ -1079,8 +1079,8 @@ def _unseen(docs: list, hits: list[dict], known: dict[str, float], mass: float) 
     to know what remains unseen before they stop (K05); `exclude` pages on.
     On a 50-item list under the reference loop's 12,000-character result cap,
     deepseek-v4-flash-0731 finished it either way but spent 318,535 prompt
-    tokens and 21.9 tool calls a turn without these, 162,740 and 9.8 with
-    them (probe p2c, 2026-11-04)."""
+    tokens and 21.9 tool calls a turn without these, 122,182 and 10.0 with
+    them (probe p2c recheck, 2026-11-05)."""
     cov: dict[str, float] = {}
     for p, _sc, m in docs:
         rel = _split_key(p)[0]

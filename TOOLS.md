@@ -154,9 +154,10 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   whether it is reached: deepseek-v4-flash-0731 raises `k` and completes a
   six-item list either way (probe p2), and a 50-item one too, but under a
   12,000-character result cap (`silica-core repl`'s) it spent 318,535 prompt
-  tokens, 21.9 tool calls and 522 s a turn without these against 162,740,
-  9.8 and 271 s with them, paired interval on tokens [+66,191, +269,956]
-  (probe p2c, 10 lists; p2b, its first run, gave the same direction).
+  tokens, 21.9 tool calls and 522 s a turn without these against 122,182,
+  10.0 and 252 s with the reply as shipped, paired interval on tokens
+  [+116,062, +294,061] (probe p2c recheck, 10 lists; the first p2c run and
+  p2b gave the same direction).
 
 - A hit on a `.md` a conversion wrote carries `source` (the original) and
   `source_state` (`current`, `stale`, `unverifiable`, as in `silica_files`),
