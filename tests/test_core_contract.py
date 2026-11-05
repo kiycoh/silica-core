@@ -180,7 +180,7 @@ def test_absent_terms_weigh_on_coverage(root):
     """Three rare words the corpus never contains and one common word it
     does: the hit still comes back, and coverage says how little it covers."""
     r = root.search("zebra giraffe okapi compaction")
-    assert r["terms_absent"] == ["giraffe", "okapi", "zebra"]
+    assert r["terms_absent"] == ["giraffe", "okapi", "zebra"] and "terms_near" not in r
     assert r["hits"] and r["hits"][0]["matched_terms"] == ["compaction"]
     assert r["hits"][0]["coverage"] < 0.5, r["hits"][0]
 
@@ -208,6 +208,109 @@ def test_scope_reports_what_the_search_could_see(root):
     assert r["terms_absent"] == [] and r["terms_absent_in_scope"] == ["compaction"]
     whole = root.search("compaction pages")
     assert "terms_absent_in_scope" not in whole and whole["scope"]["docs"] == 3
+
+
+
+def test_scope_counts_an_office_file_with_no_sidecar(root):
+    """A .docx with no `.md` beside it is `unconverted` to silica_files, so
+    the search under its folder counts it too: before 2026-11-04 a
+    folder of contracts read `docs 0, unconverted 0`, an absence the search
+    had not earned. A converted one is the note beside it and counts no more."""
+    contracts = root._root() / "contracts"
+    contracts.mkdir()
+    (contracts / "rate-card.docx").write_bytes(b"PK\x03\x04not really a docx")
+    r = root.search("hourly rate senior designer", folder="contracts")
+    assert r["hits"] == [] and r["scope"]["docs"] == 0
+    assert r["scope"]["unconverted"] == 1
+    row = root.files(folder="contracts")["files"][0]
+    assert row == {"path": "contracts/rate-card.docx", "bytes": row["bytes"], "status": "unconverted",
+                   "reason": "no extracted .md beside it"}
+    whole = root.search("hourly rate")["scope"]
+    assert whole["unconverted"] == 2
+    (contracts / "rate-card.md").write_text("# Rate card\n\nSenior designer: 95 EUR an hour.\n", encoding="utf-8")
+    r = root.search("hourly rate senior designer", folder="contracts")
+    assert r["scope"]["unconverted"] == 0 and r["hits"]
+
+
+def test_public_walk_unreadable_and_version_of(root):
+    """What a harness built on the engine needs without its private names:
+    the walk, the files whose text the index lacks, and the version a read
+    would serve, the one a citation carries as `expect_version`."""
+    (root._root() / "docs" / "brief.docx").write_bytes(b"PK")
+    root.build_index()
+    walked = dict(root.walk("docs"))
+    assert set(walked) == {"docs/lsm.md", "docs/btree.md", "docs/scan.pdf", "docs/brief.docx"}
+    assert ("node_modules/", None) in list(root.walk())
+    got = root.unreadable("docs")
+    assert [(f["path"], f["status"]) for f in got["files"]] == [("docs/brief.docx", "unconverted"),
+                                                                ("docs/scan.pdf", "unconverted")]
+    assert got["counts"] == {"failed": 0, "unconverted": 2}
+    assert root.unreadable("nowhere")["error"]["code"] == "not_found"
+    assert root.unreadable("../x")["error"]["code"] == "out_of_root"
+    assert root.version_of("docs/lsm.md") == root.read("docs/lsm.md")["version"]
+    assert root.version_of("docs/scan.pdf") is None and root.version_of("docs/missing.md") is None
+    assert root.version_of("../etc/passwd") is None
+
+
+def test_terms_near_offers_the_folders_spelling_of_an_absent_word(root):
+    """`compacton` is in no note; `compaction` is, and the reply says so
+    beside the absence instead of leaving the guess to the caller. Short
+    and numeric absent tokens get no offer."""
+    r = root.search("compacton memtabel 2031 qx")
+    assert r["terms_absent"] == ["2031", "compacton", "memtabel", "qx"]
+    assert r["terms_near"] == {"compacton": ["compaction"], "memtabel": ["memtable"]}
+
+def test_files_since_lists_what_changed_after_a_time(root):
+    """A session remembers a figure from a note; the next one asks what
+    changed after it. Only those rows, each with its date; a bad time is a
+    bad argument, and without `since` no row carries a date."""
+    import datetime as dt
+    import os
+
+    old = dt.datetime(2026, 10, 1, 12, 0).timestamp()
+    for f in (root._root() / "docs").iterdir():
+        os.utime(f, (old, old))
+    edited = root._root() / "docs" / "btree.md"
+    later = dt.datetime(2026, 11, 3, 9, 30).timestamp()
+    os.utime(edited, (later, later))
+    r = root.files(since="2026-11-01")
+    assert [f["path"] for f in r["files"]] == ["docs/btree.md"] and r["total"] == 1
+    assert r["files"][0]["modified"].startswith("2026-11-03T09:30:00")
+    assert r["counts"]["changed"] + r["counts"]["indexed"] == 1 and r["excluded_dirs"] == 1
+    assert root.files(since="2026-11-03T10:00")["files"] == []
+    assert root.files(since="2026-11-03T09:00", folder="docs")["total"] == 1
+    assert "modified" not in root.files()["files"][0]
+    assert root.files(since="last tuesday")["error"]["code"] == "bad_argument"
+
+
+def test_exclude_pages_on_and_unseen_says_what_is_left(root):
+    """Six suppliers in six notes, two hits a call: `unseen` counts the
+    notes that match as well as the weakest shown, and passing the shown
+    ones as `exclude` serves the next instead of the same two again."""
+    sup = root._root() / "suppliers"
+    sup.mkdir()
+    for name in ("alder", "birch", "cedar", "elm", "fir", "oak"):
+        (sup / f"{name}.md").write_text(f"# {name.title()} Ltd\n\nApproved supplier of kiln-dried timber.\n",
+                                        encoding="utf-8")
+    first = root.search("approved supplier kiln-dried timber", k=2, per_doc=1)
+    shown = [h["path"] for h in first["hits"]]
+    assert len(shown) == 2 and first["unseen"] == 4 and "excluded" not in first
+    second = root.search("approved supplier kiln-dried timber", k=2, per_doc=1, exclude=shown)
+    assert second["excluded"] == 2 and not set(shown) & {h["path"] for h in second["hits"]}
+    assert second["unseen"] == 2 and all(d["path"] not in shown for d in second["documents"])
+    seen = shown + [h["path"] for h in second["hits"]] + ["../outside.md", "nowhere.md"]
+    third = root.search("approved supplier kiln-dried timber", k=5, per_doc=1, exclude=seen)
+    assert third["excluded"] == 4 and len(third["hits"]) == 2 and third["unseen"] == 0
+
+
+def test_unseen_ignores_the_long_tail(root):
+    """A document holding one common query word is ranked but is no
+    contender: the bar is the weakest shown hit's coverage, not the ranking."""
+    (root._root() / "docs" / "todo.md").write_text("# Todo\n\nRead the paper later.\n", encoding="utf-8")
+    r = root.search("leveled compaction read amplification", k=1)
+    assert r["hits"][0]["path"] == "docs/lsm.md" and r["candidates"] == 2 and r["unseen"] == 0
+    r = root.search("leveled compaction read amplification", k=1, exclude=["docs/lsm.md"])
+    assert r["hits"][0]["path"] == "docs/todo.md" and r["unseen"] == 0 and r["excluded"] == 1
 
 
 def test_documents_are_the_head_of_the_ranking_with_coverage(root):
@@ -269,7 +372,12 @@ def test_the_search_to_read_path_reports_a_stale_conversion(root, tmp_path, monk
     r = root.read(hit["path"], expect_version=hit["version"])
     assert r["source"] == "docs/paper.pdf" and r["source_state"] == "current"
 
+    assert hit["source"] == "docs/paper.pdf" and hit["source_state"] == "current"
+    assert "source_state" not in root.search("leveled compaction")["hits"][0]
+
     pdf.write_bytes(pdf_bytes(["Rewritten under the note."]))
+    stale_hit = root.search("bloom filters absent keys")["hits"][0]
+    assert stale_hit["path"] == "docs/paper.md" and stale_hit["source_state"] == "stale"
     again = root.read(hit["path"], expect_version=hit["version"])
     assert again["version"] == hit["version"] and again["source_state"] == "stale"
     assert again["source"] == "docs/paper.pdf"

@@ -37,7 +37,7 @@ it yet; the refactor is done when it does and the acceptance checks pass.
 
 ## 1. `silica_files` — inventory and index state
 
-`silica_files(folder="", status="", limit=200, cursor="")`
+`silica_files(folder="", status="", limit=200, cursor="", since="")`
 
 Lists what is under the root and what the index did with it. A file has
 exactly one `status`:
@@ -50,14 +50,26 @@ exactly one `status`:
 | `failed` | read or conversion failed; `reason` says why |
 | `unconverted` | a PDF whose text layer the index could not read (a scan, an encrypted or broken file), or another binary source with no extracted text yet; `reason` says which |
 
-Reply: `{root, total, files: [{path, bytes, status, reason?, source?, source_state?}],
+Reply: `{root, total, files: [{path, bytes, status, reason?, source?, source_state?, modified?}],
 counts: {indexed, changed, excluded, failed, unconverted}, excluded_dirs,
 truncated, next_cursor, index}`.
 
 The folders the walk does not enter (hidden, or an ignore rule) are a count,
 `excluded_dirs`, in every listing and rows only under `status=excluded`;
 `counts.excluded` includes them. `status` already says whether a file
-changed since the index read it, so no timestamp rides along.
+changed since the index read it, so no timestamp rides along unless asked
+for: `since` (ISO 8601, `2026-11-04` or `2026-11-04T09:30`, local time
+without an offset) keeps only the files modified after that time, each row
+with its `modified`, and `counts` count those rows. It answers "what
+changed after my last session", which nine of nine models in the
+2026-11-04 survey asked for (K12) and which no other reply here can, since
+none carries a date: asked which notes were edited after a time, deepseek-
+v4-flash-0731 gave no list in 10 of 10 turns without it (reading every note
+first, and once stating that nothing changed) and the right list in 10 of
+10 with it, in 1.6 tool calls against 20 (probe p4c). Deletions are not
+listed: the index refreshes on every search, so it keeps no record of what
+was there. The folders the walk did not enter have no date and are left
+out of a `since` listing, still counted in `excluded_dirs`.
 
 `<root>/.silicaignore` is what the index should not search, as distinct
 from what git should not commit (`.gitignore` is deliberately not read: a
@@ -85,7 +97,7 @@ the original as `source`. A PDF the index has not read yet is `changed`, not
 
 ## 2. `silica_search` — ranked passages with an honest zero
 
-`silica_search(query, folder="", k=5, per_doc=2, width=600, queries=[])`
+`silica_search(query, folder="", k=5, per_doc=2, width=600, queries=[], exclude=[])`
 
 For a question that names no identifier, this comes before any grep (a
 Grep tool, or grep or rg in a shell), Glob or Read; grep is for an exact string or a symbol name already known (the
@@ -106,18 +118,58 @@ no headings), so on a PDF hit widen `width` (1200-1500) rather than reading
 the page: five 1500-char windows cost 60% less than five page reads
 (measured 2026-09-09).
 
-Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window}],
-documents: [{path, score, matched_terms, coverage}], candidates, terms_absent,
+Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window, source?, source_state?}],
+documents: [{path, score, matched_terms, coverage}], candidates, unseen?, excluded?, terms_absent, terms_near?,
 terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
 
 - `scope` says what the search could see: the documents indexed under
   `folder` (the whole root when empty) and how many files there the index
-  read but found no text in (`unconverted`) or could not read (`failed`). A
-  relevant document among those never ranks; `silica_files(status=…)` names
-  them. `terms_absent` is always corpus-wide. With a `folder`,
+  holds no text for, with the statuses `silica_files` gives them:
+  `unconverted` (a PDF it read and found no text layer in, or another
+  document with no `.md` extracted beside it) and `failed` (the read
+  failed). A relevant document among those never ranks;
+  `silica_files(status=…)` and `unreadable()` name them. Until 2026-11-04
+  `unconverted` counted only the PDFs found empty, and a folder of `.docx`
+  contracts read `docs 0, unconverted 0`. The paths are not in the reply:
+  through this surface deepseek-v4-flash-0731 called such a folder silent
+  in 0 of 20 turns even with that 0 and no path named, because it asks
+  `silica_files` itself, so naming them fixed nothing measurable (probe p1,
+  2026-11-04). `terms_absent` is always corpus-wide. With a `folder`,
   `terms_absent_in_scope` lists the query terms the corpus holds but nowhere
   under that folder, so a zero there is a zero of the scope, not of the
   corpus.
+
+- `exclude` takes the paths already read: their documents leave the
+  ranking before the cut, so the hits and `documents` are the next best, and
+  `excluded` says how many ranked documents it removed (a path that ranks
+  nothing removes nothing; it is no error). `unseen` counts the ranked
+  documents no hit came from whose whole-document coverage is at least that
+  of the weakest document a hit came from: the reply's own bar, because
+  BM25 ranks every document holding one query word and a count of the whole
+  ranking is always large (21,500 candidates on one source tree). Zero means
+  nothing left ranks as strongly as what was shown; it is absent when no hit
+  matched a query word. A lexical count, not a promise of relevance; seven
+  of nine models in the 2026-11-04 survey asked to know what remains unseen
+  before they stop (K05). What it changes is the cost of a long answer, not
+  whether it is reached: deepseek-v4-flash-0731 raises `k` and completes a
+  six-item list either way (probe p2), and a 50-item one too, but under a
+  12,000-character result cap (`silica-core repl`'s) it spent 318,535 prompt
+  tokens, 21.9 tool calls and 522 s a turn without these against 122,182,
+  10.0 and 252 s with the reply as shipped, paired interval on tokens
+  [+116,062, +294,061] (probe p2c recheck, 10 lists; the first p2c run and
+  p2b gave the same direction).
+
+- A hit on a `.md` a conversion wrote carries `source` (the original) and
+  `source_state` (`current`, `stale`, `unverifiable`, as in `silica_files`),
+  so a passage quoted from a sidecar whose PDF was replaced says so before it
+  is cited, not only once the note is read. A note no conversion wrote
+  carries neither. Measured 2026-11-04 on deepseek-v4-flash-0731 (probe p3,
+  20 converted PDFs, 10 replaced after the conversion): answers quoting a
+  replaced one with no caveat went from 5 of 10 to 1 of 10 with this
+  reply, 95% interval [+0.10, +0.70] (0 of 10, [+0.20, +0.80], in a first
+  run beside four fields since removed), the 10 current ones found in
+  every arm. Two of the five without the field had read the note, whose
+  `source_state: stale` they did not repeat.
 
 - `version` is the content hash `silica_read` checks: carried into
   `expect_version`, a file edited between the search and the read is refused
@@ -133,6 +185,18 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   low even when its one surviving word matches (measured on the test corpus:
   0.31 with the absent terms ignored, 0.13 with them weighed).
 - `terms_absent` lists the query terms that occur nowhere in the corpus.
+  `terms_near` gives, for each absent term of four letters or more (the
+  first five), up to three corpus terms spelled like it (difflib ratio at
+  least 0.8, among terms within two characters of its length that share
+  its first or second letter; closest first). An absence says the folder
+  never uses the word, not which word it uses instead. Offered, never
+  substituted, and lexical only: a synonym is the dense leg's job. Measured
+  2026-11-04 on deepseek-v4-flash-0731 (probe p5b): over 200 contact notes,
+  a surname misspelt by one letter went unanswered, the contact called
+  absent, in 14 of 20 turns without it and 0 of 20 with it, 95% interval
+  [+0.50, +0.90], with 2.2 fewer tool calls and 19,395 fewer prompt tokens
+  a turn. A misspelt common word the model corrects on its own (p5, 20 of
+  20 either way). ~7 ms a term over 87,206 terms (one vault, measured).
 - Read `coverage` down the hits, one entry per distinct path, and the shape
   says how many documents are in contention. Measured on the test corpus,
   best section per document: `0.99 · 0.67 · 0.60` is one paper, `0.97 ·
@@ -160,7 +224,8 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   concept and its anchors — `query="leader election"`,
   `queries=["Raft"]` — where one long query would let the anchor's idf
   drown the concept, or the reverse. The reply repeats them as `queries`;
-  from the shell, `silica-core search QUERY --also QUERY` is the same call.
+  from the shell, `silica-core search QUERY --also QUERY` is the same call;
+  `--exclude PATH` (repeatable) is `exclude`.
 - A search refreshes the index inline when at most 50 documents are behind
   (`STALE_BUDGET`, ~13 ms a document measured); past that it answers from
   the index as it is and `index` says `stale` with `pending`, so a bulk
@@ -325,7 +390,12 @@ beyond the built-in PDF text layer.
 
 ## Surfaces
 
-- Python: `from silica_core.core import files, search, read, code_pack, write_note`
+- Python: `from silica_core.core import files, search, read, code_pack, write_note`;
+  for a harness built on the engine, `walk(folder)` (the walk every tool
+  starts from), `unreadable(folder)` (the `failed` and `unconverted` rows
+  alone, without reading every note's head as a listing does) and
+  `version_of(path)` (the `version` a read would serve, or None), so it
+  never reaches for a private name
 - CLI: `silica-core files|search|read|code-pack|write-note ... --json`
 - MCP: `silica-core mcp --vault DIR` exposes exactly these five
 - `silica-core repl`: the optional reference harness, an agent loop over the same
@@ -367,3 +437,9 @@ beyond the built-in PDF text layer.
    lands on the section the vector points at, not on the document's
    opening, and a non-loopback embedder is refused until granted once
    (`tests/test_embeddings_sections.py`).
+9. A search under a folder whose only file is a `.docx` with no `.md`
+   beside it has no hits and counts it in `scope.unconverted`, as
+   `silica_files` reports it `unconverted`; a search hit on a converted
+   note whose PDF was replaced carries `source_state: stale`; a misspelt
+   absent term gets the corpus's spelling in `terms_near`
+   (`tests/test_core_contract.py`).
