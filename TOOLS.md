@@ -97,7 +97,7 @@ the original as `source`. A PDF the index has not read yet is `changed`, not
 
 ## 2. `silica_search` — ranked passages with an honest zero
 
-`silica_search(query, folder="", k=5, per_doc=2, width=600, queries=[])`
+`silica_search(query, folder="", k=5, per_doc=2, width=600, queries=[], exclude=[])`
 
 For a question that names no identifier, this comes before any grep (a
 Grep tool, or grep or rg in a shell), Glob or Read; grep is for an exact string or a symbol name already known (the
@@ -119,7 +119,7 @@ the page: five 1500-char windows cost 60% less than five page reads
 (measured 2026-09-09).
 
 Reply: `{query, hits: [{path, section, line, version, score, matched_terms, coverage, window, source?, source_state?}],
-documents: [{path, score, matched_terms, coverage}], candidates, terms_absent, terms_near?,
+documents: [{path, score, matched_terms, coverage}], candidates, unseen?, excluded?, terms_absent, terms_near?,
 terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
 
 - `scope` says what the search could see: the documents indexed under
@@ -138,6 +138,25 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   `terms_absent_in_scope` lists the query terms the corpus holds but nowhere
   under that folder, so a zero there is a zero of the scope, not of the
   corpus.
+
+- `exclude` takes the paths already read: their documents leave the
+  ranking before the cut, so the hits and `documents` are the next best, and
+  `excluded` says how many ranked documents it removed (a path that ranks
+  nothing removes nothing; it is no error). `unseen` counts the ranked
+  documents no hit came from whose whole-document coverage is at least that
+  of the weakest document a hit came from: the reply's own bar, because
+  BM25 ranks every document holding one query word and a count of the whole
+  ranking is always large (21,500 candidates on one source tree). Zero means
+  nothing left ranks as strongly as what was shown; it is absent when no hit
+  matched a query word. A lexical count, not a promise of relevance; seven
+  of nine models in the 2026-11-04 survey asked to know what remains unseen
+  before they stop (K05). What it changes is the cost of a long answer, not
+  whether it is reached: deepseek-v4-flash-0731 raises `k` and completes a
+  six-item list either way (probe p2), and a 50-item one too, but under a
+  12,000-character result cap (`silica-core repl`'s) it spent 318,535 prompt
+  tokens, 21.9 tool calls and 522 s a turn without these against 162,740,
+  9.8 and 271 s with them, paired interval on tokens [+66,191, +269,956]
+  (probe p2c, 10 lists; p2b, its first run, gave the same direction).
 
 - A hit on a `.md` a conversion wrote carries `source` (the original) and
   `source_state` (`current`, `stale`, `unverifiable`, as in `silica_files`),
@@ -204,7 +223,8 @@ terms_absent_in_scope?, scope: {folder, docs, unconverted, failed}, index}`.
   concept and its anchors — `query="leader election"`,
   `queries=["Raft"]` — where one long query would let the anchor's idf
   drown the concept, or the reverse. The reply repeats them as `queries`;
-  from the shell, `silica-core search QUERY --also QUERY` is the same call.
+  from the shell, `silica-core search QUERY --also QUERY` is the same call;
+  `--exclude PATH` (repeatable) is `exclude`.
 - A search refreshes the index inline when at most 50 documents are behind
   (`STALE_BUDGET`, ~13 ms a document measured); past that it answers from
   the index as it is and `index` says `stale` with `pending`, so a bulk
