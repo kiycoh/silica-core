@@ -36,7 +36,7 @@ import threading
 import time
 from array import array
 from pathlib import Path
-from typing import Any, NamedTuple, Sequence
+from typing import Any, Callable, NamedTuple, Sequence
 from urllib.parse import urlsplit
 
 import orjson
@@ -46,6 +46,10 @@ from silica_core.kernel.recall import paths as _paths
 
 _UNIT_CHARS = 6000
 _BATCH = 16
+# Seconds between saves of a build's rows: each save rewrites the whole store
+# (50 MB at 49k sections of 1,024 dimensions), so not per document, and a
+# build stopped between two loses at most this much of its embedder's work.
+_SAVE_S = 30.0
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 MODEL2VEC_PREFIX = "model2vec/"
 _M2V = None
@@ -342,10 +346,22 @@ def _current(meta: dict, rows: _Rows) -> tuple[dict, _Rows] | None:
     return meta, rows
 
 
-def build(units: list[tuple[str, float, list[tuple[int, str]]]], *, rebuild: bool = False) -> dict:
-    """Embed the sections of every (rel, mtime, [(offset, text)]) document whose
-    stamp changed; rows of unchanged documents are kept. Returns {docs,
-    sections, embedded, model}."""
+Sections = list[tuple[int, str]]
+
+
+def build(units: Sequence[tuple[str, float, Sections | Callable[[], Sections]]], *, rebuild: bool = False,
+          progress: Callable[[int, int], None] | None = None) -> dict:
+    """Embed the sections of every (rel, mtime, sections) document whose stamp
+    changed; rows of unchanged documents are kept. `sections` is the
+    [(offset, text)] list or a callable returning it, called only for a
+    document that is embedded: a refresh that finds nothing changed reads
+    no document (reading them all first cost 68 s and 957 MB on a library
+    of 131 books, 2026-11-08). The store is saved every `_SAVE_S` seconds
+    and when the embedder fails, so a build stopped at 90% keeps the 90% and
+    the next one does the rest: that library's first build is 2 h on a
+    laptop CPU, and a build that saved only at its end restarted from zero
+    each time the app closed before it did. `progress(done, total)` after
+    each document of the ones to embed. Returns {docs, sections, embedded, model}."""
     loaded = None if rebuild else load()
     meta: dict
     if loaded:
@@ -359,22 +375,6 @@ def build(units: list[tuple[str, float, list[tuple[int, str]]]], *, rebuild: boo
     stamp_of = {rel: mt for rel, mt, _secs in units}
     keep = {rel: d for rel, d in meta["docs"].items() if stamp_of.get(rel) == d["mtime"]}
     todo = [(rel, mt, secs) for rel, mt, secs in units if rel not in keep]
-    texts, owners = [], []
-    for rel, _mt, secs in todo:
-        for off, text in secs:
-            texts.append(CONFIG.embedding_doc_prefix + text)
-            owners.append((rel, off))
-    if loaded and not texts and len(keep) == len(meta["docs"]) and meta.get("codes") == "int8":
-        # Nothing to embed and nothing gone: the store on disk is the one this
-        # build would write. Every refresh a search makes lands here, and each
-        # one rewrote the whole file (108 MB of float32 for silica-internal).
-        return {"docs": len(keep), "sections": meta["rows"], "embedded": 0, "model": meta["model"]}
-    vecs = embed_texts(texts) if texts else []
-    if vecs:
-        if dim and len(vecs[0]) != dim:  # the endpoint answers in another width: not the same model
-            keep, dim = {}, 0
-        dim = dim or len(vecs[0])
-    new_scales, new_codes = _quantize(vecs)
     scales, codes, docs, row = array("f"), bytearray(), {}, 0
     for rel, d in keep.items():
         n = len(d["offsets"])
@@ -382,24 +382,54 @@ def build(units: list[tuple[str, float, list[tuple[int, str]]]], *, rebuild: boo
         codes += rows.codes[d["row"] * dim:(d["row"] + n) * dim].cast("B")
         docs[rel] = {"mtime": d["mtime"], "offsets": d["offsets"], "row": row}
         row += n
-    by_doc: dict[str, list[tuple[int, int]]] = {}
-    for i, (rel, off) in enumerate(owners):
-        by_doc.setdefault(rel, []).append((off, i))
-    for rel, mt, _secs in todo:
-        vs = by_doc.get(rel, [])
-        if not vs:
-            continue
-        docs[rel] = {"mtime": mt, "offsets": [off for off, _i in vs], "row": row}
-        for _off, i in vs:
-            scales.append(new_scales[i])
-            codes += new_codes[i * dim:(i + 1) * dim]
-        row += len(vs)
+    # Nothing to embed and nothing gone leaves the store on disk the one this
+    # build would write: every refresh a search makes lands there, and each
+    # one rewrote the whole file (108 MB of float32 for silica-internal).
+    dirty = not loaded or len(keep) != len(meta["docs"]) or meta.get("codes") != "int8"
+    embedded, batch, last_save = 0, [], time.monotonic()
+    if progress and todo:  # the stage is this one from its start: the first document may take minutes
+        progress(0, len(todo))
+    try:
+        for done, (rel, mt, secs) in enumerate(todo, 1):
+            secs = secs() if callable(secs) else secs
+            if secs:
+                batch.append((rel, mt, secs))
+            # Several small documents share one request, as one list did before.
+            if batch and (done == len(todo) or sum(len(s) for _r, _m, s in batch) >= _BATCH):
+                texts = [CONFIG.embedding_doc_prefix + text for _r, _m, s in batch for _off, text in s]
+                vecs = embed_texts(texts)
+                if dim and len(vecs[0]) != dim:  # the endpoint answers in another width: not the same model
+                    scales, codes, docs, row, dim = array("f"), bytearray(), {}, 0, 0
+                dim = dim or len(vecs[0])
+                new_scales, new_codes = _quantize(vecs)
+                scales.extend(new_scales)
+                codes += new_codes
+                for brel, bmt, s in batch:
+                    docs[brel] = {"mtime": bmt, "offsets": [off for off, _t in s], "row": row}
+                    row += len(s)
+                embedded += len(texts)
+                batch, dirty = [], True
+                if time.monotonic() - last_save > _SAVE_S:
+                    _save(scales, codes, docs, row, dim)
+                    last_save = time.monotonic()
+            if progress:
+                progress(done, len(todo))
+    finally:
+        if dirty:  # on a failing embedder too: what was embedded before it stays embedded
+            _save(scales, codes, docs, row, dim)
+    return {"docs": len(docs), "sections": row, "embedded": embedded,
+            "model": CONFIG.embedding_model if dirty else meta["model"]}
+
+
+def _save(scales: array, codes: bytearray, docs: dict, rows: int, dim: int) -> None:
+    """Rows first, then the meta naming them: a search between the two reads
+    the old meta against longer rows, which `load` refuses by length, so it
+    is served lexically and never against rows that are not its own."""
     meta = {"model": CONFIG.embedding_model, "doc_prefix": CONFIG.embedding_doc_prefix, "unit": "section",
-            "codes": "int8", "dim": dim, "docs": docs, "rows": row, "built_at": time.time()}
+            "codes": "int8", "dim": dim, "docs": docs, "rows": rows, "built_at": time.time()}
     _paths.atomic_write_bytes(_rows_path(), scales.tobytes() + bytes(codes))
     _paths.atomic_write_bytes(_meta_path(), orjson.dumps(meta))
     _legacy_rows_path().unlink(missing_ok=True)
-    return {"docs": len(docs), "sections": row, "embedded": len(texts), "model": meta["model"]}
 
 
 def _scores(rows: _Rows, q: array) -> list[float]:

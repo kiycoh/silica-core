@@ -215,3 +215,82 @@ def test_numpy_and_pure_python_quantize_to_the_same_bytes(monkeypatch):
     with_numpy = embeddings._quantize(vecs)
     monkeypatch.setitem(sys.modules, "numpy", None)
     assert embeddings._quantize(vecs) == with_numpy
+
+
+@pytest.mark.parametrize("save_s, saved_before_failure", [(0.0, 1), (3600.0, 0)])
+def test_a_build_the_embedder_stops_keeps_what_it_embedded_and_the_next_does_the_rest(
+        root, tmp_path, monkeypatch, save_s, saved_before_failure):
+    """A library's first build is hours: one that saved only at its end lost
+    them all to a closed app or one refused request (2026-11-08). Saved on
+    the way (save_s 0), and on the failure itself when no save came due."""
+    import orjson
+    from silica_core import embeddings
+    monkeypatch.setattr(embeddings, "_BATCH", 1)  # one request per document
+    monkeypatch.setattr(embeddings, "_SAVE_S", save_s)
+    meta = tmp_path / ".idx" / "embed.json"
+    calls: list[int] = []
+    on_disk_at_failure: list[int] = []
+
+    def flaky(texts):
+        calls.append(len(texts))
+        if len(calls) == 2:
+            on_disk_at_failure.append(len(orjson.loads(meta.read_bytes())["docs"]) if meta.exists() else 0)
+            raise RuntimeError("Context size has been exceeded")
+        return fake_embed(texts)
+
+    monkeypatch.setattr(embeddings, "embed_texts", flaky)
+    assert root.build_index(embed=True)["error"]["code"] == "bad_argument"
+    assert on_disk_at_failure == [saved_before_failure]
+    assert len(orjson.loads(meta.read_bytes())["docs"]) == 1, "the failure itself saved the document before it"
+    first = calls[0]
+    calls.clear()
+    monkeypatch.setattr(embeddings, "embed_texts", lambda texts: calls.append(len(texts)) or fake_embed(texts))
+    assert root.build_index(embed=True)["embeddings"] == {"docs": 3, "sections": 4, "embedded": 4 - first, "model": "fake"}
+    assert sum(calls) == 4 - first
+    assert root.search("car")["hits"][0]["path"] == "a.md"
+
+
+def test_a_refresh_reads_only_the_documents_it_embeds(root, tmp_path, monkeypatch):
+    """Reading every section to learn nothing changed cost 68 s and 957 MB on
+    131 books at each start (2026-11-08)."""
+    root.build_index(embed=True)
+    read: list[str] = []
+    real = root._sections_of
+    monkeypatch.setattr(root, "_sections_of", lambda rel: read.append(rel) or real(rel))
+    assert root.build_index(embed=True)["embeddings"]["embedded"] == 0 and read == []
+    b = tmp_path / "b.md"
+    b.write_text("# Dogs\n\n## Breeds\n\nA hound barks at dawn.\n", encoding="utf-8")
+    os.utime(b, (b.stat().st_atime, b.stat().st_mtime + 10))
+    assert root.build_index(embed=True)["embeddings"]["embedded"] == 1 and read == ["b.md"]
+
+
+def test_a_build_reports_its_progress_reading_then_embedding(root):
+    seen: list[tuple[str, int, int]] = []
+    root.build_index(embed=True, progress=lambda *a: seen.append(a))
+    index = [s for s in seen if s[0] == "index"]
+    vectors = [s for s in seen if s[0] == "vectors"]
+    assert index[0] == ("index", 0, 3) and index[-1] == ("index", 3, 3)
+    assert vectors == [("vectors", 0, 3), ("vectors", 1, 3), ("vectors", 2, 3), ("vectors", 3, 3)]
+    assert seen.index(index[-1]) < seen.index(vectors[0])
+
+
+def test_a_build_stays_on_its_root_when_the_app_switches_vault_under_it(root, tmp_path, tmp_path_factory, monkeypatch):
+    """An app that switches vaults in its own process moves CONFIG under a
+    build of hours; every save of it read CONFIG again (2026-11-08)."""
+    from pathlib import Path
+    from silica_core.config import CONFIG
+    from silica_core.kernel.recall import paths
+    other = tmp_path_factory.mktemp("other-vault")
+    (other / "z.md").write_text("# Z\n\n## Zed\n\nnothing about cars here at all\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "index_dir_for", lambda vault: tmp_path.parent / f"idx-{Path(vault).name}")
+
+    def switch(stage, done, total):
+        if (stage, done) == ("vectors", 1):
+            CONFIG.vault_path = str(other)
+
+    built = root.build_index(embed=True, progress=switch)
+
+    assert built["embeddings"]["docs"] == 3
+    assert (tmp_path.parent / f"idx-{tmp_path.name}" / "embed.json").exists()
+    assert not (tmp_path.parent / f"idx-{other.name}").exists(), "nothing of the old vault in the new one's folder"
+    assert root.search("car")["dense"]["state"] == "no_vectors", "the new vault is served as its own"

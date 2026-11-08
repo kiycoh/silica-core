@@ -6,6 +6,7 @@ code_pack, write_note. The CLI and the MCP server wrap these. Nothing here
 calls a model; the root is the folder Silica was started in (or --vault)."""
 from __future__ import annotations
 
+import functools
 import hashlib
 import math
 import os
@@ -14,7 +15,7 @@ import threading
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Callable
 
 import orjson
 import yaml
@@ -99,7 +100,8 @@ def _root() -> Path:
     ponytail: a root that is a symlink re-resolves only when the setting
     changes."""
     global _ROOT
-    key = CONFIG.vault_path or os.getcwd()
+    pinned = _paths.pinned_vault()  # a build's own, while it runs (paths.pinned)
+    key = (pinned if pinned is not None else CONFIG.vault_path) or os.getcwd()
     if _ROOT is None or _ROOT[0] != key:
         _ROOT = (key, Path(key).resolve())
     return _ROOT[1]
@@ -499,21 +501,27 @@ def _flush(store, meta: dict, failed: dict) -> None:
 
 
 def build_index(rebuild: bool = False, embed: bool = False, live: dict[str, float] | None = None,
-                allow_remote: bool = False, wait: bool = True) -> dict:
+                allow_remote: bool = False, wait: bool = True,
+                progress: Callable[[str, int, int], None] | None = None) -> dict:
     """`_build_index` under one lock per index: the stamps, the store and the
     vectors land as one, so a second server building the same folder waits
     and then finds the work done rather than interleaving with it. With
     `wait` off a busy lock is not waited for: the reply carries the index
-    as it is on disk and `busy`, for a search that must answer now."""
-    with _paths.index_lock(_paths.index_dir() / "build", blocking=wait) as held:
+    as it is on disk and `busy`, for a search that must answer now.
+    `progress(stage, done, total)` after each document the build works on,
+    `stage` "index" then "vectors": a library's first build is minutes of
+    reading and hours of embedding, and an app showing it needs both. The
+    build stays on the root it started on (paths.pinned) when CONFIG moves."""
+    with _paths.pinned(CONFIG.vault_path or ""), \
+            _paths.index_lock(_paths.index_dir() / "build", blocking=wait) as held:
         if not held:
             state = index_state(live=live)
             return {"docs": state["docs"], "changed": 0, "failed": {}, "index": state, "busy": True}
-        return _build_index(rebuild, embed, live, allow_remote)
+        return _build_index(rebuild, embed, live, allow_remote, progress)
 
 
 def _build_index(rebuild: bool = False, embed: bool = False, live: dict[str, float] | None = None,
-                 allow_remote: bool = False) -> dict:
+                 allow_remote: bool = False, progress: Callable[[str, int, int], None] | None = None) -> dict:
     """Build or refresh the document index. Incremental by mtime; `rebuild`
     re-reads everything. Never raises for one unreadable file: it lands in
     `failed` and in the failures file `silica_files` reports from. Saves
@@ -535,9 +543,11 @@ def _build_index(rebuild: bool = False, embed: bool = False, live: dict[str, flo
         live = _notes() if live is None else live
         changed, failed = 0, {}
         last_flush = time.monotonic()
-        for rel, mt in live.items():
-            if not rebuild and (stamps.get(rel) == mt or skipped.get(rel, {}).get("mtime") == mt):
-                continue
+        todo = [(rel, mt) for rel, mt in live.items()
+                if rebuild or not (stamps.get(rel) == mt or skipped.get(rel, {}).get("mtime") == mt)]
+        for done, (rel, mt) in enumerate(todo, 1):
+            if progress:
+                progress("index", done - 1, len(todo))
             if rel.lower().endswith(".pdf"):
                 text, _pages, reason = _pdf_text(rel, root / rel)
                 if not text:  # a scan, or a PDF PDFium could not open: `unconverted`, never indexed
@@ -574,6 +584,8 @@ def _build_index(rebuild: bool = False, embed: bool = False, live: dict[str, flo
             if time.monotonic() - last_flush > _FLUSH_S:
                 _flush(store, meta, failed)
                 last_flush = time.monotonic()
+        if progress and todo:
+            progress("index", len(todo), len(todo))
         for gone in [p for p in list(stamps) + list(skipped) if p not in live]:
             stamps.pop(gone, None)
             skipped.pop(gone, None)
@@ -597,22 +609,27 @@ def _build_index(rebuild: bool = False, embed: bool = False, live: dict[str, flo
         elif host:
             return _error("consent_required", f"the sections would leave this machine for {host}: "
                           "run `silica-core index --embed --allow-remote` once to allow it", **out)
-        to_embed = []
-        for rel in live:
-            if rel not in stamps:
-                continue
-            try:
-                parts = _sections_of(rel)[1]
-            except OSError:
-                continue
-            stem = rel[:-len(Path(rel).suffix)] if _is_code(rel) else Path(rel).stem
-            to_embed.append((rel, stamps[rel], [(off, embeddings.unit_text(stem, title, part))
-                                                for off, part, _tf, dl, title in parts if dl >= 3]))
+        to_embed = [(rel, stamps[rel], functools.partial(_embed_units, rel)) for rel in live if rel in stamps]
         try:
-            out["embeddings"] = embeddings.build(to_embed, rebuild=rebuild)
+            out["embeddings"] = embeddings.build(
+                to_embed, rebuild=rebuild,
+                progress=(lambda done, total: progress("vectors", done, total)) if progress else None)
         except Exception as e:
             return _error("bad_argument", f"embeddings failed: {e}", **out)
     return out
+
+
+def _embed_units(rel: str) -> list[tuple[int, str]]:
+    """What a document is embedded as, read only when it is (embeddings.build);
+    a section under 3 tokens, a bare heading, is left out. [] for a file gone
+    or unreadable since the walk: it gets no rows and the next build tries again."""
+    from silica_core import embeddings
+    try:
+        parts = _sections_of(rel)[1]
+    except OSError:
+        return []
+    stem = rel[:-len(Path(rel).suffix)] if _is_code(rel) else Path(rel).stem
+    return [(off, embeddings.unit_text(stem, title, part)) for off, part, _tf, dl, title in parts if dl >= 3]
 
 
 # ---------------------------------------------------------------------------
