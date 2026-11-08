@@ -725,12 +725,37 @@ def inbox_dir_for(vault: str) -> Path:
     return _SILICA_HOME / "inbox" / vault_digest(vault)
 
 
+# The vault a build runs on, per thread (`pinned`). An app that switches
+# vaults in its own process changes CONFIG under a build of hours, and every
+# save read CONFIG again: the old vault's index went into the new one's
+# folder (found 2026-11-08, building the page vectors of a 131-book library).
+_PINNED = threading.local()
+
+
+@contextlib.contextmanager
+def pinned(vault: str) -> Iterator[None]:
+    """This thread's `index_dir` and the engine's root stay `vault`'s until the
+    block ends, whatever CONFIG.vault_path becomes meanwhile; other threads
+    follow CONFIG as before."""
+    before = getattr(_PINNED, "vault", None)
+    _PINNED.vault = vault
+    try:
+        yield
+    finally:
+        _PINNED.vault = before
+
+
+def pinned_vault() -> str | None:
+    return getattr(_PINNED, "vault", None)
+
+
 def index_dir() -> Path:
     """Per-vault index namespace: ~/.silica/index/<digest12>/ keyed by the
     resolved vault path; legacy global ~/.silica/index/ when no vault is
     configured. Per-vault state follows the vault (ADR-0014), so /vault
     switch no longer serves another vault's entries."""
-    return index_dir_for(getattr(CONFIG, "vault_path", "") or "")
+    vault = pinned_vault()
+    return index_dir_for(vault if vault is not None else getattr(CONFIG, "vault_path", "") or "")
 
 
 def _is_under(base: Path, target: Path) -> bool:
